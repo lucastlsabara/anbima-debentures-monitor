@@ -1,0 +1,22 @@
+{
+    "$schema": "https://json.schemastore.org/claude-code-settings.json",
+    "sandbox": {
+        "network": {
+            "allowedDomains": [
+                "www.anbima.com.br",
+                "anbima.com.br",
+                "data.anbima.com.br",
+                "api.anbima.com.br",
+                "www.debentures.com.br"
+            ]
+        }
+    },
+    "permissions": {
+        "allow": [
+            "WebFetch(domain:www.anbima.com.br)",
+            "WebFetch(domain:data.anbima.com.br)",
+            "WebFetch(domain:api.anbima.com.br)",
+            "WebFetch(domain:www.debentures.com.br)"
+        ]
+    }
+}
