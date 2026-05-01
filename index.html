@@ -147,13 +147,21 @@
     <h1>ANBIMA · Mercado Secundário de Debêntures</h1>
     <div class="sub" id="hdr-sub">Carregando…</div>
   </div>
-  <div class="sub" id="hdr-info"></div>
+  <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
+    <label class="sub" style="display:flex;flex-direction:column;gap:4px">
+      <span style="text-transform:uppercase;letter-spacing:.07em;font-size:10.5px">Indexador</span>
+      <select id="global-idx" style="background:var(--surface2);color:var(--fg);
+        border:1px solid var(--border-strong);border-radius:4px;padding:6px 10px;
+        font-size:12.5px;min-width:140px"></select>
+    </label>
+    <div class="sub" id="hdr-info" style="max-width:340px;text-align:right"></div>
+  </div>
 </header>
 
 <nav class="tabs" id="tabs">
   <a href="#/visao" data-tab="visao">Visão Geral</a>
   <a href="#/curvas" data-tab="curvas">Curvas Históricas</a>
-  <a href="#/dispersao" data-tab="dispersao">Dispersão IPCA+</a>
+  <a href="#/dispersao" data-tab="dispersao">Dispersão</a>
   <a href="#/movimentacoes" data-tab="movimentacoes">Movimentações</a>
   <a href="#/heatmap" data-tab="heatmap">Heatmap Setor × Duration</a>
 </nav>
@@ -173,7 +181,7 @@
       <div id="chart-spread-by-idx" class="chart"></div>
     </div>
     <div class="panel">
-      <h2>Histograma — spreads IPCA+ no dia</h2>
+      <h2 id="hist-title">Histograma — spreads no dia</h2>
       <div id="chart-histogram" class="chart"></div>
     </div>
     <div class="panel">
@@ -328,6 +336,7 @@ window.addEventListener("hashchange", () => {
  *  bootstrap
  * ============================================================ */
 let MANIFEST = null;
+let GLOBAL_IDX = "Todos";  // "Todos" | "IPCA+" | "Prefixado" | "DI+" | ...
 
 async function init() {
   MANIFEST = await loadJSON("data/manifest.json");
@@ -342,8 +351,38 @@ async function init() {
     "Data: <strong>" + brDate(latest) + "</strong> · " +
     MANIFEST.n_snapshots + " snapshot(s) · " +
     MANIFEST.dates[0] + " → " + MANIFEST.dates[MANIFEST.dates.length - 1];
-  info.textContent = "Spread = Taxa Indicativa − NTN-B(duration) · spline cubic not-a-knot";
+  info.innerHTML =
+    "Spread = Taxa Indicativa − NTN-B de referência (vencimento exato).<br>" +
+    "<span style='opacity:.85'>Lookup oficial ANBIMA · sem interpolação. " +
+    "DI+/%DI exibem taxa publicada.</span>";
+  setupGlobalIndexador();
   activateTab((location.hash || "#/visao").replace(/^#\//, ""));
+}
+
+function setupGlobalIndexador() {
+  const sel = document.getElementById("global-idx");
+  const present = MANIFEST.indexadores_presentes || [];
+  const opts = [{label:"Todos", n: present.reduce((a,x) => a + x.n, 0), n_com_spread: null}]
+    .concat(present);
+  sel.innerHTML = opts.map(o => {
+    const tag = o.n_com_spread != null && o.n_com_spread < o.n
+      ? ` (${o.n_com_spread}/${o.n} c/ spread)` : ` (${o.n})`;
+    return `<option value="${o.label}">${o.label}${tag}</option>`;
+  }).join("");
+  // Permite override por hash query (?idx=IPCA+)
+  const m = location.hash.match(/[?&]idx=([^&]+)/);
+  if (m) {
+    const want = decodeURIComponent(m[1]);
+    if (opts.some(o => o.label === want)) GLOBAL_IDX = want;
+  }
+  sel.value = GLOBAL_IDX;
+  sel.addEventListener("change", () => {
+    GLOBAL_IDX = sel.value;
+    // re-renderiza a tab ativa (e zera caches específicos do filtro)
+    loaded.clear();
+    const cur = (location.hash || "#/visao").replace(/^#\//, "").split("?")[0];
+    activateTab(cur);
+  });
 }
 
 function brDate(iso) {
@@ -368,20 +407,32 @@ async function renderTab(name) {
  * ============================================================ */
 async function renderVisao() {
   const o = await loadJSON("data/overview.json");
-  renderKpis(o.kpis);
+  const idx = GLOBAL_IDX;
+  const kpis = (o.kpis_by_indexador && o.kpis_by_indexador[idx])
+            || o.kpis_by_indexador.Todos;
+  renderKpis(kpis, idx);
   renderCurvesOverlay(o.curves_overlay);
   renderSpreadByIndexador(o.spread_by_indexador);
-  renderHistogram(o.histogram_ipca_spreads);
-  renderTopMovers(o.top_movements);
+  const hist = idx === "Todos"
+    ? (o.histogram_by_indexador["IPCA+"] || null)
+    : (o.histogram_by_indexador[idx] || null);
+  renderHistogram(hist, idx === "Todos" ? "IPCA+" : idx);
+  const tm = (o.top_movements_by_indexador && o.top_movements_by_indexador[idx])
+          || o.top_movements_by_indexador.Todos;
+  renderTopMovers(tm);
 }
 
-function renderKpis(k) {
+function renderKpis(k, idx) {
   const t = k.termometro_bps;
   const tCls = t == null ? "" : (t > 0 ? "neg" : t < 0 ? "pos" : "");
+  const labelPapeis = idx === "Todos" ? "Papéis (todos indexadores)" : "Papéis " + idx;
+  const hintLiq = k.n_com_spread != null
+    ? `${k.n_liquidos} com taxa · ${k.n_com_spread} com spread oficial`
+    : `${k.n_liquidos} com taxa publicada`;
   const cards = [
-    { label: "Papéis IPCA+",       val: k.n_total, hint: k.n_liquidos + " com taxa publicada" },
-    { label: "Ilíquidos no dia",   val: k.n_iliquidos, hint: k.pct_iliquidos + "% do total" },
-    { label: "Estagnados ≥5 d.u.", val: k.n_estagnados, hint: k.pct_estagnados + "% do total" },
+    { label: labelPapeis,          val: k.n_total, hint: hintLiq },
+    { label: "Ilíquidos no dia",   val: k.n_iliquidos, hint: (k.pct_iliquidos ?? 0) + "% do total" },
+    { label: "Estagnados ≥5 d.u.", val: k.n_estagnados, hint: (k.pct_estagnados ?? 0) + "% do total" },
     { label: "Termômetro Σ Δspread D-1",
       val: t == null ? "—" : (t >= 0 ? "+" : "") + t.toFixed(0) + " bps",
       cls: tCls,
@@ -459,10 +510,12 @@ function renderSpreadByIndexador(rows) {
   // linha na própria figura na próxima versão.
 }
 
-function renderHistogram(h) {
+function renderHistogram(h, idxLabel) {
+  const titleEl = document.getElementById("hist-title");
+  if (titleEl) titleEl.textContent = "Histograma — spreads " + (idxLabel || "") + " no dia";
   if (!h) {
     document.getElementById("chart-histogram").innerHTML =
-      '<div class="empty">Sem spreads IPCA+.</div>';
+      `<div class="empty">Sem spreads ${idxLabel||""} no dia.</div>`;
     return;
   }
   const centers = [];
@@ -665,10 +718,12 @@ function drawDispersion() {
   if (!DISP_DATA) return;
   const onlyCob = document.getElementById("disp-cob").checked;
   const setor = document.getElementById("disp-setor").value;
+  const idx = GLOBAL_IDX;
   const traces = {};
   for (const p of DISP_DATA.papers) {
     if (onlyCob && !p.cob) continue;
     if (setor && p.s !== setor) continue;
+    if (idx !== "Todos" && p.i !== idx) continue;
     if (!traces[p.s]) {
       traces[p.s] = { x:[], y:[], text:[], customdata:[], type:"scatter",
         mode:"markers", name: p.s,
@@ -697,6 +752,10 @@ function drawDispersion() {
       '<div class="empty">Sem papéis após filtros.</div>';
     return;
   }
+  const yTitle = idx === "DI+" ? "Spread sobre CDI (pp)"
+              : idx === "Prefixado" ? "Spread sobre Pré (pp)"
+              : "Spread sobre NTN-B (pp)";
+  layout.yaxis.title = yTitle;
   Plotly.newPlot("chart-dispersion", data, layout, PLOTLY_CONFIG);
 }
 
@@ -763,7 +822,15 @@ function buildMovTable() {
         formatter: c => fmtAnos(c.getValue()) },
       { title:"Taxa", field:"taxa", width:78, hozAlign:"right",
         formatter: c => fmtPct(c.getValue()) },
-      { title:"NTN-B", field:"ntnb_interp", width:78, hozAlign:"right",
+      { title:"Bench.", field:"benchmark_titulo", width:78,
+        formatter: c => {
+          const r = c.getRow().getData();
+          const t = c.getValue();
+          if (!t) return r.spread_metodo === "sem_referencia" ? "<span style='color:var(--warn)'>sem ref.</span>" : "—";
+          return r.benchmark_vencimento
+            ? `${t}<span class="badge">${r.benchmark_vencimento}</span>` : t;
+        } },
+      { title:"Tx Bench", field:"taxa_benchmark", width:88, hozAlign:"right",
         formatter: c => fmtPct(c.getValue()) },
       { title:"Spread (pp)", field:"spread_pp", width:100, hozAlign:"right",
         formatter: c => c.getValue()==null?"—":(c.getValue()>=0?"+":"")+c.getValue().toFixed(2) },
@@ -780,8 +847,12 @@ function applyMovFilter() {
   const setor = document.getElementById("mov-setor").value;
   const onlyCob = document.getElementById("mov-cob").checked;
   const hideIliq = document.getElementById("mov-hide-iliq").checked;
+  // Seletor global tem prioridade sobre o filtro local quando != "Todos".
+  const globalIdx = (typeof GLOBAL_IDX === "string" && GLOBAL_IDX !== "Todos")
+    ? GLOBAL_IDX : null;
   MOV_TABLE.setFilter(d => {
     if (hideIliq && d.iliquido) return false;
+    if (globalIdx && d.indexador !== globalIdx) return false;
     if (idx && d.indexador !== idx) return false;
     if (setor && d.setor !== setor) return false;
     if (onlyCob && !d.cobertura) return false;
@@ -812,17 +883,30 @@ async function renderHeatmap() {
 
 function drawHeatmap() {
   const root = document.getElementById("chart-heatmap");
+  // Escolhe o slice por indexador. Default: IPCA+ (ou primeiro disponível).
+  const available = HEAT.indexadores || [];
+  if (!available.length) {
+    root.innerHTML = '<div class="empty">Sem indexadores com spread no snapshot.</div>';
+    return;
+  }
+  let chosen = GLOBAL_IDX !== "Todos" ? GLOBAL_IDX : (available.includes("IPCA+") ? "IPCA+" : available[0]);
+  if (!available.includes(chosen)) {
+    root.innerHTML = `<div class="empty">${GLOBAL_IDX} não tem spread oficial; troque o indexador.</div>`;
+    return;
+  }
+  const slice = HEAT.by_indexador[chosen];
   let z, title, suffix;
+  const benchLabel = chosen === "IPCA+" ? "NTN-B" : chosen === "Prefixado" ? "Pré" : chosen === "DI+" ? "CDI" : "benchmark";
   if (HEAT_MODE === "current") {
-    z = HEAT.current_pp; title = "Spread médio sobre NTN-B (pp)"; suffix = " pp";
+    z = slice.current_pp; title = `${chosen} · spread médio sobre ${benchLabel} (pp)`; suffix = " pp";
   } else if (HEAT_MODE === "d7") {
-    z = HEAT.delta_7d_bps;
+    z = slice.delta_7d_bps;
     if (!z) { root.innerHTML = '<div class="empty">Sem snapshot T-7. Aguardando 7d de rotina.</div>'; return; }
-    title = "Δ spread médio vs T-7 (bps)"; suffix = " bps";
+    title = `${chosen} · Δ spread médio vs T-7 (bps)`; suffix = " bps";
   } else {
-    z = HEAT.delta_30d_bps;
+    z = slice.delta_30d_bps;
     if (!z) { root.innerHTML = '<div class="empty">Sem snapshot T-30. Aguardando 30d de rotina.</div>'; return; }
-    title = "Δ spread médio vs T-30 (bps)"; suffix = " bps";
+    title = `${chosen} · Δ spread médio vs T-30 (bps)`; suffix = " bps";
   }
   // Plotly heatmap: y = sectors, x = buckets. Quando current, escala viridis;
   // quando delta, divergente vermelho/verde com 0 no centro.

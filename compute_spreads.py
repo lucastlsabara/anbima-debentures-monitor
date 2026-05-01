@@ -1,20 +1,46 @@
-"""Calcula spreads IPCA+ sobre a curva NTN-B (ETTJ ANBIMA).
+"""Calcula spreads pelo método oficial ANBIMA (lookup exato por referência).
 
-Lê parsed.json + history/<dia anterior>.json e gera data.json + history/<hoje>.json:
+Lê parsed.json + history/<dia anterior>.json e gera data.json + history/<hoje>.json.
 
-  data.json = {
+Metodologia:
+  IPCA+      → lookup `referencia_ntnb` em `titulos_publicos["NTN-B"]` (vencimento
+               exato). spread = taxa_indicativa − taxa_NTNB_referencia.
+  Prefixado  → ANBIMA não publica referência LTN/NTN-F na coluna do db.txt para
+               prefixados. spread = null (spread_metodo = "sem_referencia").
+  DI+, %DI   → não calcula spread; expõe taxa_indicativa publicada.
+               (spread_metodo = "nao_aplicavel".)
+  IGP-M+     → idem (sem fonte oficial de benchmark).
+  Outros     → idem.
+
+Sem interpolação, sem spline, sem síntese de referência.
+
+Para diagnóstico de migração, computa também `spread_pp_legado` para IPCA+ via
+o método antigo (cubic spline na ETTJ NTN-B). NÃO é usado pelo dashboard;
+serve para a comparação metodológica reportada.
+
+Schema de saída (`data.json`):
+  {
     "data_referencia": "YYYY-MM-DD",
     "data_anterior":   "YYYY-MM-DD" | null,
-    "ettj_ipca":       [ {vertice_anos, taxa_ipca}, ...],
-    "debentures":      [
-       { codigo, emissor, vencimento, indice, taxa_indicativa,
-         duration_dias, duration_anos, pu,
-         spread_pp,                 # taxa_indicativa - NTN-B(duration)
-         taxa_ntnb_interp,          # NTN-B interpolada na duration
+    "ettj_ipca":       [...],   # mantido para o tab Curvas
+    "ettj_pref":       [...],
+    "diagnostico_metodo": {
+      "IPCA+": { "n": 665, "com_referencia": 631, "sem_referencia": 34,
+                 "diff_legado_bps": { "n_gt_5": .., "media_abs": .., "max_abs": .. } },
+      ...
+    },
+    "debentures": [
+       { codigo, emissor, vencimento, indice, indexador_grupo,
+         taxa_indicativa, duration_dias, duration_anos, pu,
+         benchmark_titulo,             # "NTN-B"/"LTN"/"NTN-F"/None
+         benchmark_vencimento,         # ISO ou None (= referencia publicada)
+         taxa_benchmark,               # taxa do título público de referência (lookup exato)
+         spread_pp,                    # taxa - taxa_benchmark, ou None
+         spread_metodo,                # "referencia" | "sem_referencia" | "nao_aplicavel"
+         spread_pp_legado,             # apenas IPCA+: spline interpolada (diagnóstico)
          taxa_indicativa_d1, spread_pp_d1, delta_spread_bps, delta_taxa_bps,
          dias_sem_variacao,
-         flag_iliquido,             # taxa_indicativa não publicada
-         flag_estagnado,            # >= 5 d.u. sem variação de taxa indicativa
+         flag_iliquido, flag_estagnado,
        }, ...
     ]
   }
@@ -33,21 +59,39 @@ from scipy.interpolate import CubicSpline
 ROOT = Path(__file__).parent
 HIST_DIR = ROOT / "history"
 
-# 252 dias úteis = 1 ano (convenção ANBIMA para a ETTJ)
 DU_POR_ANO = 252.0
 
 
-def build_curve(ettj_rows: list[dict]) -> CubicSpline:
-    """Spline cúbica (not-a-knot) sobre a ETTJ IPCA, x = vértice em dias úteis."""
-    xs = np.array([r["vertice_du"] for r in ettj_rows], dtype=float)
-    ys = np.array([r["taxa_ipca"] for r in ettj_rows], dtype=float)
-    order = np.argsort(xs)
-    xs, ys = xs[order], ys[order]
+def indexador_group(indice: str | None) -> str:
+    """Reduz o `indice` ANBIMA a um dos grupos canônicos do dashboard."""
+    if not indice:
+        return "Outros"
+    s = indice.strip().upper()
+    if s.startswith("IPCA"):
+        return "IPCA+"
+    if s.startswith("IGP"):
+        return "IGP-M+"
+    if "% DO DI" in s or s.startswith("PERCENTUAL"):
+        return "%DI"
+    if s.startswith("DI "):
+        return "DI+"
+    if s.startswith("PRE") or s.startswith("PRÉ"):
+        return "Prefixado"
+    return "Outros"
+
+
+def build_spline(rows: list[dict], key: str) -> CubicSpline | None:
+    pairs = [(r["vertice_du"], r[key]) for r in rows
+             if r.get(key) is not None and r.get("vertice_du") is not None]
+    if len(pairs) < 4:
+        return None
+    pairs.sort()
+    xs = np.array([p[0] for p in pairs], dtype=float)
+    ys = np.array([p[1] for p in pairs], dtype=float)
     return CubicSpline(xs, ys, bc_type="not-a-knot", extrapolate=True)
 
 
 def previous_snapshot(today_iso: str) -> dict | None:
-    """Carrega o snapshot mais recente em history/ anterior a today_iso."""
     if not HIST_DIR.exists():
         return None
     candidates = sorted(p for p in HIST_DIR.glob("*.json") if p.stem < today_iso)
@@ -57,7 +101,7 @@ def previous_snapshot(today_iso: str) -> dict | None:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Calcula spreads IPCA+ sobre ETTJ NTN-B.")
+    p = argparse.ArgumentParser(description="Calcula spreads ANBIMA por lookup exato.")
     p.add_argument("--in", dest="inp", default="parsed.json")
     p.add_argument("--out", default="data.json")
     return p.parse_args()
@@ -68,7 +112,11 @@ def main() -> int:
     raw = json.loads(Path(args.inp).read_text(encoding="utf-8"))
     today = raw["data_referencia"]
 
-    curve = build_curve(raw["ettj_ipca"])
+    titpub: dict[str, dict[str, float]] = raw.get("titulos_publicos") or {}
+    ntnb_by_venc = titpub.get("NTN-B", {})
+
+    # Spline IPCA legado: usado APENAS como diagnóstico para reporte da migração.
+    legacy_curve = build_spline(raw.get("ettj_ipca") or [], "taxa_ipca")
 
     prev = previous_snapshot(today)
     prev_by_code: dict[str, dict] = {}
@@ -77,22 +125,54 @@ def main() -> int:
             prev_by_code[d["codigo"]] = d
 
     out_debs: list[dict] = []
-    for d in raw["debentures"]:
-        if not d["indice"].startswith("IPCA"):
-            continue
+    counts_by_grp: dict[str, int] = {}
+    com_ref_by_grp: dict[str, int] = {}
+    sem_ref_by_grp: dict[str, int] = {}
+    diff_bps_ipca: list[float] = []  # |novo - legado| em bps, p/ diagnóstico
 
+    for d in raw["debentures"]:
         codigo = d["codigo"]
         taxa = d["taxa_indicativa"]
         dur_dias = d["duration_dias"]
         flag_iliquido = taxa is None or dur_dias is None
+        grupo = indexador_group(d["indice"])
+        counts_by_grp[grupo] = counts_by_grp.get(grupo, 0) + 1
 
+        bench_titulo = None
+        bench_venc = None
+        taxa_benchmark = None
         spread_pp = None
-        ntnb_interp = None
-        dur_anos = None
-        if not flag_iliquido:
-            dur_anos = dur_dias / DU_POR_ANO
-            ntnb_interp = float(curve(dur_dias))
-            spread_pp = taxa - ntnb_interp
+        spread_metodo = "nao_aplicavel"
+        spread_legado = None
+
+        if grupo == "IPCA+":
+            ref = d.get("referencia_ntnb")
+            bench_titulo = "NTN-B"
+            bench_venc = ref
+            if ref:
+                taxa_benchmark = ntnb_by_venc.get(ref)
+                if taxa_benchmark is not None and not flag_iliquido:
+                    spread_pp = taxa - taxa_benchmark
+                    spread_metodo = "referencia"
+                    com_ref_by_grp[grupo] = com_ref_by_grp.get(grupo, 0) + 1
+                else:
+                    spread_metodo = "sem_referencia"
+                    sem_ref_by_grp[grupo] = sem_ref_by_grp.get(grupo, 0) + 1
+            else:
+                spread_metodo = "sem_referencia"
+                sem_ref_by_grp[grupo] = sem_ref_by_grp.get(grupo, 0) + 1
+
+            # diagnóstico: spread legado por interpolação (apenas se possível)
+            if legacy_curve is not None and not flag_iliquido and dur_dias is not None:
+                spread_legado = round(taxa - float(legacy_curve(dur_dias)), 4)
+                if spread_pp is not None:
+                    diff_bps_ipca.append(abs((spread_pp - spread_legado) * 100.0))
+
+        elif grupo == "Prefixado":
+            # ANBIMA não publica referência LTN/NTN-F no db.txt para prefixados.
+            spread_metodo = "sem_referencia"
+            sem_ref_by_grp[grupo] = sem_ref_by_grp.get(grupo, 0) + 1
+        # DI+, %DI, IGP-M+, Outros → spread_metodo = "nao_aplicavel" (default)
 
         prev_d = prev_by_code.get(codigo, {})
         taxa_d1 = prev_d.get("taxa_indicativa")
@@ -107,7 +187,7 @@ def main() -> int:
             delta_taxa_bps = round((taxa - taxa_d1) * 100.0, 2)
 
         if taxa is None:
-            dias_sem_variacao = dias_estag_prev  # papel ilíquido: mantém contador
+            dias_sem_variacao = dias_estag_prev
         elif taxa_d1 is None:
             dias_sem_variacao = 0
         elif abs(taxa - taxa_d1) < 1e-9:
@@ -116,12 +196,14 @@ def main() -> int:
             dias_sem_variacao = 0
 
         flag_estagnado = dias_sem_variacao >= 5
+        dur_anos = dur_dias / DU_POR_ANO if dur_dias is not None else None
 
         out_debs.append({
             "codigo": codigo,
             "emissor": d["emissor"],
             "vencimento": d["vencimento"],
             "indice": d["indice"],
+            "indexador_grupo": grupo,
             "taxa_indicativa": taxa,
             "taxa_compra": d["taxa_compra"],
             "taxa_venda": d["taxa_venda"],
@@ -131,8 +213,12 @@ def main() -> int:
             "duration_dias": dur_dias,
             "duration_anos": round(dur_anos, 3) if dur_anos is not None else None,
             "referencia_ntnb": d["referencia_ntnb"],
-            "taxa_ntnb_interp": round(ntnb_interp, 4) if ntnb_interp is not None else None,
+            "benchmark_titulo": bench_titulo,
+            "benchmark_vencimento": bench_venc,
+            "taxa_benchmark": round(taxa_benchmark, 4) if taxa_benchmark is not None else None,
             "spread_pp": round(spread_pp, 4) if spread_pp is not None else None,
+            "spread_metodo": spread_metodo,
+            "spread_pp_legado": spread_legado,
             "taxa_indicativa_d1": taxa_d1,
             "spread_pp_d1": spread_d1,
             "delta_spread_bps": delta_spread_bps,
@@ -142,20 +228,48 @@ def main() -> int:
             "flag_estagnado": flag_estagnado,
         })
 
-    # ETTJ resumida em anos para o dashboard (vértices "redondos" + os reais).
-    ettj_out = []
-    for r in sorted(raw["ettj_ipca"], key=lambda x: x["vertice_du"]):
+    # ETTJ resumida em anos para o dashboard (mantida em data.json).
+    ettj_out: list[dict] = []
+    ettj_pref_out: list[dict] = []
+    for r in sorted(raw.get("ettj_ipca") or [], key=lambda x: x["vertice_du"]):
+        anos = round(r["vertice_du"] / DU_POR_ANO, 3)
         ettj_out.append({
             "vertice_du": r["vertice_du"],
-            "vertice_anos": round(r["vertice_du"] / DU_POR_ANO, 3),
+            "vertice_anos": anos,
             "taxa_ipca": r["taxa_ipca"],
+            "taxa_pref": r.get("taxa_pref"),
+            "inflacao_implicita": r.get("inflacao_implicita"),
         })
+        if r.get("taxa_pref") is not None:
+            ettj_pref_out.append({
+                "vertice_du": r["vertice_du"],
+                "vertice_anos": anos,
+                "taxa_pref": r["taxa_pref"],
+            })
+
+    diag: dict[str, dict] = {}
+    for grp, n in counts_by_grp.items():
+        diag[grp] = {
+            "n_papeis": n,
+            "com_referencia": com_ref_by_grp.get(grp, 0),
+            "sem_referencia": sem_ref_by_grp.get(grp, 0),
+            "nao_aplicavel": n - com_ref_by_grp.get(grp, 0) - sem_ref_by_grp.get(grp, 0),
+        }
+    if diff_bps_ipca:
+        diag.setdefault("IPCA+", {})["diff_vs_legado_bps"] = {
+            "n": len(diff_bps_ipca),
+            "n_gt_5bps": sum(1 for x in diff_bps_ipca if x > 5),
+            "media_abs": round(sum(diff_bps_ipca) / len(diff_bps_ipca), 2),
+            "max_abs": round(max(diff_bps_ipca), 2),
+        }
 
     out = {
         "data_referencia": today,
         "data_anterior": prev["data_referencia"] if prev else None,
         "ettj_data_publicada": raw.get("ettj_data_publicada"),
         "ettj_ipca": ettj_out,
+        "ettj_pref": ettj_pref_out,
+        "diagnostico_metodo": diag,
         "debentures": out_debs,
     }
 
@@ -169,11 +283,22 @@ def main() -> int:
 
     n_iliq = sum(1 for d in out_debs if d["flag_iliquido"])
     n_estag = sum(1 for d in out_debs if d["flag_estagnado"])
+    n_spread = sum(1 for d in out_debs if d["spread_pp"] is not None)
+    grp_summary = ", ".join(f"{g}={n}" for g, n in sorted(counts_by_grp.items()))
     print(
-        f"[spread] {today}: {len(out_debs)} IPCA+ | ilíquidos={n_iliq} | "
-        f"estagnados (>=5 d.u.)={n_estag} | data anterior={out['data_anterior']}",
+        f"[spread] {today}: {len(out_debs)} papéis ({grp_summary}) | "
+        f"com spread (lookup exato)={n_spread} | ilíquidos={n_iliq} | "
+        f"estagnados={n_estag} | data anterior={out['data_anterior']}",
         file=sys.stderr,
     )
+    if diff_bps_ipca:
+        d = diag["IPCA+"]["diff_vs_legado_bps"]
+        print(
+            f"[spread] diagnóstico IPCA+: vs spline legado em {d['n']} papéis | "
+            f"|diff| média={d['media_abs']} bps · máx={d['max_abs']} bps · "
+            f">5 bps em {d['n_gt_5bps']} papéis",
+            file=sys.stderr,
+        )
     return 0
 
 

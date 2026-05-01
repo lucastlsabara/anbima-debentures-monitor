@@ -6,13 +6,40 @@ automaticamente via Routines do Claude Code.
 ## Pipeline (3 scripts, sem backend)
 
 ```
-fetch_anbima.py     → baixa db<YYMMDD>.txt + ETTJ NTN-B, gera parsed.json
-compute_spreads.py  → spline cubic not-a-knot sobre ETTJ; spread = taxa − NTN-B(dur)
-                      Δ D-1, dias_sem_variacao, flags ilíquido/estagnado;
-                      grava data.json + history/<YYYY-MM-DD>.json
-build_dashboard.py  → pré-agrega history/ inteiro em data/*.json,
-                      emite index.html (single file, hash routing)
+fetch_anbima.py     → baixa db<YYMMDD>.txt + ETTJ + ms<YYMMDD>.txt
+                      (taxas indicativas de NTN-B/LTN/NTN-F por vencimento exato)
+                      gera parsed.json
+compute_spreads.py  → método oficial ANBIMA: para cada IPCA+ faz lookup
+                      EXATO da Referência NTN-B no ms<YYMMDD>.txt;
+                      spread = taxa_indicativa − taxa_NTNB_referencia.
+                      DI+/%DI/PRE/IGP-M+ ficam sem spread (ANBIMA não publica
+                      referência LTN/NTN-F no db.txt). Sem interpolação.
+                      Grava data.json + history/<YYYY-MM-DD>.json.
+build_dashboard.py  → pré-agrega history/ por indexador em data/*.json,
+                      emite index.html (single file, seletor global de
+                      indexador no header, hash routing).
 ```
+
+## Metodologia oficial de spread
+
+`spread = taxa_indicativa_debenture − taxa_NTNB_referência`, onde a NTN-B de
+referência vem da coluna **Referência NTN-B** do `db<YYMMDD>.txt` (vencimento
+exato, ex.: `15/05/2030`) e sua taxa vem do arquivo oficial:
+
+```
+https://www.anbima.com.br/informacoes/merc-sec/arqs/ms<YYMMDD>.txt
+```
+
+Não há interpolação. Se a referência divulgada não constar do arquivo do
+dia, o papel recebe `spread_metodo = "sem_referencia"` e `spread_pp = null`.
+Para Prefixados, ANBIMA não publica referência LTN/NTN-F no `db.txt`, então
+caem em `sem_referencia`. DI+ e %DI exibem apenas a taxa publicada
+(`spread_metodo = "nao_aplicavel"`), sem cálculo de spread.
+
+`compute_spreads.py` também computa, **apenas como diagnóstico**, o spread
+pelo método antigo (cubic spline na ETTJ) e expõe em
+`data.diagnostico_metodo` a magnitude da diferença `oficial − legado` —
+útil para validar a migração.
 
 ## Dashboard
 
@@ -24,11 +51,11 @@ fetch lazy de JSONs prontos por aba.
 
 | Hash | Tab | Conteúdo |
 |---|---|---|
-| `#/visao` | Visão Geral | 4 KPIs (total, ilíquidos, estagnados, termômetro Σ Δspread D-1) + curvas overlay (T, T-1, T-5, T-21, T-63) + spread por indexador + histograma IPCA+ + top 10 movers |
+| `#/visao` | Visão Geral | 4 KPIs filtrados pelo seletor global + curvas overlay (T, T-1, T-5, T-21, T-63) + spread por indexador + histograma de spreads + top 10 movers |
 | `#/curvas` | Curvas Históricas | Comparativo Hoje vs 30d / 90d / customizado + heatmap temporal NTN-B |
-| `#/dispersao` | Dispersão IPCA+ | Scatter duration × spread, cores por setor, slider de data, toggle "minha cobertura" |
-| `#/movimentacoes` | Movimentações | Tabulator com Δ D-1 / D-5 / D-21 (bps), filtros por setor, indexador, cobertura |
-| `#/heatmap` | Heatmap Setor × Duration | Grid setor × bucket-duration, toggle spread atual / Δ7d / Δ30d |
+| `#/dispersao` | Dispersão | Scatter duration × spread (filtra pelo indexador global), cores por setor, slider de data, toggle "minha cobertura" |
+| `#/movimentacoes` | Movimentações | Tabulator com Δ D-1 / D-5 / D-21 (bps), benchmark + vencimento de referência + spread oficial, filtros por setor / cobertura / indexador |
+| `#/heatmap` | Heatmap Setor × Duration | Grid setor × bucket-duration, troca o slice por indexador via seletor global, toggle spread atual / Δ7d / Δ30d |
 
 ### Pré-agregação (`data/`)
 
@@ -82,6 +109,6 @@ python3 -m http.server 8000
 ## Convenção
 
 - **252 dias úteis = 1 ano** (convenção ANBIMA da ETTJ)
-- **Spline `not-a-knot`** (scipy `CubicSpline`) sobre os vértices NTN-B
+- **Spread oficial** = lookup exato da Referência NTN-B (sem spline)
 - Spread sempre em **pp** (pontos percentuais), Δ sempre em **bps**
 - Estagnado = ≥ 5 dias úteis sem mudança em `taxa_indicativa`
