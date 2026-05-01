@@ -1,0 +1,8 @@
+{
+  "data": "2026-04-30",
+  "timestamp_coleta": "2026-05-01T00:38:51.223026-03:00",
+  "arquivo_debentures": "/home/user/anbima-debentures-monitor/data/raw/debentures_2026-04-30.txt",
+  "arquivo_ettj": "/home/user/anbima-debentures-monitor/data/raw/ettj_2026-04-30.txt",
+  "fonte": "anbima.com.br",
+  "simulado": true
+}
