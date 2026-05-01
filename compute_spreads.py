@@ -7,11 +7,14 @@ Metodologia:
                exato). Spread composto:
                  spread_pp = ((1 + taxa/100) / (1 + taxa_NTNB_ref/100) − 1) * 100
                (pp em base 252 d.u., consistente com a composição da taxa).
+  DI+ (=CDI+)→ a taxa indicativa publicada pela ANBIMA já é o spread aditivo
+               sobre o DI/CDI. spread_pp = taxa_indicativa, benchmark = "CDI",
+               spread_metodo = "indexador_aditivo".
   Prefixado  → ANBIMA não publica referência LTN/NTN-F na coluna do db.txt para
                prefixados. spread = null (spread_metodo = "sem_referencia").
-  DI+, %DI   → não calcula spread; expõe taxa_indicativa publicada.
-               (spread_metodo = "nao_aplicavel".)
-  IGP-M+     → idem (sem fonte oficial de benchmark).
+  %DI        → spread multiplicativo (não em pp); spread_pp = null
+               (spread_metodo = "nao_aplicavel").
+  IGP-M+     → sem fonte oficial de benchmark; nao_aplicavel.
   Outros     → idem.
 
 Sem interpolação, sem spline, sem síntese de referência. A variação D-1 do
@@ -40,7 +43,7 @@ Schema de saída (`data.json`):
          benchmark_vencimento,         # ISO ou None (= referencia publicada)
          taxa_benchmark,               # taxa do título público de referência (lookup exato)
          spread_pp,                    # taxa - taxa_benchmark, ou None
-         spread_metodo,                # "referencia" | "sem_referencia" | "nao_aplicavel"
+         spread_metodo,                # "referencia" | "indexador_aditivo" | "sem_referencia" | "nao_aplicavel"
          spread_pp_legado,             # apenas IPCA+: spline interpolada (diagnóstico)
          taxa_indicativa_d1, spread_pp_d1, delta_spread_bps, delta_taxa_bps,
          dias_sem_variacao,
@@ -181,11 +184,23 @@ def main() -> int:
                 if spread_pp is not None:
                     diff_bps_ipca.append(abs((spread_pp - spread_legado) * 100.0))
 
+        elif grupo == "DI+":
+            # DI+ / CDI+ (mesmo grupo na ANBIMA): a taxa indicativa publicada já
+            # é o spread aditivo sobre o DI/CDI — não há cálculo, é leitura direta.
+            bench_titulo = "CDI"
+            if not flag_iliquido and taxa is not None:
+                spread_pp = taxa
+                spread_metodo = "indexador_aditivo"
+                com_ref_by_grp[grupo] = com_ref_by_grp.get(grupo, 0) + 1
+            else:
+                spread_metodo = "sem_referencia"
+                sem_ref_by_grp[grupo] = sem_ref_by_grp.get(grupo, 0) + 1
+
         elif grupo == "Prefixado":
             # ANBIMA não publica referência LTN/NTN-F no db.txt para prefixados.
             spread_metodo = "sem_referencia"
             sem_ref_by_grp[grupo] = sem_ref_by_grp.get(grupo, 0) + 1
-        # DI+, %DI, IGP-M+, Outros → spread_metodo = "nao_aplicavel" (default)
+        # %DI, IGP-M+, Outros → spread_metodo = "nao_aplicavel" (default)
 
         prev_d = prev_by_code.get(codigo, {})
         taxa_d1 = prev_d.get("taxa_indicativa")
