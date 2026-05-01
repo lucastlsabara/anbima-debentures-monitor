@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ANBIMA pipeline (intermediários, não versionados)
+raw/
+parsed.json
