@@ -26,6 +26,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from sectors import SECTORS, classify, clean_emissor, cobertura_label
+from compute_spreads import indexador_group as _indexador_group
 
 ROOT = Path(__file__).parent
 HIST_DIR = ROOT / "history"
@@ -65,24 +66,6 @@ def _br_date(iso: str | None) -> str:
         return "—"
     y, m, d = iso.split("-")
     return f"{d}/{m}/{y}"
-
-
-def _indexador_group(indice: str | None) -> str:
-    """Reduz o ``indice`` ANBIMA a um dos grupos do dashboard."""
-    if not indice:
-        return "Outros"
-    s = indice.strip().upper()
-    if s.startswith("IPCA"):
-        return "IPCA+"
-    if s.startswith("IGP"):
-        return "IGP-M+"
-    if s.startswith("PERCENTUAL DI") or "% DI" in s or "%DI" in s:
-        return "%DI"
-    if s.startswith("DI"):
-        return "DI+"
-    if s.startswith("PRE") or s.startswith("PRÉ"):
-        return "Prefixado"
-    return "Outros"
 
 
 def _indexador_order() -> list[str]:
@@ -136,12 +119,26 @@ def _enrich(papers: list[dict]) -> list[dict]:
 # ----------------------------------------------------------------------------
 
 def build_manifest(snaps: list[dict]) -> dict:
+    counts: dict[str, int] = defaultdict(int)
+    com_spread: dict[str, int] = defaultdict(int)
+    if snaps:
+        for d in snaps[-1]["debentures"]:
+            grp = _indexador_group(d.get("indice"))
+            counts[grp] += 1
+            if d.get("spread_pp") is not None:
+                com_spread[grp] += 1
+    indexadores_presentes = [
+        {"label": grp, "n": counts[grp], "n_com_spread": com_spread[grp]}
+        for grp in _indexador_order() if counts[grp] > 0
+    ]
     return {
         "dates": [s["data_referencia"] for s in snaps],
         "latest": snaps[-1]["data_referencia"] if snaps else None,
         "n_snapshots": len(snaps),
         "sectors": SECTORS,
         "indexadores": _indexador_order(),
+        "indexadores_presentes": indexadores_presentes,
+        "diagnostico_metodo": (snaps[-1].get("diagnostico_metodo") if snaps else None),
         "buckets_duration": [
             {"label": "0–2a", "min": 0.0, "max": 2.0},
             {"label": "2–5a", "min": 2.0, "max": 5.0},
@@ -170,59 +167,123 @@ def _snap_at_offset(snaps: list[dict], idx_today: int, offset: int) -> dict | No
     return snaps[j]
 
 
-def build_overview(snaps: list[dict], enriched_today: list[dict]) -> dict:
-    today = snaps[-1]
-    idx_today = len(snaps) - 1
-    today_iso = today["data_referencia"]
-
-    liq = [p for p in enriched_today if not p.get("flag_iliquido")]
-    iliq = [p for p in enriched_today if p.get("flag_iliquido")]
-    estag = [p for p in enriched_today if p.get("flag_estagnado")]
-
-    # KPI: termômetro = soma dos delta_spread_bps (positivo = mercado abrindo)
+def _kpis_for(papers: list[dict], today: dict) -> dict:
+    liq = [p for p in papers if not p.get("flag_iliquido")]
+    iliq = [p for p in papers if p.get("flag_iliquido")]
+    estag = [p for p in papers if p.get("flag_estagnado")]
     deltas_bps = [
-        p["delta_spread_bps"]
-        for p in liq
-        if p.get("delta_spread_bps") is not None
+        p["delta_spread_bps"] for p in liq if p.get("delta_spread_bps") is not None
     ]
+    n_com_spread = sum(1 for p in papers if p.get("spread_pp") is not None)
     termometro_bps = sum(deltas_bps) if deltas_bps else None
     termometro_med = _median(deltas_bps)
-
-    kpis = {
+    today_iso = today["data_referencia"]
+    return {
         "data_referencia": today_iso,
         "data_referencia_br": _br_date(today_iso),
         "data_anterior": today.get("data_anterior"),
         "data_anterior_br": _br_date(today.get("data_anterior")),
-        "n_total": len(enriched_today),
+        "n_total": len(papers),
         "n_liquidos": len(liq),
         "n_iliquidos": len(iliq),
-        "pct_iliquidos": round(100.0 * len(iliq) / len(enriched_today), 2)
-            if enriched_today else None,
+        "pct_iliquidos": round(100.0 * len(iliq) / len(papers), 2) if papers else None,
         "n_estagnados": len(estag),
-        "pct_estagnados": round(100.0 * len(estag) / len(enriched_today), 2)
-            if enriched_today else None,
+        "pct_estagnados": round(100.0 * len(estag) / len(papers), 2) if papers else None,
+        "n_com_spread": n_com_spread,
         "termometro_bps": round(termometro_bps, 1) if termometro_bps is not None else None,
         "termometro_med_bps": round(termometro_med, 1) if termometro_med is not None else None,
         "n_com_d1": len(deltas_bps),
     }
 
-    # Curvas overlay (T, T-1, T-5, T-21, T-63)
+
+def _histogram_for(spreads: list[float], bin_pp: float = 0.25,
+                   cap_lo: float = -2.0, cap_hi: float = 9.0) -> dict | None:
+    if not spreads:
+        return None
+    spreads = sorted(spreads)
+    lo = max(math.floor(min(spreads) * 4) / 4, cap_lo)
+    hi = min(math.ceil(max(spreads) * 4) / 4, cap_hi)
+    edges: list[float] = []
+    x = lo
+    while x <= hi + 1e-9:
+        edges.append(round(x, 4))
+        x += bin_pp
+    counts = [0] * (len(edges) - 1)
+    for v in spreads:
+        v_clip = min(max(v, edges[0]), edges[-1] - 1e-9)
+        for i in range(len(edges) - 1):
+            if edges[i] <= v_clip < edges[i + 1]:
+                counts[i] += 1
+                break
+    return {
+        "edges": edges, "counts": counts, "n": len(spreads),
+        "p25": round(_percentile(spreads, 0.25), 4),
+        "p50": round(_percentile(spreads, 0.50), 4),
+        "p75": round(_percentile(spreads, 0.75), 4),
+        "min": round(min(spreads), 4),
+        "max": round(max(spreads), 4),
+    }
+
+
+def _top_movers_for(papers: list[dict]) -> dict:
+    movers = [p for p in papers if p.get("delta_spread_bps") is not None]
+    movers_sorted = sorted(movers, key=lambda p: p["delta_spread_bps"], reverse=True)
+
+    def _row(p: dict) -> dict:
+        return {
+            "codigo": p["codigo"],
+            "emissor": p.get("emissor_clean"),
+            "setor": p.get("setor"),
+            "duration_anos": p.get("duration_anos"),
+            "spread_pp": p.get("spread_pp"),
+            "taxa": p.get("taxa_indicativa"),
+            "delta_spread_bps": p.get("delta_spread_bps"),
+            "delta_taxa_bps": p.get("delta_taxa_bps"),
+            "indexador": p.get("indexador_grupo"),
+        }
+
+    return {
+        "abrindo": [_row(p) for p in movers_sorted[:5]],
+        "fechando": [_row(p) for p in movers_sorted[-5:][::-1]],
+        "n_com_d1": len(movers),
+    }
+
+
+def build_overview(snaps: list[dict], enriched_today: list[dict]) -> dict:
+    today = snaps[-1]
+    idx_today = len(snaps) - 1
+
+    kpis_all = _kpis_for(enriched_today, today)
+    kpis_by_indexador: dict[str, dict] = {"Todos": kpis_all}
+    histogram_by_indexador: dict[str, dict] = {}
+    top_movers_by_indexador: dict[str, dict] = {"Todos": _top_movers_for(enriched_today)}
+
+    by_grp: dict[str, list[dict]] = defaultdict(list)
+    for p in enriched_today:
+        by_grp[p["indexador_grupo"]].append(p)
+
+    for grp in _indexador_order():
+        ps = by_grp.get(grp, [])
+        if not ps:
+            continue
+        kpis_by_indexador[grp] = _kpis_for(ps, today)
+        top_movers_by_indexador[grp] = _top_movers_for(ps)
+        spreads = [p["spread_pp"] for p in ps
+                   if p.get("spread_pp") is not None and not p.get("flag_iliquido")]
+        if spreads:
+            histogram_by_indexador[grp] = _histogram_for(spreads)
+
     overlay_offsets = [("today", 0), ("d1", 1), ("d5", 5), ("d21", 21), ("d63", 63)]
     curves_overlay: dict[str, dict | None] = {}
     for label, off in overlay_offsets:
         s = _snap_at_offset(snaps, idx_today, off)
-        if s is None:
-            curves_overlay[label] = None
-        else:
-            curves_overlay[label] = {
-                "date": s["data_referencia"],
-                "points": _curve_for(s),
-            }
+        curves_overlay[label] = {
+            "date": s["data_referencia"], "points": _curve_for(s),
+        } if s is not None else None
 
-    # Spread mediano por indexador + sparkline 21d
     by_grp_today: dict[str, list[float]] = defaultdict(list)
-    for p in liq:
-        if p.get("spread_pp") is not None:
+    for p in enriched_today:
+        if p.get("spread_pp") is not None and not p.get("flag_iliquido"):
             by_grp_today[p["indexador_grupo"]].append(p["spread_pp"])
 
     sparkline_window = 21
@@ -232,14 +293,12 @@ def build_overview(snaps: list[dict], enriched_today: list[dict]) -> dict:
     for j in range(start, idx_today + 1):
         s = snaps[j]
         spark_dates.append(s["data_referencia"])
-        # agrupar spreads daquele dia
         bucket: dict[str, list[float]] = defaultdict(list)
         for d in s["debentures"]:
             sp = d.get("spread_pp")
             if sp is None or d.get("flag_iliquido"):
                 continue
-            grp = _indexador_group(d.get("indice"))
-            bucket[grp].append(sp)
+            bucket[_indexador_group(d.get("indice"))].append(sp)
         for grp in by_grp_today.keys():
             vals = bucket.get(grp, [])
             spark_by_grp[grp].append(_median(vals))
@@ -256,78 +315,17 @@ def build_overview(snaps: list[dict], enriched_today: list[dict]) -> dict:
             "count": len(vals),
             "sparkline_dates": spark_dates,
             "sparkline_median": [
-                round(v, 4) if v is not None else None
-                for v in spark_by_grp[grp]
+                round(v, 4) if v is not None else None for v in spark_by_grp[grp]
             ],
         })
 
-    # Histograma de spreads IPCA+ no dia
-    ipca_spreads = sorted(
-        p["spread_pp"]
-        for p in liq
-        if p.get("indexador_grupo") == "IPCA+" and p.get("spread_pp") is not None
-    )
-    if ipca_spreads:
-        lo = math.floor(min(ipca_spreads) * 4) / 4
-        hi = math.ceil(max(ipca_spreads) * 4) / 4
-        # bins de 0.25 pp; cap em [-2, +9] visualmente saudável
-        lo = max(lo, -2.0)
-        hi = min(hi, 9.0)
-        edges = []
-        x = lo
-        while x <= hi + 1e-9:
-            edges.append(round(x, 4))
-            x += 0.25
-        counts = [0] * (len(edges) - 1)
-        for v in ipca_spreads:
-            v_clip = min(max(v, edges[0]), edges[-1] - 1e-9)
-            for i in range(len(edges) - 1):
-                if edges[i] <= v_clip < edges[i + 1]:
-                    counts[i] += 1
-                    break
-        histogram = {
-            "edges": edges,
-            "counts": counts,
-            "n": len(ipca_spreads),
-            "p25": round(_percentile(ipca_spreads, 0.25), 4),
-            "p50": round(_percentile(ipca_spreads, 0.50), 4),
-            "p75": round(_percentile(ipca_spreads, 0.75), 4),
-            "min": round(min(ipca_spreads), 4),
-            "max": round(max(ipca_spreads), 4),
-        }
-    else:
-        histogram = None
-
-    # Top 10 movimentações: 5 abrindo + 5 fechando (Δ spread D-1)
-    movers = [p for p in liq if p.get("delta_spread_bps") is not None]
-    movers_sorted = sorted(movers, key=lambda p: p["delta_spread_bps"], reverse=True)
-
-    def _mover_row(p: dict) -> dict:
-        return {
-            "codigo": p["codigo"],
-            "emissor": p.get("emissor_clean"),
-            "setor": p.get("setor"),
-            "duration_anos": p.get("duration_anos"),
-            "spread_pp": p.get("spread_pp"),
-            "taxa": p.get("taxa_indicativa"),
-            "delta_spread_bps": p.get("delta_spread_bps"),
-            "delta_taxa_bps": p.get("delta_taxa_bps"),
-            "indexador": p.get("indexador_grupo"),
-        }
-
-    top_abrindo = [_mover_row(p) for p in movers_sorted[:5]]
-    top_fechando = [_mover_row(p) for p in movers_sorted[-5:][::-1]]
-
     return {
-        "kpis": kpis,
+        "kpis_by_indexador": kpis_by_indexador,
         "curves_overlay": curves_overlay,
         "spread_by_indexador": spread_by_indexador,
-        "histogram_ipca_spreads": histogram,
-        "top_movements": {
-            "abrindo": top_abrindo,
-            "fechando": top_fechando,
-            "n_com_d1": len(movers),
-        },
+        "histogram_by_indexador": histogram_by_indexador,
+        "top_movements_by_indexador": top_movers_by_indexador,
+        "diagnostico_metodo": today.get("diagnostico_metodo"),
     }
 
 
@@ -407,53 +405,59 @@ def _heatmap_grid(papers: list[dict]) -> tuple[list[list[float | None]], list[li
     return means, counts
 
 
+def _delta_bps_grid(cur: list[list[float | None]],
+                    old: list[list[float | None]] | None) -> list[list[float | None]] | None:
+    if old is None:
+        return None
+    out = []
+    for i in range(len(cur)):
+        row = []
+        for j in range(len(cur[i])):
+            a, b = cur[i][j], old[i][j]
+            row.append(round((a - b) * 100.0, 1) if (a is not None and b is not None) else None)
+        out.append(row)
+    return out
+
+
 def build_heatmap_history(snaps: list[dict]) -> dict:
-    """Atual + delta médio (em bps) vs T-7 e T-30."""
+    """Heatmap por indexador. Apenas grupos com spread fazem sentido."""
     today = snaps[-1]
-    today_papers_enr = _enrich([
-        d for d in today["debentures"]
-        if _indexador_group(d.get("indice")) == "IPCA+" and not d.get("flag_iliquido")
-    ])
-    cur_means, cur_counts = _heatmap_grid(today_papers_enr)
+    grupos_com_spread: list[str] = []
+    by_indexador: dict[str, dict] = {}
 
-    def _grid_at(off: int) -> list[list[float | None]] | None:
-        j = len(snaps) - 1 - off
-        if j < 0:
-            return None
-        prev = snaps[j]
-        prev_enr = _enrich([
-            d for d in prev["debentures"]
-            if _indexador_group(d.get("indice")) == "IPCA+" and not d.get("flag_iliquido")
+    def _enr_filter(snap: dict, grp: str) -> list[dict]:
+        return _enrich([
+            d for d in snap["debentures"]
+            if _indexador_group(d.get("indice")) == grp
+            and not d.get("flag_iliquido")
+            and d.get("spread_pp") is not None
         ])
-        means, _ = _heatmap_grid(prev_enr)
-        return means
 
-    g7 = _grid_at(7)
-    g30 = _grid_at(30)
+    for grp in _indexador_order():
+        today_filt = _enr_filter(today, grp)
+        if not today_filt:
+            continue
+        grupos_com_spread.append(grp)
+        cur_means, cur_counts = _heatmap_grid(today_filt)
 
-    def _delta_bps(cur: list[list[float | None]], old: list[list[float | None]] | None) -> list[list[float | None]] | None:
-        if old is None:
-            return None
-        out = []
-        for i in range(len(cur)):
-            row = []
-            for j in range(len(cur[i])):
-                a = cur[i][j]
-                b = old[i][j]
-                if a is None or b is None:
-                    row.append(None)
-                else:
-                    row.append(round((a - b) * 100.0, 1))  # pp -> bps
-            out.append(row)
-        return out
+        def _grid_at(off: int, grupo: str = grp) -> list[list[float | None]] | None:
+            j = len(snaps) - 1 - off
+            if j < 0:
+                return None
+            return _heatmap_grid(_enr_filter(snaps[j], grupo))[0]
+
+        by_indexador[grp] = {
+            "current_pp": cur_means,
+            "current_count": cur_counts,
+            "delta_7d_bps": _delta_bps_grid(cur_means, _grid_at(7)),
+            "delta_30d_bps": _delta_bps_grid(cur_means, _grid_at(30)),
+        }
 
     return {
         "sectors": SECTORS,
         "buckets": [b[0] for b in _BUCKETS],
-        "current_pp": cur_means,
-        "current_count": cur_counts,
-        "delta_7d_bps": _delta_bps(cur_means, g7),
-        "delta_30d_bps": _delta_bps(cur_means, g30),
+        "indexadores": grupos_com_spread,
+        "by_indexador": by_indexador,
     }
 
 
@@ -500,8 +504,11 @@ def build_movements(snaps: list[dict], enriched_today: list[dict]) -> dict:
             "vencimento": p.get("vencimento"),
             "duration_anos": p.get("duration_anos"),
             "taxa": p.get("taxa_indicativa"),
-            "ntnb_interp": p.get("taxa_ntnb_interp"),
+            "benchmark_titulo": p.get("benchmark_titulo"),
+            "benchmark_vencimento": p.get("benchmark_vencimento"),
+            "taxa_benchmark": p.get("taxa_benchmark"),
             "spread_pp": sp,
+            "spread_metodo": p.get("spread_metodo"),
             "d1_bps": _delta(map_d1),
             "d5_bps": _delta(map_d5),
             "d21_bps": _delta(map_d21),
@@ -521,14 +528,13 @@ def build_movements(snaps: list[dict], enriched_today: list[dict]) -> dict:
 # ----------------------------------------------------------------------------
 
 def build_dispersion(snaps: list[dict], dispersion_dir: Path) -> dict:
+    """Scatter Duration × Spread por data, todos os indexadores que tenham spread."""
     dates = []
+    indexadores_set: set[str] = set()
     for s in snaps:
         date = s["data_referencia"]
         dates.append(date)
-        enr = _enrich([
-            d for d in s["debentures"]
-            if _indexador_group(d.get("indice")) == "IPCA+"
-        ])
+        enr = _enrich(s["debentures"])
         papers = []
         for p in enr:
             sp = p.get("spread_pp")
@@ -541,15 +547,21 @@ def build_dispersion(snaps: list[dict], dispersion_dir: Path) -> dict:
                 "e": p.get("emissor_clean"),
                 "s": p.get("setor"),
                 "cob": p.get("cobertura"),
+                "i": p.get("indexador_grupo"),
                 "d": dur,
                 "t": taxa,
                 "sp": round(sp, 4),
             })
+            indexadores_set.add(p.get("indexador_grupo"))
         _write_json(
             dispersion_dir / f"{date}.json",
             {"date": date, "papers": papers},
         )
-    return {"dates": dates, "sectors": SECTORS}
+    return {
+        "dates": dates,
+        "sectors": SECTORS,
+        "indexadores": [g for g in _indexador_order() if g in indexadores_set],
+    }
 
 
 # ----------------------------------------------------------------------------

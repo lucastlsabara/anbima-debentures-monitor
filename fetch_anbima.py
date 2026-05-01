@@ -29,6 +29,9 @@ RAW_DIR = ROOT / "raw"
 
 DB_URL = "https://www.anbima.com.br/informacoes/merc-sec-debentures/arqs/db{yymmdd}.txt"
 ETTJ_URL = "https://www.anbima.com.br/informacoes/est-termo/CZ-down.asp?Dt_Ref={dd}/{mm}/{yyyy}&saida=csv"
+# Mercado secundário de títulos públicos: tabela por título + vencimento exato
+# (fonte oficial das taxas de NTN-B/LTN/NTN-F usadas como benchmark de debêntures).
+TITPUB_URL = "https://www.anbima.com.br/informacoes/merc-sec/arqs/ms{yymmdd}.txt"
 
 DB_HEADER = [
     "codigo", "nome", "vencimento", "indice", "taxa_compra", "taxa_venda",
@@ -81,6 +84,44 @@ def fetch_ettj(target: date) -> str:
     out = RAW_DIR / f"ettj_{_iso(target)}.csv"
     out.write_text(text, encoding="utf-8")
     return text
+
+
+def fetch_titulos_publicos(target: date) -> str:
+    yymmdd = target.strftime("%y%m%d")
+    url = TITPUB_URL.format(yymmdd=yymmdd)
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+    text = r.content.decode("latin-1")
+    out = RAW_DIR / f"ms{yymmdd}.txt"
+    out.write_text(text, encoding="utf-8")
+    return text
+
+
+def parse_titulos_publicos(text: str) -> dict[str, dict[str, float]]:
+    """Tabela {Titulo: {vencimento_iso: taxa_indicativa}}.
+
+    Layout do arquivo: cabeçalho separado por '@', linhas de dados começando
+    com o nome do título (LTN/NTN-B/NTN-F/NTN-C/LFT). Datas em YYYYMMDD.
+    """
+    out: dict[str, dict[str, float]] = {}
+    for ln in text.splitlines():
+        if not ln or "@" not in ln:
+            continue
+        parts = ln.split("@")
+        titulo = parts[0].strip()
+        if titulo in ("Titulo", "") or titulo.startswith("ANBIMA"):
+            continue
+        if len(parts) < 8:
+            continue
+        venc_raw = parts[4].strip()
+        if len(venc_raw) != 8 or not venc_raw.isdigit():
+            continue
+        venc_iso = f"{venc_raw[0:4]}-{venc_raw[4:6]}-{venc_raw[6:8]}"
+        taxa = _br_float(parts[7])
+        if taxa is None:
+            continue
+        out.setdefault(titulo, {})[venc_iso] = taxa
+    return out
 
 
 def parse_db(text: str) -> list[dict]:
@@ -192,11 +233,23 @@ def main() -> int:
             file=sys.stderr,
         )
 
+    print(f"[fetch] títulos públicos de {target.isoformat()}", file=sys.stderr)
+    titpub: dict[str, dict[str, float]] = {}
+    try:
+        tp_text = fetch_titulos_publicos(target)
+        titpub = parse_titulos_publicos(tp_text)
+        sizes = ", ".join(f"{k}={len(v)}" for k, v in sorted(titpub.items()))
+        print(f"[fetch]   -> {sizes}", file=sys.stderr)
+    except requests.HTTPError as e:
+        print(f"[warn ] títulos públicos indisponível ({e}); spreads ficarão sem referência",
+              file=sys.stderr)
+
     out = {
         "data_referencia": target.isoformat(),
         "ettj_data_publicada": ettj_date,
         "debentures": debentures,
         "ettj_ipca": ettj_rows,
+        "titulos_publicos": titpub,
     }
     Path(args.out).write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[fetch] -> {args.out}", file=sys.stderr)
