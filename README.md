@@ -22,9 +22,14 @@ build_dashboard.py  → pré-agrega history/ por indexador em data/*.json,
 
 ## Metodologia oficial de spread
 
-`spread = taxa_indicativa_debenture − taxa_NTNB_referência`, onde a NTN-B de
-referência vem da coluna **Referência NTN-B** do `db<YYMMDD>.txt` (vencimento
-exato, ex.: `15/05/2030`) e sua taxa vem do arquivo oficial:
+Fórmula (composição em base 252 d.u., consistente com a capitalização da taxa):
+
+```
+spread_pp = ((1 + taxa_indicativa / 100) / (1 + taxa_NTNB_referência / 100) − 1) * 100
+```
+
+A NTN-B de referência vem da coluna **Referência NTN-B** do `db<YYMMDD>.txt`
+(vencimento exato, ex.: `15/05/2030`) e sua taxa vem do arquivo oficial:
 
 ```
 https://www.anbima.com.br/informacoes/merc-sec/arqs/ms<YYMMDD>.txt
@@ -36,10 +41,13 @@ Para Prefixados, ANBIMA não publica referência LTN/NTN-F no `db.txt`, então
 caem em `sem_referencia`. DI+ e %DI exibem apenas a taxa publicada
 (`spread_metodo = "nao_aplicavel"`), sem cálculo de spread.
 
+A variação D-1 (`delta_spread_bps`) é subtração simples entre `spread_pp`
+de hoje e de D-1 — é variação de spread, não spread em si.
+
 `compute_spreads.py` também computa, **apenas como diagnóstico**, o spread
-pelo método antigo (cubic spline na ETTJ) e expõe em
-`data.diagnostico_metodo` a magnitude da diferença `oficial − legado` —
-útil para validar a migração.
+pelo método antigo (cubic spline na ETTJ, com a mesma fórmula composta)
+e expõe em `data.diagnostico_metodo` a magnitude da diferença
+`oficial − legado` — isolando o efeito de "lookup vs spline".
 
 ## Dashboard
 

@@ -4,7 +4,9 @@ Lê parsed.json + history/<dia anterior>.json e gera data.json + history/<hoje>.
 
 Metodologia:
   IPCA+      → lookup `referencia_ntnb` em `titulos_publicos["NTN-B"]` (vencimento
-               exato). spread = taxa_indicativa − taxa_NTNB_referencia.
+               exato). Spread composto:
+                 spread_pp = ((1 + taxa/100) / (1 + taxa_NTNB_ref/100) − 1) * 100
+               (pp em base 252 d.u., consistente com a composição da taxa).
   Prefixado  → ANBIMA não publica referência LTN/NTN-F na coluna do db.txt para
                prefixados. spread = null (spread_metodo = "sem_referencia").
   DI+, %DI   → não calcula spread; expõe taxa_indicativa publicada.
@@ -12,7 +14,9 @@ Metodologia:
   IGP-M+     → idem (sem fonte oficial de benchmark).
   Outros     → idem.
 
-Sem interpolação, sem spline, sem síntese de referência.
+Sem interpolação, sem spline, sem síntese de referência. A variação D-1 do
+spread (delta_spread_bps) continua como subtração simples — é variação de
+spread, não spread em si.
 
 Para diagnóstico de migração, computa também `spread_pp_legado` para IPCA+ via
 o método antigo (cubic spline na ETTJ NTN-B). NÃO é usado pelo dashboard;
@@ -152,7 +156,11 @@ def main() -> int:
             if ref:
                 taxa_benchmark = ntnb_by_venc.get(ref)
                 if taxa_benchmark is not None and not flag_iliquido:
-                    spread_pp = taxa - taxa_benchmark
+                    # Spread por composição (252 d.u.): (1+i_deb)/(1+i_ref) − 1.
+                    # Taxas vêm em formato percentual; resultado em pp.
+                    spread_pp = (
+                        (1 + taxa / 100.0) / (1 + taxa_benchmark / 100.0) - 1
+                    ) * 100.0
                     spread_metodo = "referencia"
                     com_ref_by_grp[grupo] = com_ref_by_grp.get(grupo, 0) + 1
                 else:
@@ -162,9 +170,14 @@ def main() -> int:
                 spread_metodo = "sem_referencia"
                 sem_ref_by_grp[grupo] = sem_ref_by_grp.get(grupo, 0) + 1
 
-            # diagnóstico: spread legado por interpolação (apenas se possível)
+            # Diagnóstico legacy: mesma fórmula composta, porém com a NTN-B
+            # interpolada por spline em vez do lookup oficial. Isola o efeito
+            # da troca de método (lookup vs spline), não da aritmética.
             if legacy_curve is not None and not flag_iliquido and dur_dias is not None:
-                spread_legado = round(taxa - float(legacy_curve(dur_dias)), 4)
+                ref_legado = float(legacy_curve(dur_dias))
+                spread_legado = round(
+                    ((1 + taxa / 100.0) / (1 + ref_legado / 100.0) - 1) * 100.0, 4,
+                )
                 if spread_pp is not None:
                     diff_bps_ipca.append(abs((spread_pp - spread_legado) * 100.0))
 
