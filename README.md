@@ -9,11 +9,12 @@ automaticamente via Routines do Claude Code.
 fetch_anbima.py     → baixa db<YYMMDD>.txt + ETTJ + ms<YYMMDD>.txt
                       (taxas indicativas de NTN-B/LTN/NTN-F por vencimento exato)
                       gera parsed.json
-compute_spreads.py  → método oficial ANBIMA: para cada IPCA+ faz lookup
-                      EXATO da Referência NTN-B no ms<YYMMDD>.txt;
-                      spread = taxa_indicativa − taxa_NTNB_referencia.
-                      DI+/%DI/PRE/IGP-M+ ficam sem spread (ANBIMA não publica
-                      referência LTN/NTN-F no db.txt). Sem interpolação.
+compute_spreads.py  → IPCA+: método oficial ANBIMA (lookup EXATO da Referência
+                      NTN-B no ms<YYMMDD>.txt). DI+ (= CDI+ na ANBIMA): a taxa
+                      indicativa publicada já é o spread aditivo sobre o DI/CDI,
+                      então spread_pp = taxa_indicativa (spread_metodo =
+                      "indexador_aditivo", benchmark = "CDI"). %DI/PRE/IGP-M+
+                      ficam sem spread em pp. Sem interpolação.
                       Grava data.json + history/<YYYY-MM-DD>.json.
 build_dashboard.py  → pré-agrega history/ por indexador em data/*.json,
                       emite index.html (single file, seletor global de
@@ -38,8 +39,13 @@ https://www.anbima.com.br/informacoes/merc-sec/arqs/ms<YYMMDD>.txt
 Não há interpolação. Se a referência divulgada não constar do arquivo do
 dia, o papel recebe `spread_metodo = "sem_referencia"` e `spread_pp = null`.
 Para Prefixados, ANBIMA não publica referência LTN/NTN-F no `db.txt`, então
-caem em `sem_referencia`. DI+ e %DI exibem apenas a taxa publicada
-(`spread_metodo = "nao_aplicavel"`), sem cálculo de spread.
+caem em `sem_referencia`.
+
+Para **DI+** (= CDI+ na ANBIMA — mesmo grupo), a taxa indicativa publicada
+já é, por construção do indexador, o spread aditivo sobre o DI/CDI; portanto
+`spread_pp = taxa_indicativa`, `spread_metodo = "indexador_aditivo"` e
+`benchmark_titulo = "CDI"`. Não há cálculo — é leitura direta. **%DI** continua
+sem spread em pp (`nao_aplicavel`), pois o indexador é multiplicativo.
 
 A variação D-1 (`delta_spread_bps`) é subtração simples entre `spread_pp`
 de hoje e de D-1 — é variação de spread, não spread em si.
