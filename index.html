@@ -268,7 +268,7 @@
 <footer>
   Fonte: ANBIMA — mercado secundário de debêntures + ETTJ NTN-B.
   Pipeline <code>fetch_anbima.py</code> + <code>compute_spreads.py</code> + <code>build_dashboard.py</code>.
-  Spread = Taxa Indicativa − ETTJ NTN-B (cubic spline) na duration do papel.
+  Spread = (1 + Taxa Indicativa) / (1 + Taxa NTN-B referência) − 1, em pp. Lookup oficial ANBIMA por vencimento exato, sem interpolação. DI+/%DI exibem a taxa publicada pela ANBIMA.
 </footer>
 
 <script>
