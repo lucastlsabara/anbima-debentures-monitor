@@ -1,0 +1,864 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>ANBIMA Debêntures — Monitor</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link href="https://unpkg.com/tabulator-tables@6.2.5/dist/css/tabulator_midnight.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/dark.css" rel="stylesheet">
+<script src="https://unpkg.com/tabulator-tables@6.2.5/dist/js/tabulator.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
+<style>
+  :root {
+    --bg:#0e1116; --surface:#161b22; --surface2:#1c2230;
+    --border:#262d39; --border-strong:#384354;
+    --fg:#d6dde7; --muted:#8a96a8;
+    --accent:#5a9bff;
+    --pos:#3aa66c;   /* spread fechando = positivo p/ vendido */
+    --neg:#dc5752;   /* spread abrindo */
+    --warn:#d2a052;
+  }
+  * { box-sizing:border-box; }
+  html, body { background:var(--bg); color:var(--fg); }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+    margin:0; padding:0;
+    font-size:13px; line-height:1.45;
+  }
+  header.top {
+    padding:18px 24px 14px; border-bottom:1px solid var(--border);
+    display:flex; align-items:flex-end; justify-content:space-between; gap:24px;
+    flex-wrap:wrap;
+  }
+  header.top h1 {
+    font-size:18px; margin:0; font-weight:600; letter-spacing:.01em;
+  }
+  header.top .sub { color:var(--muted); font-size:12px; margin-top:4px; }
+  nav.tabs {
+    display:flex; gap:2px; padding:0 24px; background:var(--surface);
+    border-bottom:1px solid var(--border); overflow-x:auto;
+  }
+  nav.tabs a {
+    padding:11px 16px; color:var(--muted); text-decoration:none;
+    font-size:12.5px; border-bottom:2px solid transparent;
+    white-space:nowrap;
+  }
+  nav.tabs a:hover { color:var(--fg); }
+  nav.tabs a.active {
+    color:var(--fg); border-bottom-color:var(--accent);
+  }
+  main { padding:18px 24px 32px; }
+  .panel {
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:6px; padding:14px 16px; margin-bottom:14px;
+  }
+  .panel h2 {
+    margin:0 0 10px; font-size:11px; text-transform:uppercase;
+    letter-spacing:.08em; color:var(--muted); font-weight:500;
+  }
+  .grid-kpi {
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+    gap:12px; margin-bottom:14px;
+  }
+  .kpi {
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:6px; padding:12px 16px;
+  }
+  .kpi .label {
+    color:var(--muted); font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.07em;
+  }
+  .kpi .val { font-size:22px; font-weight:600; margin-top:4px; }
+  .kpi .val.pos { color:var(--pos); }
+  .kpi .val.neg { color:var(--neg); }
+  .kpi .hint { color:var(--muted); font-size:11px; margin-top:2px; }
+
+  .grid-2x2 {
+    display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px;
+  }
+  @media (max-width:1100px) { .grid-2x2 { grid-template-columns:1fr; } }
+
+  .controls {
+    display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+    margin-bottom:10px;
+  }
+  .controls input, .controls select, .controls button {
+    background:var(--surface2); color:var(--fg);
+    border:1px solid var(--border-strong); border-radius:4px;
+    padding:6px 10px; font-size:12.5px; font-family:inherit;
+  }
+  .controls button { cursor:pointer; }
+  .controls button:hover { border-color:var(--accent); }
+  .controls button.active { border-color:var(--accent); color:var(--accent); }
+  .controls label {
+    color:var(--muted); font-size:12px;
+    display:flex; align-items:center; gap:6px;
+  }
+
+  .chart { width:100%; min-height:340px; }
+  .chart-tall { width:100%; min-height:520px; }
+
+  table.mini { width:100%; border-collapse:collapse; }
+  table.mini th, table.mini td {
+    padding:6px 10px; border-bottom:1px solid var(--border);
+    font-size:12px; text-align:left;
+  }
+  table.mini th {
+    color:var(--muted); font-weight:500; font-size:10.5px;
+    text-transform:uppercase; letter-spacing:.06em;
+  }
+  table.mini td.num, table.mini th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  table.mini .pos { color:var(--pos); }
+  table.mini .neg { color:var(--neg); }
+
+  .hide { display:none !important; }
+  .empty {
+    color:var(--muted); font-style:italic; font-size:12.5px;
+    padding:20px; text-align:center;
+  }
+  .badge {
+    display:inline-block; padding:1px 6px; border-radius:10px;
+    font-size:10px; background:#2a2f3a; color:var(--muted);
+    margin-left:6px; vertical-align:1px;
+  }
+  .badge.cob { background:#23344d; color:#9ec3ff; }
+  .badge.warn { background:#3d2f1f; color:var(--warn); }
+  footer {
+    color:var(--muted); font-size:10.5px; text-align:center;
+    padding:20px 24px 28px; border-top:1px solid var(--border);
+    margin-top:14px;
+  }
+  /* Tabulator dark tweaks */
+  .tabulator { font-size:12px; background:transparent; border:none; }
+  .tabulator .tabulator-header {
+    background:var(--surface2); border-bottom:1px solid var(--border);
+  }
+  .tabulator .tabulator-row { background:var(--surface); }
+  .tabulator .tabulator-row.tabulator-row-even { background:var(--surface2); }
+  .tabulator .tabulator-row:hover { background:#22293a !important; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div>
+    <h1>ANBIMA · Mercado Secundário de Debêntures</h1>
+    <div class="sub" id="hdr-sub">Carregando…</div>
+  </div>
+  <div class="sub" id="hdr-info"></div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <a href="#/visao" data-tab="visao">Visão Geral</a>
+  <a href="#/curvas" data-tab="curvas">Curvas Históricas</a>
+  <a href="#/dispersao" data-tab="dispersao">Dispersão IPCA+</a>
+  <a href="#/movimentacoes" data-tab="movimentacoes">Movimentações</a>
+  <a href="#/heatmap" data-tab="heatmap">Heatmap Setor × Duration</a>
+</nav>
+
+<main>
+
+<!-- ===================== Tab: Visão Geral ===================== -->
+<section id="tab-visao" class="tab">
+  <div class="grid-kpi" id="kpi-row"></div>
+  <div class="grid-2x2">
+    <div class="panel">
+      <h2>Curva ETTJ NTN-B — overlay temporal</h2>
+      <div id="chart-curves-overlay" class="chart"></div>
+    </div>
+    <div class="panel">
+      <h2>Spread mediano por indexador (atual + sparkline 21d)</h2>
+      <div id="chart-spread-by-idx" class="chart"></div>
+    </div>
+    <div class="panel">
+      <h2>Histograma — spreads IPCA+ no dia</h2>
+      <div id="chart-histogram" class="chart"></div>
+    </div>
+    <div class="panel">
+      <h2>Top 10 movimentações do dia (Δ spread D-1)</h2>
+      <div id="top-movers"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== Tab: Curvas Históricas ===================== -->
+<section id="tab-curvas" class="tab hide">
+  <div class="panel">
+    <div class="controls">
+      <label>Comparar:
+        <button data-cmp="d30" class="cmp-btn">Hoje vs 30d</button>
+        <button data-cmp="d90" class="cmp-btn">Hoje vs 90d</button>
+        <button data-cmp="custom" class="cmp-btn">Customizado</button>
+      </label>
+      <label>Data 1: <input type="text" id="curve-date1" placeholder="YYYY-MM-DD"></label>
+      <label>Data 2: <input type="text" id="curve-date2" placeholder="YYYY-MM-DD"></label>
+    </div>
+    <div id="chart-curves-compare" class="chart"></div>
+  </div>
+  <div class="panel">
+    <h2>Heatmap temporal — taxa NTN-B (datas × vértices)</h2>
+    <div id="chart-curves-heatmap" class="chart-tall"></div>
+  </div>
+</section>
+
+<!-- ===================== Tab: Dispersão IPCA+ ===================== -->
+<section id="tab-dispersao" class="tab hide">
+  <div class="panel">
+    <div class="controls">
+      <label>Data:
+        <input type="text" id="disp-date" placeholder="YYYY-MM-DD">
+      </label>
+      <label>
+        <input type="checkbox" id="disp-cob"> Só minha cobertura
+      </label>
+      <label>Setor:
+        <select id="disp-setor"><option value="">Todos</option></select>
+      </label>
+    </div>
+    <div id="chart-dispersion" class="chart-tall"></div>
+  </div>
+</section>
+
+<!-- ===================== Tab: Movimentações ===================== -->
+<section id="tab-movimentacoes" class="tab hide">
+  <div class="panel">
+    <div class="controls">
+      <input id="mov-q" placeholder="Filtrar por código ou emissor…" style="flex:1;min-width:240px;">
+      <label>Indexador:
+        <select id="mov-idx"><option value="">Todos</option></select>
+      </label>
+      <label>Setor:
+        <select id="mov-setor"><option value="">Todos</option></select>
+      </label>
+      <label>
+        <input type="checkbox" id="mov-cob"> Cobertura
+      </label>
+      <label>
+        <input type="checkbox" id="mov-hide-iliq" checked> Esconder ilíquidos
+      </label>
+    </div>
+    <div id="mov-table"></div>
+  </div>
+</section>
+
+<!-- ===================== Tab: Heatmap Setor x Duration ===================== -->
+<section id="tab-heatmap" class="tab hide">
+  <div class="panel">
+    <div class="controls">
+      <button data-hm="current" class="hm-btn active">Spread atual (pp)</button>
+      <button data-hm="d7" class="hm-btn">Δ 7d (bps)</button>
+      <button data-hm="d30" class="hm-btn">Δ 30d (bps)</button>
+    </div>
+    <div id="chart-heatmap" class="chart-tall"></div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  Fonte: ANBIMA — mercado secundário de debêntures + ETTJ NTN-B.
+  Pipeline <code>fetch_anbima.py</code> + <code>compute_spreads.py</code> + <code>build_dashboard.py</code>.
+  Spread = Taxa Indicativa − ETTJ NTN-B (cubic spline) na duration do papel.
+</footer>
+
+<script>
+"use strict";
+
+/* ============================================================
+ *  utils
+ * ============================================================ */
+const fmtPct = v => v == null ? "—" : v.toFixed(2) + "%";
+const fmtPp  = v => v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + " pp";
+const fmtBps = v => v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(0) + " bps";
+const fmtAnos = v => v == null ? "—" : v.toFixed(2) + "a";
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+const PLOTLY_LAYOUT = () => ({
+  paper_bgcolor: cssVar("--surface"),
+  plot_bgcolor: cssVar("--surface"),
+  font: { color: cssVar("--fg"), size: 11,
+          family: "-apple-system, BlinkMacSystemFont, Inter, sans-serif" },
+  margin: { l: 50, r: 18, t: 28, b: 40 },
+  xaxis: { gridcolor: cssVar("--border"), zerolinecolor: cssVar("--border-strong") },
+  yaxis: { gridcolor: cssVar("--border"), zerolinecolor: cssVar("--border-strong") },
+  legend: { bgcolor: "rgba(0,0,0,0)", font:{ size:11 } },
+  hoverlabel: { bgcolor: cssVar("--surface2"), bordercolor: cssVar("--border-strong") },
+});
+const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
+  modeBarButtonsToRemove: ["lasso2d","select2d","autoScale2d"] };
+
+const cache = new Map();
+async function loadJSON(path) {
+  if (cache.has(path)) return cache.get(path);
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(path + " " + r.status);
+  const j = await r.json();
+  cache.set(path, j);
+  return j;
+}
+
+/* ============================================================
+ *  hash routing
+ * ============================================================ */
+const TABS = ["visao","curvas","dispersao","movimentacoes","heatmap"];
+const loaded = new Set();
+
+function activateTab(name) {
+  if (!TABS.includes(name)) name = "visao";
+  document.querySelectorAll("#tabs a").forEach(a =>
+    a.classList.toggle("active", a.dataset.tab === name));
+  document.querySelectorAll("section.tab").forEach(s =>
+    s.classList.toggle("hide", s.id !== "tab-" + name));
+  if (!loaded.has(name)) {
+    loaded.add(name);
+    renderTab(name).catch(err => {
+      console.error(err);
+      loaded.delete(name);
+    });
+  }
+}
+window.addEventListener("hashchange", () => {
+  const name = (location.hash || "#/visao").replace(/^#\//, "");
+  activateTab(name);
+});
+
+/* ============================================================
+ *  bootstrap
+ * ============================================================ */
+let MANIFEST = null;
+
+async function init() {
+  MANIFEST = await loadJSON("data/manifest.json");
+  const hdr = document.getElementById("hdr-sub");
+  const info = document.getElementById("hdr-info");
+  if (!MANIFEST.dates.length) {
+    hdr.textContent = "Sem snapshots em history/.";
+    return;
+  }
+  const latest = MANIFEST.latest;
+  hdr.innerHTML =
+    "Data: <strong>" + brDate(latest) + "</strong> · " +
+    MANIFEST.n_snapshots + " snapshot(s) · " +
+    MANIFEST.dates[0] + " → " + MANIFEST.dates[MANIFEST.dates.length - 1];
+  info.textContent = "Spread = Taxa Indicativa − NTN-B(duration) · spline cubic not-a-knot";
+  activateTab((location.hash || "#/visao").replace(/^#\//, ""));
+}
+
+function brDate(iso) {
+  if (!iso) return "—";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+/* ============================================================
+ *  router
+ * ============================================================ */
+async function renderTab(name) {
+  if (name === "visao") return renderVisao();
+  if (name === "curvas") return renderCurvas();
+  if (name === "dispersao") return renderDispersao();
+  if (name === "movimentacoes") return renderMovimentacoes();
+  if (name === "heatmap") return renderHeatmap();
+}
+
+/* ============================================================
+ *  Tab 1 — Visão Geral
+ * ============================================================ */
+async function renderVisao() {
+  const o = await loadJSON("data/overview.json");
+  renderKpis(o.kpis);
+  renderCurvesOverlay(o.curves_overlay);
+  renderSpreadByIndexador(o.spread_by_indexador);
+  renderHistogram(o.histogram_ipca_spreads);
+  renderTopMovers(o.top_movements);
+}
+
+function renderKpis(k) {
+  const t = k.termometro_bps;
+  const tCls = t == null ? "" : (t > 0 ? "neg" : t < 0 ? "pos" : "");
+  const cards = [
+    { label: "Papéis IPCA+",       val: k.n_total, hint: k.n_liquidos + " com taxa publicada" },
+    { label: "Ilíquidos no dia",   val: k.n_iliquidos, hint: k.pct_iliquidos + "% do total" },
+    { label: "Estagnados ≥5 d.u.", val: k.n_estagnados, hint: k.pct_estagnados + "% do total" },
+    { label: "Termômetro Σ Δspread D-1",
+      val: t == null ? "—" : (t >= 0 ? "+" : "") + t.toFixed(0) + " bps",
+      cls: tCls,
+      hint: k.n_com_d1 + " papéis com Δ vs " + brDate(k.data_anterior) },
+  ];
+  document.getElementById("kpi-row").innerHTML = cards.map(c =>
+    `<div class="kpi"><div class="label">${c.label}</div>` +
+    `<div class="val ${c.cls||''}">${c.val}</div>` +
+    `<div class="hint">${c.hint}</div></div>`).join("");
+}
+
+function renderCurvesOverlay(co) {
+  const order = [["d63","T-63",0.4], ["d21","T-21",0.55], ["d5","T-5",0.7],
+                 ["d1","T-1",0.85], ["today","Hoje",1.0]];
+  const traces = [];
+  for (const [k, label, opacity] of order) {
+    const c = co[k];
+    if (!c) continue;
+    traces.push({
+      x: c.points.map(p => p.a), y: c.points.map(p => p.t),
+      type:"scatter", mode:"lines",
+      name: label + " (" + brDate(c.date) + ")",
+      line:{ width: k==="today"?2.5:1.5,
+             color: k==="today" ? cssVar("--accent") :
+                    k==="d1" ? "#7facff" :
+                    k==="d5" ? "#5d7aae" :
+                    k==="d21" ? "#43597d" : "#324155" },
+      opacity,
+    });
+  }
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title:"Vértice (anos)", type:"log" }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title:"Taxa NTN-B (%)", ticksuffix:"%" }),
+    showlegend: true,
+  });
+  if (traces.length === 0) {
+    document.getElementById("chart-curves-overlay").innerHTML =
+      '<div class="empty">Sem curvas disponíveis.</div>';
+    return;
+  }
+  Plotly.newPlot("chart-curves-overlay", traces, layout, PLOTLY_CONFIG);
+}
+
+function renderSpreadByIndexador(rows) {
+  if (!rows || !rows.length) {
+    document.getElementById("chart-spread-by-idx").innerHTML =
+      '<div class="empty">Sem dados.</div>';
+    return;
+  }
+  // bar chart de mediana atual
+  const bar = {
+    x: rows.map(r => r.label),
+    y: rows.map(r => r.median_spread_pp),
+    type: "bar",
+    marker: { color: cssVar("--accent") },
+    text: rows.map(r => r.median_spread_pp.toFixed(2) + " pp · n=" + r.count),
+    textposition: "outside",
+    hovertemplate: "%{x}<br>Mediana: %{y:.2f} pp<br>n=%{customdata}<extra></extra>",
+    customdata: rows.map(r => r.count),
+    name: "Mediana atual",
+  };
+  // Sparklines: 1 traço por indexador, escala dupla (yaxis2 oculto)
+  // Aqui simplificamos: mostramos só barras de mediana atual + texto.
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
+      { title:"Mediana spread (pp)", ticksuffix:" pp" }),
+    showlegend: false,
+    margin:{ l:50, r:18, t:30, b:40 },
+  });
+  Plotly.newPlot("chart-spread-by-idx", [bar], layout, PLOTLY_CONFIG);
+
+  // Sparkline 21d como anotação inline em painel à parte? Por simplicidade
+  // mostramos as séries como linhas pequenas abaixo das barras se houver
+  // mais de uma série. Como hoje só temos IPCA+, a sparkline aparece como
+  // linha na própria figura na próxima versão.
+}
+
+function renderHistogram(h) {
+  if (!h) {
+    document.getElementById("chart-histogram").innerHTML =
+      '<div class="empty">Sem spreads IPCA+.</div>';
+    return;
+  }
+  const centers = [];
+  for (let i = 0; i < h.edges.length - 1; i++) {
+    centers.push((h.edges[i] + h.edges[i+1]) / 2);
+  }
+  const trace = {
+    x: centers, y: h.counts, type: "bar",
+    marker: { color: cssVar("--accent"),
+              line: { color: cssVar("--surface2"), width: 1 } },
+    hovertemplate: "Spread ≈ %{x:.2f} pp<br>n=%{y}<extra></extra>",
+    width: 0.22,
+  };
+  const shapes = [
+    { type:"line", x0:h.p25, x1:h.p25, yref:"paper", y0:0, y1:1,
+      line:{ color:cssVar("--muted"), dash:"dot", width:1 } },
+    { type:"line", x0:h.p50, x1:h.p50, yref:"paper", y0:0, y1:1,
+      line:{ color:cssVar("--warn"), dash:"dash", width:1.5 } },
+    { type:"line", x0:h.p75, x1:h.p75, yref:"paper", y0:0, y1:1,
+      line:{ color:cssVar("--muted"), dash:"dot", width:1 } },
+  ];
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis,
+      { title:"Spread (pp)", ticksuffix:" pp" }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title:"n papéis" }),
+    shapes,
+    annotations: [{
+      x: h.p50, y: 1, yref: "paper", yanchor: "bottom",
+      text: "mediana " + h.p50.toFixed(2) + " pp",
+      showarrow: false, font: { color: cssVar("--warn"), size: 10 },
+    }],
+    bargap: 0.05,
+  });
+  Plotly.newPlot("chart-histogram", [trace], layout, PLOTLY_CONFIG);
+}
+
+function renderTopMovers(tm) {
+  const root = document.getElementById("top-movers");
+  if (!tm || tm.n_com_d1 === 0) {
+    root.innerHTML = '<div class="empty">Sem snapshot anterior — Δ D-1 indisponível.</div>';
+    return;
+  }
+  const row = m =>
+    `<tr><td>${m.codigo}</td><td>${(m.emissor||'').slice(0,32)}</td>` +
+    `<td class="num">${fmtAnos(m.duration_anos)}</td>` +
+    `<td class="num">${fmtPp(m.spread_pp)}</td>` +
+    `<td class="num ${m.delta_spread_bps>0?'neg':'pos'}">${fmtBps(m.delta_spread_bps)}</td></tr>`;
+  const head = `<thead><tr><th>Código</th><th>Emissor</th>` +
+    `<th class="num">Dur.</th><th class="num">Spread</th>` +
+    `<th class="num">Δ D-1</th></tr></thead>`;
+  root.innerHTML =
+    '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Abrindo (spread ↑)</div>' +
+    `<table class="mini">${head}<tbody>${tm.abrindo.map(row).join("")}</tbody></table>` +
+    '<div style="font-size:11px;color:var(--muted);margin:12px 0 4px">Fechando (spread ↓)</div>' +
+    `<table class="mini">${head}<tbody>${tm.fechando.map(row).join("")}</tbody></table>`;
+}
+
+/* ============================================================
+ *  Tab 2 — Curvas Históricas
+ * ============================================================ */
+let CURVES = null;
+
+async function renderCurvas() {
+  CURVES = await loadJSON("data/curves_history.json");
+  setupCurvasControls();
+  renderCurvesHeatmap();
+  renderCurvesCompare("d30");
+}
+
+function setupCurvasControls() {
+  const dates = CURVES.dates;
+  const last = dates[dates.length - 1];
+  const fp1 = flatpickr("#curve-date1", { dateFormat:"Y-m-d", enable: dates,
+                                          defaultDate: last });
+  const fp2 = flatpickr("#curve-date2", { dateFormat:"Y-m-d", enable: dates,
+                                          defaultDate: dates[0] });
+  document.querySelectorAll(".cmp-btn").forEach(b => {
+    b.addEventListener("click", () => {
+      document.querySelectorAll(".cmp-btn").forEach(x => x.classList.remove("active"));
+      b.classList.add("active");
+      renderCurvesCompare(b.dataset.cmp, fp1, fp2);
+    });
+  });
+}
+
+function _idxByDate(date) {
+  return CURVES.dates.indexOf(date);
+}
+
+function renderCurvesCompare(mode, fp1, fp2) {
+  const dates = CURVES.dates;
+  const last = dates.length - 1;
+  let i1 = last, i2 = 0;
+  if (mode === "d30") i2 = Math.max(0, last - 30);
+  else if (mode === "d90") i2 = Math.max(0, last - 90);
+  else if (mode === "custom") {
+    const d1 = document.getElementById("curve-date1").value;
+    const d2 = document.getElementById("curve-date2").value;
+    i1 = _idxByDate(d1); i2 = _idxByDate(d2);
+    if (i1 < 0) i1 = last; if (i2 < 0) i2 = 0;
+  }
+  const traces = [];
+  for (const [idx, lbl, color] of [[i1,"Hoje",cssVar("--accent")], [i2,"Comparação",cssVar("--muted")]]) {
+    if (idx == null || idx < 0) continue;
+    traces.push({
+      x: CURVES.vertices_anos, y: CURVES.matrix[idx],
+      type:"scatter", mode:"lines",
+      name: lbl + " (" + brDate(dates[idx]) + ")",
+      line:{ color, width:2 },
+    });
+  }
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis,
+      { title:"Vértice (anos)", type:"log" }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
+      { title:"Taxa NTN-B (%)", ticksuffix:"%" }),
+  });
+  if (traces.length < 2 && mode !== "today") {
+    Plotly.newPlot("chart-curves-compare", traces, Object.assign(layout,
+      { annotations: [{ text: "Sem snapshot na janela " + mode +
+        " — exibindo apenas data disponível.",
+        xref:"paper", yref:"paper", x:0.5, y:1.05, showarrow:false,
+        font:{ color: cssVar("--muted"), size: 11 } }] }), PLOTLY_CONFIG);
+  } else {
+    Plotly.newPlot("chart-curves-compare", traces, layout, PLOTLY_CONFIG);
+  }
+}
+
+function renderCurvesHeatmap() {
+  const z = CURVES.matrix;  // dates x vertices
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis,
+      { title:"Vértice (anos)", type:"log" }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title:"Data" }),
+    margin: { l:90, r:18, t:28, b:40 },
+  });
+  const trace = {
+    z, x: CURVES.vertices_anos, y: CURVES.dates,
+    type: "heatmap",
+    colorscale: [[0,"#3a4d6b"],[0.5,"#7d92b3"],[1,"#dadfea"]],
+    colorbar: { title:"Taxa (%)", thickness: 12, len: 0.8 },
+    hovertemplate: "Data %{y}<br>Vértice %{x}a<br>Taxa %{z:.2f}%<extra></extra>",
+  };
+  if (CURVES.dates.length < 2) {
+    document.getElementById("chart-curves-heatmap").innerHTML =
+      '<div class="empty">Heatmap requer ≥2 datas. Aguardando rotina diária.</div>';
+    return;
+  }
+  Plotly.newPlot("chart-curves-heatmap", [trace], layout, PLOTLY_CONFIG);
+}
+
+/* ============================================================
+ *  Tab 3 — Dispersão IPCA+
+ * ============================================================ */
+let DISP_INDEX = null;
+let DISP_DATA = null;
+
+async function renderDispersao() {
+  DISP_INDEX = await loadJSON("data/dispersion/_index.json");
+  // popula select de setor
+  const sel = document.getElementById("disp-setor");
+  for (const s of DISP_INDEX.sectors) {
+    const o = document.createElement("option");
+    o.value = s; o.textContent = s; sel.appendChild(o);
+  }
+  const last = DISP_INDEX.dates[DISP_INDEX.dates.length - 1];
+  flatpickr("#disp-date", {
+    dateFormat:"Y-m-d", enable: DISP_INDEX.dates, defaultDate: last,
+    onChange: (_, dstr) => loadAndRenderDispersion(dstr),
+  });
+  document.getElementById("disp-cob").addEventListener("change", () =>
+    drawDispersion());
+  document.getElementById("disp-setor").addEventListener("change", () =>
+    drawDispersion());
+  await loadAndRenderDispersion(last);
+}
+
+async function loadAndRenderDispersion(date) {
+  DISP_DATA = await loadJSON("data/dispersion/" + date + ".json");
+  drawDispersion();
+}
+
+const SECTOR_COLORS = {
+  "Energia Elétrica":"#5a9bff",
+  "Petróleo & Gás":"#d2a052",
+  "Saneamento":"#3aa66c",
+  "Saúde":"#dc5752",
+  "Logística & Concessões":"#a378d6",
+  "Telecom":"#4ab8b8",
+  "Mineração & Siderurgia":"#c97042",
+  "Bancos & Financeiro":"#8a96a8",
+  "Varejo":"#b85eaf",
+  "Imobiliário":"#7a8d4a",
+  "Agro & Alimentos":"#a08a3a",
+  "Industrial":"#6e7a8c",
+  "Outros":"#444b58",
+};
+
+function drawDispersion() {
+  if (!DISP_DATA) return;
+  const onlyCob = document.getElementById("disp-cob").checked;
+  const setor = document.getElementById("disp-setor").value;
+  const traces = {};
+  for (const p of DISP_DATA.papers) {
+    if (onlyCob && !p.cob) continue;
+    if (setor && p.s !== setor) continue;
+    if (!traces[p.s]) {
+      traces[p.s] = { x:[], y:[], text:[], customdata:[], type:"scatter",
+        mode:"markers", name: p.s,
+        marker:{ color: SECTOR_COLORS[p.s] || "#888", size:6,
+                 opacity:0.7, line:{width:0} },
+        hovertemplate:
+          "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>" +
+          "Duration %{x:.2f}a<br>Taxa %{customdata[2]:.2f}%<br>" +
+          "Spread %{y:.2f} pp<extra>%{customdata[3]}</extra>",
+      };
+    }
+    traces[p.s].x.push(p.d);
+    traces[p.s].y.push(p.sp);
+    traces[p.s].customdata.push([p.c, (p.e||'').slice(0,40), p.t, p.s]);
+  }
+  const data = Object.values(traces);
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis,
+      { title:"Duration (anos)" }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
+      { title:"Spread sobre NTN-B (pp)", ticksuffix:" pp" }),
+    legend:{ font:{size:10}, orientation:"v" },
+  });
+  if (!data.length) {
+    document.getElementById("chart-dispersion").innerHTML =
+      '<div class="empty">Sem papéis após filtros.</div>';
+    return;
+  }
+  Plotly.newPlot("chart-dispersion", data, layout, PLOTLY_CONFIG);
+}
+
+/* ============================================================
+ *  Tab 4 — Movimentações
+ * ============================================================ */
+let MOV_TABLE = null;
+let MOV_DATA = null;
+
+async function renderMovimentacoes() {
+  MOV_DATA = await loadJSON("data/movements.json");
+  // popula selects
+  const idxSel = document.getElementById("mov-idx");
+  const setSel = document.getElementById("mov-setor");
+  const idxs = new Set(), setores = new Set();
+  for (const r of MOV_DATA.rows) {
+    if (r.indexador) idxs.add(r.indexador);
+    if (r.setor) setores.add(r.setor);
+  }
+  for (const s of [...idxs].sort()) {
+    const o = document.createElement("option"); o.value=s; o.textContent=s;
+    idxSel.appendChild(o);
+  }
+  for (const s of [...setores].sort()) {
+    const o = document.createElement("option"); o.value=s; o.textContent=s;
+    setSel.appendChild(o);
+  }
+  buildMovTable();
+  document.getElementById("mov-q").addEventListener("input", applyMovFilter);
+  document.getElementById("mov-idx").addEventListener("change", applyMovFilter);
+  document.getElementById("mov-setor").addEventListener("change", applyMovFilter);
+  document.getElementById("mov-cob").addEventListener("change", applyMovFilter);
+  document.getElementById("mov-hide-iliq").addEventListener("change", applyMovFilter);
+  applyMovFilter();
+}
+
+function buildMovTable() {
+  const fmtDelta = c => {
+    const v = c.getValue();
+    if (v == null) return "—";
+    const el = c.getElement();
+    el.classList.add(v > 0 ? "neg" : v < 0 ? "pos" : "");
+    return (v >= 0 ? "+" : "") + v.toFixed(0);
+  };
+  MOV_TABLE = new Tabulator("#mov-table", {
+    data: MOV_DATA.rows,
+    layout: "fitDataStretch",
+    height: "70vh",
+    initialSort: [{ column:"spread_pp", dir:"desc" }],
+    columns: [
+      { title:"Código", field:"codigo", width:88, frozen:true,
+        formatter: c => {
+          const r = c.getRow().getData();
+          let s = c.getValue();
+          if (r.cobertura) s += `<span class="badge cob">${r.cobertura}</span>`;
+          if (r.estagnado) s += '<span class="badge warn">estag</span>';
+          return s;
+        } },
+      { title:"Emissor", field:"emissor", widthGrow:3, minWidth:200 },
+      { title:"Setor", field:"setor", width:170 },
+      { title:"Idx", field:"indexador", width:80 },
+      { title:"Vencimento", field:"vencimento", width:105 },
+      { title:"Dur.", field:"duration_anos", width:78, hozAlign:"right",
+        formatter: c => fmtAnos(c.getValue()) },
+      { title:"Taxa", field:"taxa", width:78, hozAlign:"right",
+        formatter: c => fmtPct(c.getValue()) },
+      { title:"NTN-B", field:"ntnb_interp", width:78, hozAlign:"right",
+        formatter: c => fmtPct(c.getValue()) },
+      { title:"Spread (pp)", field:"spread_pp", width:100, hozAlign:"right",
+        formatter: c => c.getValue()==null?"—":(c.getValue()>=0?"+":"")+c.getValue().toFixed(2) },
+      { title:"Δ D-1 bps", field:"d1_bps", width:90, hozAlign:"right", formatter: fmtDelta },
+      { title:"Δ D-5 bps", field:"d5_bps", width:90, hozAlign:"right", formatter: fmtDelta },
+      { title:"Δ D-21 bps", field:"d21_bps", width:95, hozAlign:"right", formatter: fmtDelta },
+    ],
+  });
+}
+
+function applyMovFilter() {
+  const q = document.getElementById("mov-q").value.toLowerCase();
+  const idx = document.getElementById("mov-idx").value;
+  const setor = document.getElementById("mov-setor").value;
+  const onlyCob = document.getElementById("mov-cob").checked;
+  const hideIliq = document.getElementById("mov-hide-iliq").checked;
+  MOV_TABLE.setFilter(d => {
+    if (hideIliq && d.iliquido) return false;
+    if (idx && d.indexador !== idx) return false;
+    if (setor && d.setor !== setor) return false;
+    if (onlyCob && !d.cobertura) return false;
+    if (q && !((d.codigo||'').toLowerCase().includes(q)
+            || (d.emissor||'').toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+
+/* ============================================================
+ *  Tab 5 — Heatmap setor x duration
+ * ============================================================ */
+let HEAT = null;
+let HEAT_MODE = "current";
+
+async function renderHeatmap() {
+  HEAT = await loadJSON("data/heatmap_history.json");
+  document.querySelectorAll(".hm-btn").forEach(b => {
+    b.addEventListener("click", () => {
+      document.querySelectorAll(".hm-btn").forEach(x => x.classList.remove("active"));
+      b.classList.add("active");
+      HEAT_MODE = b.dataset.hm;
+      drawHeatmap();
+    });
+  });
+  drawHeatmap();
+}
+
+function drawHeatmap() {
+  const root = document.getElementById("chart-heatmap");
+  let z, title, suffix;
+  if (HEAT_MODE === "current") {
+    z = HEAT.current_pp; title = "Spread médio sobre NTN-B (pp)"; suffix = " pp";
+  } else if (HEAT_MODE === "d7") {
+    z = HEAT.delta_7d_bps;
+    if (!z) { root.innerHTML = '<div class="empty">Sem snapshot T-7. Aguardando 7d de rotina.</div>'; return; }
+    title = "Δ spread médio vs T-7 (bps)"; suffix = " bps";
+  } else {
+    z = HEAT.delta_30d_bps;
+    if (!z) { root.innerHTML = '<div class="empty">Sem snapshot T-30. Aguardando 30d de rotina.</div>'; return; }
+    title = "Δ spread médio vs T-30 (bps)"; suffix = " bps";
+  }
+  // Plotly heatmap: y = sectors, x = buckets. Quando current, escala viridis;
+  // quando delta, divergente vermelho/verde com 0 no centro.
+  const flat = z.flat().filter(v => v != null);
+  const colorscale = HEAT_MODE === "current"
+    ? [[0,"#1c2230"],[0.4,"#3a4d6b"],[0.7,"#7facff"],[1,"#dadfea"]]
+    : [[0,"#3aa66c"],[0.5,"#1c2230"],[1,"#dc5752"]];
+  let zmin, zmax;
+  if (HEAT_MODE === "current") {
+    zmin = flat.length ? Math.min(...flat) : 0;
+    zmax = flat.length ? Math.max(...flat) : 1;
+  } else {
+    const m = flat.length ? Math.max(...flat.map(Math.abs)) : 1;
+    zmin = -m; zmax = m;
+  }
+  const trace = {
+    z, x: HEAT.buckets, y: HEAT.sectors, type:"heatmap",
+    colorscale, zmin, zmax,
+    text: z.map(row => row.map(v => v == null ? "" : v.toFixed(HEAT_MODE==="current"?2:0))),
+    texttemplate: "%{text}",
+    textfont: { size: 11, color: "#0e1116" },
+    colorbar: { title, thickness: 12, len: 0.8 },
+    hovertemplate: "%{y} · %{x}<br>%{z:.2f}" + suffix + "<extra></extra>",
+  };
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    margin: { l:170, r:18, t:30, b:40 },
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title:"Duration" }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { autorange:"reversed" }),
+  });
+  Plotly.newPlot("chart-heatmap", [trace], layout, PLOTLY_CONFIG);
+}
+
+init().catch(err => {
+  console.error(err);
+  document.getElementById("hdr-sub").textContent = "Falha ao carregar dados: " + err.message;
+});
+</script>
+</body>
+</html>
