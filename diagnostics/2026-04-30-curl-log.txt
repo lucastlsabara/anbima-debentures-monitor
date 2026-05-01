@@ -1,0 +1,43 @@
+Diagnóstico de rede — 2026-05-01 ~04:40 UTC
+Sessão: claude/update-debentures-routine-EeYWr
+========================================================
+
+# Curl verbose — ANBIMA db300426.txt
+$ curl -v "https://www.anbima.com.br/informacoes/merc-sec-debentures/arqs/db300426.txt"
+
+* Host www.anbima.com.br:443 was resolved.
+* IPv4: 23.210.146.6
+*   Trying 23.210.146.6:443...
+* Connected to www.anbima.com.br (23.210.146.6) port 443
+* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384
+* Server certificate:
+*  subject: CN=*.anbima.com.br
+*  issuer: O=Anthropic; CN=sandbox-egress-production TLS Inspection CA
+*  SSL certificate verify ok.
+< HTTP/2 403
+< x-deny-reason: host_not_allowed
+< content-length: 21
+< content-type: text/plain
+Body: "Host not in allowlist"
+
+(O TLS é re-emitido pela CA do sandbox da Anthropic; o proxy intercepta tudo
+e nega antes de chegar à origem.)
+
+# Sweep dos hosts
+www.anbima.com.br      -> HTTP 403  x-deny-reason: host_not_allowed
+anbima.com.br          -> HTTP 403  x-deny-reason: host_not_allowed
+data.anbima.com.br     -> HTTP 403  x-deny-reason: host_not_allowed
+api.anbima.com.br      -> HTTP 403  x-deny-reason: host_not_allowed
+www.debentures.com.br  -> HTTP 403  x-deny-reason: host_not_allowed
+
+# Controles
+github.com    -> HTTP 200
+example.com   -> HTTP 403  x-deny-reason: host_not_allowed
+claude.ai     -> HTTP 403  (sem deny-reason; provavelmente bloqueio do app)
+
+# Env relevante
+CLAUDE_CODE_PROXY_RESOLVES_HOSTS=true
+
+# WebFetch (tool)
+WebFetch https://www.anbima.com.br/informacoes/merc-sec-debentures/arqs/db300426.txt
+-> Request failed with status code 403
