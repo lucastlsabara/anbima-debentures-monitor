@@ -272,6 +272,12 @@
 <section id="tab-movimentacoes" class="tab hide">
   <div class="panel">
     <div class="controls">
+      <label>Data base:
+        <input type="text" id="mov-date-base" placeholder="YYYY-MM-DD">
+      </label>
+      <label>Data referência:
+        <input type="text" id="mov-date-ref" placeholder="YYYY-MM-DD">
+      </label>
       <input id="mov-q" placeholder="Filtrar por código ou emissor…" style="flex:1;min-width:240px;">
       <label>Indexador:
         <select id="mov-idx"><option value="">Todos</option></select>
@@ -930,15 +936,56 @@ function drawDispersion() {
 let MOV_TABLE = null;
 let MOV_DATA = null;
 let MOV_SETOR_MS = null;
+let MOV_DATE_BASE = null;
+let MOV_DATE_REF = null;
+let MOV_FP_BASE = null;
+let MOV_FP_REF = null;
+
+function _movSpreadMap(date) {
+  if (!date) return null;
+  const entry = MOV_DATA.by_date[date];
+  if (!entry) return null;
+  if (!entry._spread_map) {
+    const m = Object.create(null);
+    for (const r of entry.rows) {
+      if (r.spread_pp != null) m[r.codigo] = r.spread_pp;
+    }
+    entry._spread_map = m;
+  }
+  return entry._spread_map;
+}
+
+function _movRowsForCurrentDates() {
+  const baseEntry = MOV_DATA.by_date[MOV_DATE_BASE];
+  if (!baseEntry) return [];
+  const refMap = _movSpreadMap(MOV_DATE_REF);
+  return baseEntry.rows.map(r => {
+    let delta = null;
+    if (refMap && r.spread_pp != null) {
+      const old = refMap[r.codigo];
+      if (old != null) delta = Math.round((r.spread_pp - old) * 100.0 * 10) / 10;
+    }
+    return Object.assign({}, r, { delta_bps: delta });
+  });
+}
 
 async function renderMovimentacoes() {
   MOV_DATA = await loadJSON("data/movements.json");
-  // popula select de indexador (single) e multi-select de setor
+  const dates = MOV_DATA.dates || [];
+  MOV_DATE_BASE = MOV_DATA.latest || dates[dates.length - 1];
+  // default: data referência = data anterior à base, se houver.
+  const baseIdx = dates.indexOf(MOV_DATE_BASE);
+  MOV_DATE_REF = baseIdx > 0 ? dates[baseIdx - 1] : null;
+
+  // popula select de indexador (single) e multi-select de setor a partir do
+  // snapshot mais recente disponível no payload (cobre todos os papéis).
   const idxSel = document.getElementById("mov-idx");
   const idxs = new Set(), setores = new Set();
-  for (const r of MOV_DATA.rows) {
-    if (r.indexador) idxs.add(r.indexador);
-    if (r.setor) setores.add(r.setor);
+  for (const date of dates) {
+    for (const r of MOV_DATA.by_date[date].rows) {
+      if (r.indexador) idxs.add(r.indexador);
+      if (r.setor) setores.add(r.setor);
+    }
   }
   for (const s of [...idxs].sort()) {
     const o = document.createElement("option"); o.value=s; o.textContent=s;
@@ -949,6 +996,17 @@ async function renderMovimentacoes() {
     options: [...setores].sort().map(s => ({ value: s, label: s })),
     onChange: () => applyMovFilter(),
   });
+
+  MOV_FP_BASE = flatpickr("#mov-date-base", {
+    dateFormat: "Y-m-d", enable: dates, defaultDate: MOV_DATE_BASE,
+    onChange: (_, dstr) => onMovDateChange("base", dstr),
+  });
+  MOV_FP_REF = flatpickr("#mov-date-ref", {
+    dateFormat: "Y-m-d", enable: dates.filter(d => d !== MOV_DATE_BASE),
+    defaultDate: MOV_DATE_REF || undefined,
+    onChange: (_, dstr) => onMovDateChange("ref", dstr),
+  });
+
   buildMovTable();
   document.getElementById("mov-q").addEventListener("input", applyMovFilter);
   document.getElementById("mov-idx").addEventListener("change", applyMovFilter);
@@ -957,16 +1015,40 @@ async function renderMovimentacoes() {
   applyMovFilter();
 }
 
+function onMovDateChange(which, dstr) {
+  if (!dstr) {
+    if (which === "ref") MOV_DATE_REF = null;
+    else return;
+  } else if (which === "base") {
+    MOV_DATE_BASE = dstr;
+    if (MOV_DATE_REF === MOV_DATE_BASE) MOV_DATE_REF = null;
+    if (MOV_FP_REF) {
+      MOV_FP_REF.set("enable", (MOV_DATA.dates || []).filter(d => d !== MOV_DATE_BASE));
+      if (!MOV_DATE_REF) MOV_FP_REF.clear();
+    }
+  } else {
+    MOV_DATE_REF = dstr;
+  }
+  refreshMovData();
+}
+
+function refreshMovData() {
+  if (!MOV_TABLE) return;
+  MOV_TABLE.replaceData(_movRowsForCurrentDates());
+  applyMovFilter();
+}
+
 function buildMovTable() {
   const fmtDelta = c => {
     const v = c.getValue();
     if (v == null) return "—";
     const el = c.getElement();
+    el.classList.remove("neg", "pos");
     el.classList.add(v > 0 ? "neg" : v < 0 ? "pos" : "");
     return (v >= 0 ? "+" : "") + v.toFixed(0);
   };
   MOV_TABLE = new Tabulator("#mov-table", {
-    data: MOV_DATA.rows,
+    data: _movRowsForCurrentDates(),
     layout: "fitDataStretch",
     height: "70vh",
     initialSort: [{ column:"spread_pp", dir:"desc" }],
@@ -999,9 +1081,7 @@ function buildMovTable() {
         formatter: c => fmtPct(c.getValue()) },
       { title:"Spread (pp)", field:"spread_pp", width:100, hozAlign:"right",
         formatter: c => c.getValue()==null?"—":(c.getValue()>=0?"+":"")+c.getValue().toFixed(2) },
-      { title:"Δ D-1 bps", field:"d1_bps", width:90, hozAlign:"right", formatter: fmtDelta },
-      { title:"Δ D-5 bps", field:"d5_bps", width:90, hozAlign:"right", formatter: fmtDelta },
-      { title:"Δ D-21 bps", field:"d21_bps", width:95, hozAlign:"right", formatter: fmtDelta },
+      { title:"Δ spread bps", field:"delta_bps", width:110, hozAlign:"right", formatter: fmtDelta },
     ],
   });
 }
