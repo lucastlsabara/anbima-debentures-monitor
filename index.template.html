@@ -1561,12 +1561,6 @@ function buildMovTable() {
       { title:"Setor", field:"setor", width:170 },
       { title:"Idx", field:"indexador", width:80 },
       { title:"Vencimento", field:"vencimento", width:105 },
-      { title:"NTN-B Ref", field:"benchmark_vencimento", width:105,
-        formatter: c => {
-          const r = c.getRow().getData();
-          if (r.indexador !== "IPCA+") return "-";
-          return c.getValue() || "-";
-        } },
       { title:"Dur.", field:"duration_anos", width:78, hozAlign:"right",
         formatter: c => fmtAnos(c.getValue()) },
       { title:"Taxa", field:"taxa", width:78, hozAlign:"right",
@@ -1580,6 +1574,12 @@ function buildMovTable() {
           if (!t) return r.spread_metodo === "sem_referencia" ? "<span style='color:var(--warn)'>sem ref.</span>" : "—";
           return r.benchmark_vencimento
             ? `${t}<span class="badge">${r.benchmark_vencimento}</span>` : t;
+        } },
+      { title:"NTN-B Ref", field:"benchmark_vencimento", width:105,
+        formatter: c => {
+          const r = c.getRow().getData();
+          if (r.indexador !== "IPCA+") return "-";
+          return c.getValue() || "-";
         } },
       { title:"Tx Bench", field:"taxa_benchmark", width:88, hozAlign:"right",
         formatter: c => fmtPct(c.getValue()) },
