@@ -422,9 +422,6 @@
       <button data-hm="current" class="hm-btn active">Spread atual (pp)</button>
       <button data-hm="d7" class="hm-btn">Δ 7d (bps)</button>
       <button data-hm="d30" class="hm-btn">Δ 30d (bps)</button>
-      <label>Setor:
-        <div id="hm-setor"></div>
-      </label>
     </div>
     <div id="chart-heatmap" class="chart-tall"></div>
   </div>
@@ -504,25 +501,36 @@ function createMultiSelect({ host, options, selected, allLabel = "Todos",
   const pop = host.querySelector(".multi-select__pop");
   let opts = options.slice();
   const sel = new Set(selected == null ? opts.map(o => o.value) : selected);
+  // Valores marcados como ocultos: não aparecem no popover, não contam para
+  // isAll()/summary() nem para o checkbox "Todos". A seleção desses valores
+  // permanece em `sel` (estado preservado entre tabs).
+  const hidden = new Set();
+  const visibleOpts = () => opts.filter(o => !hidden.has(o.value));
 
-  const isAll = () => opts.length > 0 && opts.every(o => sel.has(o.value));
+  const isAll = () => {
+    const v = visibleOpts();
+    return v.length > 0 && v.every(o => sel.has(o.value));
+  };
   const summary = () => {
+    const v = visibleOpts();
     if (isAll()) return allLabel;
-    if (sel.size === 0) return "Nenhum";
-    const arr = opts.filter(o => sel.has(o.value)).map(o => o.label);
-    if (arr.length === 1) return arr[0];
-    return arr[0] + " (+" + (arr.length - 1) + ")";
+    const visSel = v.filter(o => sel.has(o.value));
+    if (visSel.length === 0) return "Nenhum";
+    if (visSel.length === 1) return visSel[0].label;
+    return visSel[0].label + " (+" + (visSel.length - 1) + ")";
   };
   const escape = s => String(s).replace(/[&<>"']/g, c =>
     ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
 
   function render() {
     btn.textContent = summary();
-    btn.title = isAll() ? allLabel : [...sel].join(", ") || "Nenhum";
+    const v = visibleOpts();
+    btn.title = isAll() ? allLabel
+      : (v.filter(o => sel.has(o.value)).map(o => o.label).join(", ") || "Nenhum");
     pop.innerHTML =
       '<label class="multi-select__opt all"><input type="checkbox" data-all="1"' +
         (isAll() ? " checked" : "") + '> ' + escape(allLabel) + '</label>' +
-      opts.map(o =>
+      v.map(o =>
         '<label class="multi-select__opt">' +
           '<input type="checkbox" value="' + escape(o.value) + '"' +
             (sel.has(o.value) ? " checked" : "") + '>' +
@@ -533,8 +541,10 @@ function createMultiSelect({ host, options, selected, allLabel = "Todos",
     pop.querySelectorAll("input[type=checkbox]").forEach(cb => {
       cb.addEventListener("change", () => {
         if (cb.dataset.all) {
-          if (cb.checked) opts.forEach(o => sel.add(o.value));
-          else sel.clear();
+          // "Todos" toggla apenas as opções visíveis — preserva seleção oculta.
+          const vis = visibleOpts();
+          if (cb.checked) vis.forEach(o => sel.add(o.value));
+          else            vis.forEach(o => sel.delete(o.value));
         } else {
           if (cb.checked) sel.add(cb.value);
           else sel.delete(cb.value);
@@ -576,6 +586,14 @@ function createMultiSelect({ host, options, selected, allLabel = "Todos",
     setSelected(values) {
       sel.clear();
       values.forEach(v => sel.add(v));
+      render();
+    },
+    // Esconde do popover os valores informados (sem alterar a seleção em si).
+    // Usado para filtrar opções do seletor global quando a tab ativa só
+    // suporta um subconjunto delas (ex.: Heatmap → IPCA+/DI+).
+    setHiddenValues(values) {
+      hidden.clear();
+      (values || []).forEach(v => hidden.add(v));
       render();
     },
   };
@@ -802,6 +820,19 @@ function setupWatchlistModalEvents() {
  * ============================================================ */
 const TABS = ["visao","curvas","dispersao","movimentacoes","heatmap"];
 const loaded = new Set();
+// Indexadores suportados pelo heatmap (tem agregação por nº de papéis).
+// Em outras tabs, todos os indexadores presentes no manifest são mostrados.
+const HEATMAP_VISIBLE_IDX = ["IPCA+", "DI+"];
+
+function applyTabIndexadorFilter(name) {
+  if (!GLOBAL_IDX_MS) return;
+  if (name === "heatmap") {
+    const hide = GLOBAL_IDX_OPTIONS.filter(o => !HEATMAP_VISIBLE_IDX.includes(o));
+    GLOBAL_IDX_MS.setHiddenValues(hide);
+  } else {
+    GLOBAL_IDX_MS.setHiddenValues([]);
+  }
+}
 
 function activateTab(name) {
   if (!TABS.includes(name)) name = "visao";
@@ -809,6 +840,7 @@ function activateTab(name) {
     a.classList.toggle("active", a.dataset.tab === name));
   document.querySelectorAll("section.tab").forEach(s =>
     s.classList.toggle("hide", s.id !== "tab-" + name));
+  applyTabIndexadorFilter(name);
   if (!loaded.has(name)) {
     loaded.add(name);
     renderTab(name).catch(err => {
@@ -1722,16 +1754,9 @@ function applyMovFilter() {
  * ============================================================ */
 let HEAT = null;
 let HEAT_MODE = "current";
-let HM_SETOR_MS = null;
 
 async function renderHeatmap() {
   HEAT = await loadJSON("data/heatmap_history.json");
-  HM_SETOR_MS = createMultiSelect({
-    host: "hm-setor",
-    options: (HEAT.sectors || []).map(s => ({ value: s, label: s })),
-    alignRight: true,
-    onChange: () => drawHeatmap(),
-  });
   document.querySelectorAll(".hm-btn").forEach(b => {
     b.addEventListener("click", () => {
       document.querySelectorAll(".hm-btn").forEach(x => x.classList.remove("active"));
@@ -1789,26 +1814,38 @@ function drawHeatmap() {
   const nRows = allSectors.length, nCols = buckets.length;
 
   // Agregação ponderada (com peso = nº de papéis do grupo na célula).
-  // Single grupo → reaproveita a matriz original.
-  let z;
-  if (slices.length === 1) {
-    z = slices[0].vals;
-  } else {
-    z = [];
-    for (let i = 0; i < nRows; i++) {
-      const row = [];
-      for (let j = 0; j < nCols; j++) {
-        let num = 0, den = 0;
-        for (const s of slices) {
-          if (!s.vals || !s.counts) continue;
-          const v = s.vals[i]   ? s.vals[i][j]   : null;
-          const c = s.counts[i] ? s.counts[i][j] : null;
-          if (v != null && c != null && c > 0) { num += v * c; den += c; }
-        }
-        row.push(den > 0 ? num / den : null);
+  // Mantém matriz `cMat` paralela a `z` com o peso efetivo por célula —
+  // usada depois para agregar a linha "Todos" sobre todos os setores.
+  let z = [];
+  let cMat = [];
+  for (let i = 0; i < nRows; i++) {
+    const rowZ = [], rowC = [];
+    for (let j = 0; j < nCols; j++) {
+      let num = 0, den = 0;
+      for (const s of slices) {
+        if (!s.vals || !s.counts) continue;
+        const v = s.vals[i]   ? s.vals[i][j]   : null;
+        const c = s.counts[i] ? s.counts[i][j] : null;
+        if (v != null && c != null && c > 0) { num += v * c; den += c; }
       }
-      z.push(row);
+      rowZ.push(den > 0 ? num / den : null);
+      rowC.push(den > 0 ? den : null);
     }
+    z.push(rowZ);
+    cMat.push(rowC);
+  }
+
+  // Linha "Todos" — agregada sobre todos os setores, ponderada por nº de papéis
+  // por bucket. Calculada SOBRE a matriz final (já agregada por indexador).
+  const totalRow = [];
+  for (let j = 0; j < nCols; j++) {
+    let num = 0, den = 0;
+    for (let i = 0; i < nRows; i++) {
+      const v = z[i][j];
+      const c = cMat[i][j];
+      if (v != null && c != null && c > 0) { num += v * c; den += c; }
+    }
+    totalRow.push(den > 0 ? num / den : null);
   }
 
   // Legend / colorbar.
@@ -1835,18 +1872,13 @@ function drawHeatmap() {
     suffix = " bps";
   }
 
-  // Filtro de setor (multi-select): mantém apenas linhas selecionadas em z e y.
-  const setorAll = !HM_SETOR_MS || HM_SETOR_MS.isAll();
-  const setorSet = HM_SETOR_MS ? HM_SETOR_MS.getSelected() : null;
-  let visibleSectors = allSectors;
-  if (!setorAll) {
-    if (!setorSet || setorSet.size === 0) {
-      root.innerHTML = '<div class="empty">Nenhum setor selecionado.</div>';
-      return;
-    }
-    visibleSectors = allSectors.filter(s => setorSet.has(s));
-    z = visibleSectors.map(s => z[allSectors.indexOf(s)]);
-  }
+  // Linha "Todos" como ÚLTIMA linha do heatmap, com gap visual antes dela
+  // (linha-espaçador de nulls). Label em <b> para destacar do resto.
+  const SPACER = " ";
+  const TOTAL_LABEL = "<b>Todos</b>";
+  const spacerRow = new Array(nCols).fill(null);
+  let visibleSectors = [...allSectors, SPACER, TOTAL_LABEL];
+  z = [...z, spacerRow, totalRow];
   // Plotly heatmap: y = sectors, x = buckets. Quando current, escala viridis;
   // quando delta, divergente vermelho/verde com 0 no centro.
   const flat = z.flat().filter(v => v != null);
