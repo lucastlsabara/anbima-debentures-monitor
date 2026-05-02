@@ -130,6 +130,47 @@
     padding:20px 24px 28px; border-top:1px solid var(--border);
     margin-top:14px;
   }
+  /* Multi-select dropdown */
+  .multi-select { position:relative; display:inline-block; }
+  .multi-select__btn {
+    background:var(--surface2); color:var(--fg);
+    border:1px solid var(--border-strong); border-radius:4px;
+    padding:6px 26px 6px 10px; font-size:12.5px; font-family:inherit;
+    cursor:pointer; min-width:140px; text-align:left;
+    position:relative; line-height:1.3;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .multi-select__btn::after {
+    content:""; position:absolute; right:10px; top:50%;
+    width:6px; height:6px; transform:translateY(-70%) rotate(45deg);
+    border-right:1.5px solid var(--muted); border-bottom:1.5px solid var(--muted);
+    transition:transform .12s ease;
+  }
+  .multi-select__btn.open::after { transform:translateY(-30%) rotate(-135deg); }
+  .multi-select__btn:hover { border-color:var(--accent); }
+  .multi-select__pop {
+    position:absolute; z-index:50; top:calc(100% + 4px); left:0;
+    min-width:100%; max-height:280px; overflow-y:auto;
+    background:var(--surface2); border:1px solid var(--border-strong);
+    border-radius:4px; padding:4px 0;
+    box-shadow:0 6px 18px rgba(0,0,0,0.35);
+    display:none;
+  }
+  .multi-select__pop.right { left:auto; right:0; }
+  .multi-select__pop.open { display:block; }
+  .multi-select__opt {
+    display:flex; align-items:center; gap:8px;
+    padding:6px 12px; font-size:12.5px; cursor:pointer; color:var(--fg);
+    white-space:nowrap; user-select:none;
+  }
+  .multi-select__opt:hover { background:#22293a; }
+  .multi-select__opt input { margin:0; cursor:pointer; }
+  .multi-select__opt .count {
+    color:var(--muted); margin-left:auto; padding-left:14px; font-size:11px;
+    font-variant-numeric:tabular-nums;
+  }
+  .multi-select__opt.all { border-bottom:1px solid var(--border); font-weight:500; }
+
   /* Tabulator dark tweaks */
   .tabulator { font-size:12px; background:transparent; border:none; }
   .tabulator .tabulator-header {
@@ -148,12 +189,10 @@
     <div class="sub" id="hdr-sub">Carregando…</div>
   </div>
   <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
-    <label class="sub" style="display:flex;flex-direction:column;gap:4px">
+    <div class="sub" style="display:flex;flex-direction:column;gap:4px">
       <span style="text-transform:uppercase;letter-spacing:.07em;font-size:10.5px">Indexador</span>
-      <select id="global-idx" style="background:var(--surface2);color:var(--fg);
-        border:1px solid var(--border-strong);border-radius:4px;padding:6px 10px;
-        font-size:12.5px;min-width:140px"></select>
-    </label>
+      <div id="global-idx"></div>
+    </div>
     <div class="sub" id="hdr-info" style="max-width:340px;text-align:right"></div>
   </div>
 </header>
@@ -222,7 +261,7 @@
         <input type="checkbox" id="disp-cob"> Só minha cobertura
       </label>
       <label>Setor:
-        <select id="disp-setor"><option value="">Todos</option></select>
+        <div id="disp-setor"></div>
       </label>
     </div>
     <div id="chart-dispersion" class="chart-tall"></div>
@@ -238,7 +277,7 @@
         <select id="mov-idx"><option value="">Todos</option></select>
       </label>
       <label>Setor:
-        <select id="mov-setor"><option value="">Todos</option></select>
+        <div id="mov-setor"></div>
       </label>
       <label>
         <input type="checkbox" id="mov-cob"> Cobertura
@@ -258,6 +297,9 @@
       <button data-hm="current" class="hm-btn active">Spread atual (pp)</button>
       <button data-hm="d7" class="hm-btn">Δ 7d (bps)</button>
       <button data-hm="d30" class="hm-btn">Δ 30d (bps)</button>
+      <label>Setor:
+        <div id="hm-setor"></div>
+      </label>
     </div>
     <div id="chart-heatmap" class="chart-tall"></div>
   </div>
@@ -296,6 +338,99 @@ const PLOTLY_LAYOUT = () => ({
 });
 const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
   modeBarButtonsToRemove: ["lasso2d","select2d","autoScale2d"] };
+
+/* ============================================================
+ *  multi-select component (vanilla)
+ * ============================================================ */
+function createMultiSelect({ host, options, selected, allLabel = "Todos",
+                              alignRight = false, onChange = () => {} }) {
+  if (typeof host === "string") host = document.getElementById(host);
+  host.classList.add("multi-select");
+  host.innerHTML =
+    '<button type="button" class="multi-select__btn"></button>' +
+    '<div class="multi-select__pop' + (alignRight ? " right" : "") + '"></div>';
+  const btn = host.querySelector(".multi-select__btn");
+  const pop = host.querySelector(".multi-select__pop");
+  let opts = options.slice();
+  const sel = new Set(selected == null ? opts.map(o => o.value) : selected);
+
+  const isAll = () => opts.length > 0 && opts.every(o => sel.has(o.value));
+  const summary = () => {
+    if (isAll()) return allLabel;
+    if (sel.size === 0) return "Nenhum";
+    const arr = opts.filter(o => sel.has(o.value)).map(o => o.label);
+    if (arr.length === 1) return arr[0];
+    return arr[0] + " (+" + (arr.length - 1) + ")";
+  };
+  const escape = s => String(s).replace(/[&<>"']/g, c =>
+    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+
+  function render() {
+    btn.textContent = summary();
+    btn.title = isAll() ? allLabel : [...sel].join(", ") || "Nenhum";
+    pop.innerHTML =
+      '<label class="multi-select__opt all"><input type="checkbox" data-all="1"' +
+        (isAll() ? " checked" : "") + '> ' + escape(allLabel) + '</label>' +
+      opts.map(o =>
+        '<label class="multi-select__opt">' +
+          '<input type="checkbox" value="' + escape(o.value) + '"' +
+            (sel.has(o.value) ? " checked" : "") + '>' +
+          '<span>' + escape(o.label) + '</span>' +
+          (o.count != null ? '<span class="count">' + o.count + '</span>' : '') +
+        '</label>'
+      ).join("");
+    pop.querySelectorAll("input[type=checkbox]").forEach(cb => {
+      cb.addEventListener("change", () => {
+        if (cb.dataset.all) {
+          if (cb.checked) opts.forEach(o => sel.add(o.value));
+          else sel.clear();
+        } else {
+          if (cb.checked) sel.add(cb.value);
+          else sel.delete(cb.value);
+        }
+        render();
+        onChange(api);
+      });
+    });
+  }
+
+  btn.addEventListener("click", e => {
+    e.stopPropagation();
+    document.querySelectorAll(".multi-select__pop.open").forEach(p => {
+      if (p !== pop) {
+        p.classList.remove("open");
+        p.previousElementSibling && p.previousElementSibling.classList.remove("open");
+      }
+    });
+    const open = pop.classList.toggle("open");
+    btn.classList.toggle("open", open);
+  });
+  pop.addEventListener("click", e => e.stopPropagation());
+  document.addEventListener("click", () => {
+    pop.classList.remove("open"); btn.classList.remove("open");
+  });
+
+  const api = {
+    getSelected: () => new Set(sel),
+    getSelectedArray: () => opts.filter(o => sel.has(o.value)).map(o => o.value),
+    isAll,
+    size: () => sel.size,
+    has: v => sel.has(v),
+    setOptions(newOpts, newSel) {
+      opts = newOpts.slice();
+      sel.clear();
+      (newSel == null ? opts.map(o => o.value) : newSel).forEach(v => sel.add(v));
+      render();
+    },
+    setSelected(values) {
+      sel.clear();
+      values.forEach(v => sel.add(v));
+      render();
+    },
+  };
+  render();
+  return api;
+}
 
 const cache = new Map();
 async function loadJSON(path) {
@@ -336,7 +471,32 @@ window.addEventListener("hashchange", () => {
  *  bootstrap
  * ============================================================ */
 let MANIFEST = null;
-let GLOBAL_IDX = "Todos";  // "Todos" | "IPCA+" | "Prefixado" | "DI+" | ...
+let GLOBAL_IDX_MS = null;       // multi-select api
+let GLOBAL_IDX_OPTIONS = [];    // available indexador labels (sem "Todos")
+
+function getGlobalIdxSet() {
+  if (!GLOBAL_IDX_MS) return new Set(GLOBAL_IDX_OPTIONS);
+  return GLOBAL_IDX_MS.getSelected();
+}
+function isGlobalIdxAll() {
+  return !GLOBAL_IDX_MS || GLOBAL_IDX_MS.isAll();
+}
+/* Para visões agregadas (KPIs, histograma, top movers, heatmap por indexador):
+   "Todos" se todos selecionados ou múltiplos com seleção parcial; o label único
+   se exatamente 1 selecionado. */
+function effectiveIdxLabel() {
+  if (isGlobalIdxAll()) return "Todos";
+  const s = getGlobalIdxSet();
+  if (s.size === 0) return "Todos";
+  if (s.size === 1) return [...s][0];
+  return "Todos";
+}
+function paperPassesGlobalIdx(idxValue) {
+  if (isGlobalIdxAll()) return true;
+  const s = getGlobalIdxSet();
+  if (s.size === 0) return false;
+  return s.has(idxValue);
+}
 
 async function init() {
   MANIFEST = await loadJSON("data/manifest.json");
@@ -360,28 +520,34 @@ async function init() {
 }
 
 function setupGlobalIndexador() {
-  const sel = document.getElementById("global-idx");
   const present = MANIFEST.indexadores_presentes || [];
-  const opts = [{label:"Todos", n: present.reduce((a,x) => a + x.n, 0), n_com_spread: null}]
-    .concat(present);
-  sel.innerHTML = opts.map(o => {
-    const tag = o.n_com_spread != null && o.n_com_spread < o.n
-      ? ` (${o.n_com_spread}/${o.n} c/ spread)` : ` (${o.n})`;
-    return `<option value="${o.label}">${o.label}${tag}</option>`;
-  }).join("");
-  // Permite override por hash query (?idx=IPCA+)
+  GLOBAL_IDX_OPTIONS = present.map(p => p.label);
+  const options = present.map(p => ({
+    value: p.label,
+    label: p.label,
+    count: (p.n_com_spread != null && p.n_com_spread < p.n)
+      ? p.n_com_spread + "/" + p.n
+      : p.n,
+  }));
+  // Override por hash query (?idx=IPCA+ ou ?idx=IPCA+,DI+)
+  let initial = null;
   const m = location.hash.match(/[?&]idx=([^&]+)/);
   if (m) {
-    const want = decodeURIComponent(m[1]);
-    if (opts.some(o => o.label === want)) GLOBAL_IDX = want;
+    const wanted = decodeURIComponent(m[1]).split(",").map(s => s.trim());
+    const valid = wanted.filter(w => GLOBAL_IDX_OPTIONS.includes(w));
+    if (valid.length) initial = valid;
   }
-  sel.value = GLOBAL_IDX;
-  sel.addEventListener("change", () => {
-    GLOBAL_IDX = sel.value;
-    // re-renderiza a tab ativa (e zera caches específicos do filtro)
-    loaded.clear();
-    const cur = (location.hash || "#/visao").replace(/^#\//, "").split("?")[0];
-    activateTab(cur);
+  GLOBAL_IDX_MS = createMultiSelect({
+    host: "global-idx",
+    options,
+    selected: initial,
+    alignRight: true,
+    onChange: () => {
+      // Re-renderiza a tab ativa (zera cache específico do filtro)
+      loaded.clear();
+      const cur = (location.hash || "#/visao").replace(/^#\//, "").split("?")[0];
+      activateTab(cur);
+    },
   });
 }
 
@@ -407,7 +573,7 @@ async function renderTab(name) {
  * ============================================================ */
 async function renderVisao() {
   const o = await loadJSON("data/overview.json");
-  const idx = GLOBAL_IDX;
+  const idx = effectiveIdxLabel();
   const kpis = (o.kpis_by_indexador && o.kpis_by_indexador[idx])
             || o.kpis_by_indexador.Todos;
   renderKpis(kpis, idx);
@@ -672,23 +838,21 @@ function renderCurvesHeatmap() {
  * ============================================================ */
 let DISP_INDEX = null;
 let DISP_DATA = null;
+let DISP_SETOR_MS = null;
 
 async function renderDispersao() {
   DISP_INDEX = await loadJSON("data/dispersion/_index.json");
-  // popula select de setor
-  const sel = document.getElementById("disp-setor");
-  for (const s of DISP_INDEX.sectors) {
-    const o = document.createElement("option");
-    o.value = s; o.textContent = s; sel.appendChild(o);
-  }
+  DISP_SETOR_MS = createMultiSelect({
+    host: "disp-setor",
+    options: DISP_INDEX.sectors.map(s => ({ value: s, label: s })),
+    onChange: () => drawDispersion(),
+  });
   const last = DISP_INDEX.dates[DISP_INDEX.dates.length - 1];
   flatpickr("#disp-date", {
     dateFormat:"Y-m-d", enable: DISP_INDEX.dates, defaultDate: last,
     onChange: (_, dstr) => loadAndRenderDispersion(dstr),
   });
   document.getElementById("disp-cob").addEventListener("change", () =>
-    drawDispersion());
-  document.getElementById("disp-setor").addEventListener("change", () =>
     drawDispersion());
   await loadAndRenderDispersion(last);
 }
@@ -717,13 +881,13 @@ const SECTOR_COLORS = {
 function drawDispersion() {
   if (!DISP_DATA) return;
   const onlyCob = document.getElementById("disp-cob").checked;
-  const setor = document.getElementById("disp-setor").value;
-  const idx = GLOBAL_IDX;
+  const setorAll = !DISP_SETOR_MS || DISP_SETOR_MS.isAll();
+  const setorSet = DISP_SETOR_MS ? DISP_SETOR_MS.getSelected() : null;
   const traces = {};
   for (const p of DISP_DATA.papers) {
     if (onlyCob && !p.cob) continue;
-    if (setor && p.s !== setor) continue;
-    if (idx !== "Todos" && p.i !== idx) continue;
+    if (!setorAll && (!setorSet || !setorSet.has(p.s))) continue;
+    if (!paperPassesGlobalIdx(p.i)) continue;
     if (!traces[p.s]) {
       traces[p.s] = { x:[], y:[], text:[], customdata:[], type:"scatter",
         mode:"markers", name: p.s,
@@ -752,8 +916,9 @@ function drawDispersion() {
       '<div class="empty">Sem papéis após filtros.</div>';
     return;
   }
-  const yTitle = idx === "DI+" ? "Spread sobre CDI (pp)"
-              : idx === "Prefixado" ? "Spread sobre Pré (pp)"
+  const idxLbl = effectiveIdxLabel();
+  const yTitle = idxLbl === "DI+" ? "Spread sobre CDI (pp)"
+              : idxLbl === "Prefixado" ? "Spread sobre Pré (pp)"
               : "Spread sobre NTN-B (pp)";
   layout.yaxis.title = yTitle;
   Plotly.newPlot("chart-dispersion", data, layout, PLOTLY_CONFIG);
@@ -764,12 +929,12 @@ function drawDispersion() {
  * ============================================================ */
 let MOV_TABLE = null;
 let MOV_DATA = null;
+let MOV_SETOR_MS = null;
 
 async function renderMovimentacoes() {
   MOV_DATA = await loadJSON("data/movements.json");
-  // popula selects
+  // popula select de indexador (single) e multi-select de setor
   const idxSel = document.getElementById("mov-idx");
-  const setSel = document.getElementById("mov-setor");
   const idxs = new Set(), setores = new Set();
   for (const r of MOV_DATA.rows) {
     if (r.indexador) idxs.add(r.indexador);
@@ -779,14 +944,14 @@ async function renderMovimentacoes() {
     const o = document.createElement("option"); o.value=s; o.textContent=s;
     idxSel.appendChild(o);
   }
-  for (const s of [...setores].sort()) {
-    const o = document.createElement("option"); o.value=s; o.textContent=s;
-    setSel.appendChild(o);
-  }
+  MOV_SETOR_MS = createMultiSelect({
+    host: "mov-setor",
+    options: [...setores].sort().map(s => ({ value: s, label: s })),
+    onChange: () => applyMovFilter(),
+  });
   buildMovTable();
   document.getElementById("mov-q").addEventListener("input", applyMovFilter);
   document.getElementById("mov-idx").addEventListener("change", applyMovFilter);
-  document.getElementById("mov-setor").addEventListener("change", applyMovFilter);
   document.getElementById("mov-cob").addEventListener("change", applyMovFilter);
   document.getElementById("mov-hide-iliq").addEventListener("change", applyMovFilter);
   applyMovFilter();
@@ -844,17 +1009,16 @@ function buildMovTable() {
 function applyMovFilter() {
   const q = document.getElementById("mov-q").value.toLowerCase();
   const idx = document.getElementById("mov-idx").value;
-  const setor = document.getElementById("mov-setor").value;
   const onlyCob = document.getElementById("mov-cob").checked;
   const hideIliq = document.getElementById("mov-hide-iliq").checked;
-  // Seletor global tem prioridade sobre o filtro local quando != "Todos".
-  const globalIdx = (typeof GLOBAL_IDX === "string" && GLOBAL_IDX !== "Todos")
-    ? GLOBAL_IDX : null;
+  const setorAll = !MOV_SETOR_MS || MOV_SETOR_MS.isAll();
+  const setorSet = MOV_SETOR_MS ? MOV_SETOR_MS.getSelected() : null;
   MOV_TABLE.setFilter(d => {
     if (hideIliq && d.iliquido) return false;
-    if (globalIdx && d.indexador !== globalIdx) return false;
+    // Seletor global tem prioridade sobre o filtro local quando há seleção parcial.
+    if (!paperPassesGlobalIdx(d.indexador)) return false;
     if (idx && d.indexador !== idx) return false;
-    if (setor && d.setor !== setor) return false;
+    if (!setorAll && (!setorSet || !setorSet.has(d.setor))) return false;
     if (onlyCob && !d.cobertura) return false;
     if (q && !((d.codigo||'').toLowerCase().includes(q)
             || (d.emissor||'').toLowerCase().includes(q))) return false;
@@ -867,9 +1031,16 @@ function applyMovFilter() {
  * ============================================================ */
 let HEAT = null;
 let HEAT_MODE = "current";
+let HM_SETOR_MS = null;
 
 async function renderHeatmap() {
   HEAT = await loadJSON("data/heatmap_history.json");
+  HM_SETOR_MS = createMultiSelect({
+    host: "hm-setor",
+    options: (HEAT.sectors || []).map(s => ({ value: s, label: s })),
+    alignRight: true,
+    onChange: () => drawHeatmap(),
+  });
   document.querySelectorAll(".hm-btn").forEach(b => {
     b.addEventListener("click", () => {
       document.querySelectorAll(".hm-btn").forEach(x => x.classList.remove("active"));
@@ -889,9 +1060,10 @@ function drawHeatmap() {
     root.innerHTML = '<div class="empty">Sem indexadores com spread no snapshot.</div>';
     return;
   }
-  let chosen = GLOBAL_IDX !== "Todos" ? GLOBAL_IDX : (available.includes("IPCA+") ? "IPCA+" : available[0]);
+  const idxLbl = effectiveIdxLabel();
+  let chosen = idxLbl !== "Todos" ? idxLbl : (available.includes("IPCA+") ? "IPCA+" : available[0]);
   if (!available.includes(chosen)) {
-    root.innerHTML = `<div class="empty">${GLOBAL_IDX} não tem spread oficial; troque o indexador.</div>`;
+    root.innerHTML = `<div class="empty">${idxLbl} não tem spread oficial; troque o indexador.</div>`;
     return;
   }
   const slice = HEAT.by_indexador[chosen];
@@ -908,6 +1080,19 @@ function drawHeatmap() {
     if (!z) { root.innerHTML = '<div class="empty">Sem snapshot T-30. Aguardando 30d de rotina.</div>'; return; }
     title = `${chosen} · Δ spread médio vs T-30 (bps)`; suffix = " bps";
   }
+  // Filtro de setor (multi-select): mantém apenas linhas selecionadas em z e y.
+  const allSectors = HEAT.sectors || [];
+  const setorAll = !HM_SETOR_MS || HM_SETOR_MS.isAll();
+  const setorSet = HM_SETOR_MS ? HM_SETOR_MS.getSelected() : null;
+  let visibleSectors = allSectors;
+  if (!setorAll) {
+    if (!setorSet || setorSet.size === 0) {
+      root.innerHTML = '<div class="empty">Nenhum setor selecionado.</div>';
+      return;
+    }
+    visibleSectors = allSectors.filter(s => setorSet.has(s));
+    z = visibleSectors.map(s => z[allSectors.indexOf(s)]);
+  }
   // Plotly heatmap: y = sectors, x = buckets. Quando current, escala viridis;
   // quando delta, divergente vermelho/verde com 0 no centro.
   const flat = z.flat().filter(v => v != null);
@@ -923,7 +1108,7 @@ function drawHeatmap() {
     zmin = -m; zmax = m;
   }
   const trace = {
-    z, x: HEAT.buckets, y: HEAT.sectors, type:"heatmap",
+    z, x: HEAT.buckets, y: visibleSectors, type:"heatmap",
     colorscale, zmin, zmax,
     text: z.map(row => row.map(v => v == null ? "" : v.toFixed(HEAT_MODE==="current"?2:0))),
     texttemplate: "%{text}",
