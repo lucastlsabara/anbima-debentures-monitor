@@ -1745,46 +1745,97 @@ async function renderHeatmap() {
 
 function drawHeatmap() {
   const root = document.getElementById("chart-heatmap");
-  const available = HEAT.indexadores || [];
+  // Apenas IPCA+ e DI+ contam para o heatmap. %DI / Prefixado / IGP-M+ ignorados.
+  const SUPPORTED = ["IPCA+", "DI+"];
+  const available = (HEAT.indexadores || []).filter(g => SUPPORTED.includes(g));
   if (!available.length) {
     root.innerHTML = '<div class="empty">Sem indexadores com spread no snapshot.</div>';
     return;
   }
-  // Respeita o seletor global de Indexador (incl. seleção múltipla parcial):
-  // - Todos / nenhum: default IPCA+ ou primeiro disponível.
-  // - 1 selecionado: usa o escolhido.
-  // - >1 selecionados: prefere IPCA+ se estiver no conjunto; senão o 1º
-  //   selecionado que tem dados em HEAT.
-  const selected = getGlobalIdxSet();
-  let chosen;
-  if (isGlobalIdxAll() || selected.size === 0) {
-    chosen = available.includes("IPCA+") ? "IPCA+" : available[0];
-  } else if (selected.has("IPCA+") && available.includes("IPCA+")) {
-    chosen = "IPCA+";
-  } else {
-    chosen = available.find(a => selected.has(a));
-  }
-  if (!chosen) {
-    const lbl = selected.size === 1 ? [...selected][0] : [...selected].join(", ");
-    root.innerHTML = `<div class="empty">${lbl} não tem spread oficial; troque o indexador.</div>`;
+  // Respeita o seletor global de Indexador, restrito ao conjunto suportado:
+  // - "Todos" no seletor global → IPCA+ e DI+ ambos selecionados.
+  // - Seleção parcial → apenas os marcados que estiverem em SUPPORTED.
+  // - Quando ambos selecionados → agregação ponderada por nº de papéis.
+  // - Quando nenhum (ex.: usuário marcou só %DI/Pré/IGP-M+) → indisponível.
+  const selAll = isGlobalIdxAll();
+  const selSet = getGlobalIdxSet();
+  const selectedIPCA = available.includes("IPCA+") && (selAll || selSet.has("IPCA+"));
+  const selectedDI   = available.includes("DI+")   && (selAll || selSet.has("DI+"));
+  if (!selectedIPCA && !selectedDI) {
+    root.innerHTML = '<div class="empty">Heatmap não disponível — selecione IPCA+ ou DI+ no Indexador.</div>';
     return;
   }
-  const slice = HEAT.by_indexador[chosen];
-  let z, title, suffix;
-  const benchLabel = chosen === "IPCA+" ? "NTN-B" : chosen === "Prefixado" ? "Pré" : chosen === "DI+" ? "CDI" : "benchmark";
-  if (HEAT_MODE === "current") {
-    z = slice.current_pp; title = `${chosen} · spread médio sobre ${benchLabel} (pp)`; suffix = " pp";
-  } else if (HEAT_MODE === "d7") {
-    z = slice.delta_7d_bps;
-    if (!z) { root.innerHTML = '<div class="empty">Sem snapshot T-7. Aguardando 7d de rotina.</div>'; return; }
-    title = `${chosen} · Δ spread médio vs T-7 (bps)`; suffix = " bps";
-  } else {
-    z = slice.delta_30d_bps;
-    if (!z) { root.innerHTML = '<div class="empty">Sem snapshot T-30. Aguardando 30d de rotina.</div>'; return; }
-    title = `${chosen} · Δ spread médio vs T-30 (bps)`; suffix = " bps";
+  const groups = [];
+  if (selectedIPCA) groups.push("IPCA+");
+  if (selectedDI)   groups.push("DI+");
+
+  // Extrai (vals, counts) por grupo conforme o modo. Counts vêm sempre de
+  // current_count (nº de papéis no snapshot atual, único disponível) e
+  // funcionam como peso tanto para spread atual quanto para Δ7d/Δ30d.
+  function sliceFor(grp) {
+    const s = HEAT.by_indexador[grp];
+    if (HEAT_MODE === "current") return { vals: s.current_pp,    counts: s.current_count };
+    if (HEAT_MODE === "d7")      return { vals: s.delta_7d_bps,  counts: s.current_count };
+    return                              { vals: s.delta_30d_bps, counts: s.current_count };
   }
-  // Filtro de setor (multi-select): mantém apenas linhas selecionadas em z e y.
+  const slices = groups.map(g => ({ grp: g, ...sliceFor(g) }));
+  if (!slices.some(s => s.vals)) {
+    if (HEAT_MODE === "d7")  { root.innerHTML = '<div class="empty">Sem snapshot T-7. Aguardando 7d de rotina.</div>';  return; }
+    if (HEAT_MODE === "d30") { root.innerHTML = '<div class="empty">Sem snapshot T-30. Aguardando 30d de rotina.</div>'; return; }
+  }
+
   const allSectors = HEAT.sectors || [];
+  const buckets    = HEAT.buckets || [];
+  const nRows = allSectors.length, nCols = buckets.length;
+
+  // Agregação ponderada (com peso = nº de papéis do grupo na célula).
+  // Single grupo → reaproveita a matriz original.
+  let z;
+  if (slices.length === 1) {
+    z = slices[0].vals;
+  } else {
+    z = [];
+    for (let i = 0; i < nRows; i++) {
+      const row = [];
+      for (let j = 0; j < nCols; j++) {
+        let num = 0, den = 0;
+        for (const s of slices) {
+          if (!s.vals || !s.counts) continue;
+          const v = s.vals[i]   ? s.vals[i][j]   : null;
+          const c = s.counts[i] ? s.counts[i][j] : null;
+          if (v != null && c != null && c > 0) { num += v * c; den += c; }
+        }
+        row.push(den > 0 ? num / den : null);
+      }
+      z.push(row);
+    }
+  }
+
+  // Legend / colorbar.
+  const isMulti = groups.length > 1;
+  const labelGroups = isMulti ? "[" + groups.join(", ") + "]" : groups[0];
+  let title, suffix;
+  if (HEAT_MODE === "current") {
+    if (isMulti) {
+      title = `${labelGroups} · spread médio (pp) ponderado por nº de papéis`;
+    } else {
+      const benchLabel = groups[0] === "IPCA+" ? "NTN-B" : "CDI";
+      title = `${groups[0]} · spread médio sobre ${benchLabel} (pp)`;
+    }
+    suffix = " pp";
+  } else if (HEAT_MODE === "d7") {
+    title = isMulti
+      ? `${labelGroups} · Δ spread médio vs T-7 (bps) ponderado por nº de papéis`
+      : `${groups[0]} · Δ spread médio vs T-7 (bps)`;
+    suffix = " bps";
+  } else {
+    title = isMulti
+      ? `${labelGroups} · Δ spread médio vs T-30 (bps) ponderado por nº de papéis`
+      : `${groups[0]} · Δ spread médio vs T-30 (bps)`;
+    suffix = " bps";
+  }
+
+  // Filtro de setor (multi-select): mantém apenas linhas selecionadas em z e y.
   const setorAll = !HM_SETOR_MS || HM_SETOR_MS.isAll();
   const setorSet = HM_SETOR_MS ? HM_SETOR_MS.getSelected() : null;
   let visibleSectors = allSectors;
