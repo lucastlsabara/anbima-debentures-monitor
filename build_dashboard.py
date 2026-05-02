@@ -531,6 +531,7 @@ def build_dispersion(snaps: list[dict], dispersion_dir: Path) -> dict:
             taxa = p.get("taxa_indicativa")
             if sp is None or dur is None or taxa is None:
                 continue
+            pp = p.get("pct_pu_par")
             papers.append({
                 "c": p["codigo"],
                 "e": p.get("emissor_clean"),
@@ -540,6 +541,7 @@ def build_dispersion(snaps: list[dict], dispersion_dir: Path) -> dict:
                 "d": dur,
                 "t": taxa,
                 "sp": round(sp, 4),
+                "pp": round(pp, 4) if pp is not None else None,
             })
             indexadores_set.add(p.get("indexador_grupo"))
         _write_json(
