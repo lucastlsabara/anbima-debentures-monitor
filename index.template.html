@@ -1745,16 +1745,28 @@ async function renderHeatmap() {
 
 function drawHeatmap() {
   const root = document.getElementById("chart-heatmap");
-  // Escolhe o slice por indexador. Default: IPCA+ (ou primeiro disponível).
   const available = HEAT.indexadores || [];
   if (!available.length) {
     root.innerHTML = '<div class="empty">Sem indexadores com spread no snapshot.</div>';
     return;
   }
-  const idxLbl = effectiveIdxLabel();
-  let chosen = idxLbl !== "Todos" ? idxLbl : (available.includes("IPCA+") ? "IPCA+" : available[0]);
-  if (!available.includes(chosen)) {
-    root.innerHTML = `<div class="empty">${idxLbl} não tem spread oficial; troque o indexador.</div>`;
+  // Respeita o seletor global de Indexador (incl. seleção múltipla parcial):
+  // - Todos / nenhum: default IPCA+ ou primeiro disponível.
+  // - 1 selecionado: usa o escolhido.
+  // - >1 selecionados: prefere IPCA+ se estiver no conjunto; senão o 1º
+  //   selecionado que tem dados em HEAT.
+  const selected = getGlobalIdxSet();
+  let chosen;
+  if (isGlobalIdxAll() || selected.size === 0) {
+    chosen = available.includes("IPCA+") ? "IPCA+" : available[0];
+  } else if (selected.has("IPCA+") && available.includes("IPCA+")) {
+    chosen = "IPCA+";
+  } else {
+    chosen = available.find(a => selected.has(a));
+  }
+  if (!chosen) {
+    const lbl = selected.size === 1 ? [...selected][0] : [...selected].join(", ");
+    root.innerHTML = `<div class="empty">${lbl} não tem spread oficial; troque o indexador.</div>`;
     return;
   }
   const slice = HEAT.by_indexador[chosen];
