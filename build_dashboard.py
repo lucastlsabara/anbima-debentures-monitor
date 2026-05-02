@@ -466,60 +466,47 @@ def build_heatmap_history(snaps: list[dict]) -> dict:
 # ----------------------------------------------------------------------------
 
 def build_movements(snaps: list[dict], enriched_today: list[dict]) -> dict:
-    idx_today = len(snaps) - 1
+    """Emite payload com rows + spread_map por data, para o frontend
+    comparar livremente qualquer par de datas disponíveis em history/."""
 
-    def _spread_map_at(off: int) -> dict[str, float]:
-        j = idx_today - off
-        if j < 0:
-            return {}
-        return {
-            d["codigo"]: d["spread_pp"]
-            for d in snaps[j]["debentures"]
-            if d.get("spread_pp") is not None
-        }
+    def _rows_for(enriched: list[dict]) -> list[dict]:
+        out = []
+        for p in enriched:
+            out.append({
+                "codigo": p["codigo"],
+                "emissor": p.get("emissor_clean"),
+                "setor": p.get("setor"),
+                "cobertura": p.get("cobertura"),
+                "indexador": p.get("indexador_grupo"),
+                "vencimento": p.get("vencimento"),
+                "duration_anos": p.get("duration_anos"),
+                "taxa": p.get("taxa_indicativa"),
+                "benchmark_titulo": p.get("benchmark_titulo"),
+                "benchmark_vencimento": p.get("benchmark_vencimento"),
+                "taxa_benchmark": p.get("taxa_benchmark"),
+                "spread_pp": p.get("spread_pp"),
+                "spread_metodo": p.get("spread_metodo"),
+                "iliquido": bool(p.get("flag_iliquido")),
+                "estagnado": bool(p.get("flag_estagnado")),
+                "dias_sem_variacao": p.get("dias_sem_variacao"),
+            })
+        return out
 
-    map_d1 = _spread_map_at(1)
-    map_d5 = _spread_map_at(5)
-    map_d21 = _spread_map_at(21)
+    by_date: dict[str, dict] = {}
+    today_iso = snaps[-1]["data_referencia"]
+    for s in snaps:
+        date = s["data_referencia"]
+        if date == today_iso:
+            enriched = enriched_today
+        else:
+            enriched = _enrich(s["debentures"])
+        by_date[date] = {"rows": _rows_for(enriched)}
 
-    rows = []
-    for p in enriched_today:
-        sp = p.get("spread_pp")
-        codigo = p["codigo"]
-
-        def _delta(prev_map: dict[str, float]) -> float | None:
-            if not prev_map:
-                return None
-            old = prev_map.get(codigo)
-            if old is None or sp is None:
-                return None
-            return round((sp - old) * 100.0, 1)
-
-        rows.append({
-            "codigo": codigo,
-            "emissor": p.get("emissor_clean"),
-            "setor": p.get("setor"),
-            "cobertura": p.get("cobertura"),
-            "indexador": p.get("indexador_grupo"),
-            "vencimento": p.get("vencimento"),
-            "duration_anos": p.get("duration_anos"),
-            "taxa": p.get("taxa_indicativa"),
-            "benchmark_titulo": p.get("benchmark_titulo"),
-            "benchmark_vencimento": p.get("benchmark_vencimento"),
-            "taxa_benchmark": p.get("taxa_benchmark"),
-            "spread_pp": sp,
-            "spread_metodo": p.get("spread_metodo"),
-            "d1_bps": _delta(map_d1),
-            "d5_bps": _delta(map_d5),
-            "d21_bps": _delta(map_d21),
-            "iliquido": bool(p.get("flag_iliquido")),
-            "estagnado": bool(p.get("flag_estagnado")),
-            "dias_sem_variacao": p.get("dias_sem_variacao"),
-        })
-
+    dates = [s["data_referencia"] for s in snaps]
     return {
-        "data_referencia": snaps[-1]["data_referencia"],
-        "rows": rows,
+        "dates": dates,
+        "latest": today_iso,
+        "by_date": by_date,
     }
 
 
