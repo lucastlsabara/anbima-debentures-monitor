@@ -318,13 +318,21 @@
       <div id="chart-spread-by-idx" class="chart"></div>
     </div>
     <div class="panel">
-      <h2 id="hist-title">Histograma — spreads no dia</h2>
-      <div id="chart-histogram" class="chart"></div>
+      <h2>Histograma — spreads IPCA+ no dia</h2>
+      <div id="chart-histogram-ipca" class="chart"></div>
     </div>
     <div class="panel">
-      <h2>Top 10 movimentações do dia (Δ spread D-1)</h2>
-      <div id="top-movers"></div>
+      <h2>Histograma — spreads CDI+ no dia</h2>
+      <div id="chart-histogram-cdi" class="chart"></div>
     </div>
+  </div>
+  <div class="panel">
+    <h2>Top 20 movimentações IPCA+ (Δ spread D-1)</h2>
+    <div id="top-movers-ipca"></div>
+  </div>
+  <div class="panel">
+    <h2>Top 20 movimentações CDI+ (Δ spread D-1)</h2>
+    <div id="top-movers-cdi"></div>
   </div>
 </section>
 
@@ -966,13 +974,12 @@ async function renderVisao() {
   renderKpis(kpis, idx);
   renderCurvesOverlay(o.curves_overlay);
   renderSpreadByIndexador(o.spread_by_indexador);
-  const hist = idx === "Todos"
-    ? (o.histogram_by_indexador["IPCA+"] || null)
-    : (o.histogram_by_indexador[idx] || null);
-  renderHistogram(hist, idx === "Todos" ? "IPCA+" : idx);
-  const tm = (o.top_movements_by_indexador && o.top_movements_by_indexador[idx])
-          || o.top_movements_by_indexador.Todos;
-  renderTopMovers(tm);
+  const hbi = o.histogram_by_indexador || {};
+  renderHistogram(hbi["IPCA+"] || null, "IPCA+", "chart-histogram-ipca");
+  renderHistogram(hbi["DI+"]  || null, "CDI+", "chart-histogram-cdi");
+  const tmbi = o.top_movements_by_indexador || {};
+  renderTopMovers(tmbi["IPCA+"] || null, "IPCA+", "top-movers-ipca");
+  renderTopMovers(tmbi["DI+"]  || null, "CDI+", "top-movers-cdi");
 }
 
 function renderKpis(k, idx) {
@@ -1063,12 +1070,10 @@ function renderSpreadByIndexador(rows) {
   // linha na própria figura na próxima versão.
 }
 
-function renderHistogram(h, idxLabel) {
-  const titleEl = document.getElementById("hist-title");
-  if (titleEl) titleEl.textContent = "Histograma — spreads " + (idxLabel || "") + " no dia";
+function renderHistogram(h, displayLabel, containerId) {
+  const el = document.getElementById(containerId);
   if (!h) {
-    document.getElementById("chart-histogram").innerHTML =
-      `<div class="empty">Sem spreads ${idxLabel||""} no dia.</div>`;
+    el.innerHTML = `<div class="empty">Sem dados de ${displayLabel} neste dia.</div>`;
     return;
   }
   const centers = [];
@@ -1102,11 +1107,11 @@ function renderHistogram(h, idxLabel) {
     }],
     bargap: 0.05,
   });
-  Plotly.newPlot("chart-histogram", [trace], layout, PLOTLY_CONFIG);
+  Plotly.newPlot(containerId, [trace], layout, PLOTLY_CONFIG);
 }
 
-function renderTopMovers(tm) {
-  const root = document.getElementById("top-movers");
+function renderTopMovers(tm, displayLabel, containerId) {
+  const root = document.getElementById(containerId);
   if (!tm || tm.n_com_d1 === 0) {
     root.innerHTML = '<div class="empty">Sem snapshot anterior — Δ D-1 indisponível.</div>';
     return;
