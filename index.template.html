@@ -275,6 +275,8 @@
   .tabulator .tabulator-row { background:var(--surface); }
   .tabulator .tabulator-row.tabulator-row-even { background:var(--surface2); }
   .tabulator .tabulator-row:hover { background:#22293a !important; }
+  .tabulator .tabulator-cell.pos { color:var(--pos); }
+  .tabulator .tabulator-cell.neg { color:var(--neg); }
 </style>
 </head>
 <body>
@@ -1198,7 +1200,7 @@ async function renderDispersao() {
   DISP_SETOR_MS = createMultiSelect({
     host: "disp-setor",
     options: DISP_INDEX.sectors.map(s => ({ value: s, label: s })),
-    onChange: () => drawDispersion(),
+    onChange: () => onDispersionFilterChange(),
   });
   const dates = DISP_INDEX.dates;
   const last = dates[dates.length - 1];
@@ -1207,7 +1209,7 @@ async function renderDispersao() {
     onChange: (_, dstr) => loadAndRenderDispersion(dstr),
   });
   document.getElementById("disp-cob").addEventListener("change", () =>
-    drawDispersion());
+    onDispersionFilterChange());
   setupTimeline(dates);
   await loadAndRenderDispersion(last);
 }
@@ -1217,6 +1219,18 @@ let DISP_FP_DATE = null;
 async function loadAndRenderDispersion(date) {
   DISP_DATA = await loadJSON("data/dispersion/" + date + ".json");
   document.getElementById("tl-now").textContent = brDate(date);
+  drawDispersion();
+}
+
+function onDispersionFilterChange() {
+  // Filtro local muda enquanto a animação roda: recomputa range com filtros
+  // atuais para que os eixos permaneçam fixos coerentes. Quando pausado, os
+  // eixos voltam para autorange normalmente.
+  if (TL_STATE.playing) {
+    const r = _computeTimelineAxisRange();
+    TL_STATE.xRange = r ? r.xRange : null;
+    TL_STATE.yRange = r ? r.yRange : null;
+  }
   drawDispersion();
 }
 
@@ -1302,6 +1316,12 @@ function drawDispersion() {
               : idxLbl === "Prefixado" ? "Spread sobre Pré (pp)"
               : "Spread sobre NTN-B (pp)";
   layout.yaxis.title = yTitle;
+  if (TL_STATE.playing && TL_STATE.xRange && TL_STATE.yRange) {
+    layout.xaxis.range = TL_STATE.xRange.slice();
+    layout.xaxis.autorange = false;
+    layout.yaxis.range = TL_STATE.yRange.slice();
+    layout.yaxis.autorange = false;
+  }
   Plotly.newPlot("chart-dispersion", data, layout, PLOTLY_CONFIG);
 }
 
@@ -1309,6 +1329,7 @@ function drawDispersion() {
 let TL_STATE = {
   start: null, end: null, current: null, speed: 1000,
   playing: false, intervalId: null,
+  xRange: null, yRange: null,
 };
 let TL_FP_START = null, TL_FP_END = null;
 
@@ -1319,6 +1340,55 @@ function _datesInRange(start, end) {
   return all.slice(i0, i1 + 1);
 }
 
+function _computeTimelineAxisRange() {
+  // Walks all already-cached snapshots in [start, end], applies the same
+  // filters as drawDispersion, and returns padded x/y ranges. Eixos ficam
+  // estáticos durante a animação.
+  const dates = _datesInRange(TL_STATE.start, TL_STATE.end);
+  if (!dates.length) return null;
+  const onlyCob = document.getElementById("disp-cob").checked;
+  const setorAll = !DISP_SETOR_MS || DISP_SETOR_MS.isAll();
+  const setorSet = DISP_SETOR_MS ? DISP_SETOR_MS.getSelected() : null;
+  let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity, n = 0;
+  for (const d of dates) {
+    const data = cache.get("data/dispersion/" + d + ".json");
+    if (!data) continue;
+    for (const p of data.papers) {
+      if (onlyCob && !isInWatchlist(p)) continue;
+      if (!setorAll && (!setorSet || !setorSet.has(p.s))) continue;
+      if (!paperPassesGlobalIdx(p.i)) continue;
+      if (typeof p.d === "number") {
+        if (p.d < xMin) xMin = p.d;
+        if (p.d > xMax) xMax = p.d;
+      }
+      if (typeof p.sp === "number") {
+        if (p.sp < yMin) yMin = p.sp;
+        if (p.sp > yMax) yMax = p.sp;
+      }
+      n++;
+    }
+  }
+  if (!n || !isFinite(xMin) || !isFinite(yMin)) return null;
+  const padX = Math.max((xMax - xMin) * 0.07, 0.1);
+  const padY = Math.max((yMax - yMin) * 0.07, 0.05);
+  return {
+    xRange: [xMin - padX, xMax + padX],
+    yRange: [yMin - padY, yMax + padY],
+  };
+}
+
+async function _refreshTimelineAxisRange() {
+  const dates = _datesInRange(TL_STATE.start, TL_STATE.end);
+  if (!dates.length) {
+    TL_STATE.xRange = null; TL_STATE.yRange = null;
+    return;
+  }
+  await Promise.all(dates.map(d => loadJSON("data/dispersion/" + d + ".json")));
+  const r = _computeTimelineAxisRange();
+  TL_STATE.xRange = r ? r.xRange : null;
+  TL_STATE.yRange = r ? r.yRange : null;
+}
+
 function setupTimeline(dates) {
   if (!dates || !dates.length) return;
   TL_STATE.start = dates[0];
@@ -1326,11 +1396,11 @@ function setupTimeline(dates) {
   TL_STATE.speed = 1000;
   TL_FP_START = flatpickr("#tl-start", {
     dateFormat: "Y-m-d", enable: dates, defaultDate: dates[0],
-    onChange: (_, d) => { if (d) { TL_STATE.start = d; timelinePause(); } },
+    onChange: (_, d) => { if (d) { TL_STATE.start = d; timelinePause(); _refreshTimelineAxisRange(); } },
   });
   TL_FP_END = flatpickr("#tl-end", {
     dateFormat: "Y-m-d", enable: dates, defaultDate: dates[dates.length - 1],
-    onChange: (_, d) => { if (d) { TL_STATE.end = d; timelinePause(); } },
+    onChange: (_, d) => { if (d) { TL_STATE.end = d; timelinePause(); _refreshTimelineAxisRange(); } },
   });
   document.getElementById("tl-speed").addEventListener("change", e => {
     TL_STATE.speed = parseInt(e.target.value, 10) || 1000;
@@ -1352,6 +1422,11 @@ async function timelinePlay() {
   btn.disabled = true; status.textContent = "Carregando snapshots…";
   // Pré-carrega tudo (em paralelo). Cache do loadJSON faz o resto.
   await Promise.all(range.map(d => loadJSON("data/dispersion/" + d + ".json")));
+  // Eixos fixos: calcula range global a partir de todos os snapshots
+  // do intervalo, respeitando filtros atuais. Reaplicado a cada Play.
+  const r = _computeTimelineAxisRange();
+  TL_STATE.xRange = r ? r.xRange : null;
+  TL_STATE.yRange = r ? r.yRange : null;
   btn.disabled = false; status.textContent = "";
   TL_STATE.playing = true;
   btn.textContent = "❚❚ Pause";
@@ -1370,6 +1445,9 @@ function timelinePause() {
     clearInterval(TL_STATE.intervalId);
     TL_STATE.intervalId = null;
   }
+  // Libera eixos: snapshot estático volta a usar autorange.
+  TL_STATE.xRange = null;
+  TL_STATE.yRange = null;
   const btn = document.getElementById("tl-play");
   if (btn) btn.textContent = "▶ Play";
 }
