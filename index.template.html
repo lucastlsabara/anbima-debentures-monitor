@@ -955,6 +955,14 @@ function _movSpreadMap(date) {
   return entry._spread_map;
 }
 
+function _movRefEnable(baseDate) {
+  // Data referência sempre anterior à base, para que Δ = base − ref preserve
+  // o sinal "positivo = spread abriu" da convenção original (today − D-N).
+  const dates = (MOV_DATA && MOV_DATA.dates) || [];
+  const i = dates.indexOf(baseDate);
+  return i > 0 ? dates.slice(0, i) : [];
+}
+
 function _movRowsForCurrentDates() {
   const baseEntry = MOV_DATA.by_date[MOV_DATE_BASE];
   if (!baseEntry) return [];
@@ -980,6 +988,8 @@ async function renderMovimentacoes() {
   // popula select de indexador (single) e multi-select de setor a partir do
   // snapshot mais recente disponível no payload (cobre todos os papéis).
   const idxSel = document.getElementById("mov-idx");
+  // limpa antes para evitar duplicações em re-renders (ex.: troca de indexador global)
+  while (idxSel.options.length > 1) idxSel.remove(1);
   const idxs = new Set(), setores = new Set();
   for (const date of dates) {
     for (const r of MOV_DATA.by_date[date].rows) {
@@ -997,12 +1007,14 @@ async function renderMovimentacoes() {
     onChange: () => applyMovFilter(),
   });
 
+  if (MOV_FP_BASE) MOV_FP_BASE.destroy();
+  if (MOV_FP_REF) MOV_FP_REF.destroy();
   MOV_FP_BASE = flatpickr("#mov-date-base", {
     dateFormat: "Y-m-d", enable: dates, defaultDate: MOV_DATE_BASE,
     onChange: (_, dstr) => onMovDateChange("base", dstr),
   });
   MOV_FP_REF = flatpickr("#mov-date-ref", {
-    dateFormat: "Y-m-d", enable: dates.filter(d => d !== MOV_DATE_BASE),
+    dateFormat: "Y-m-d", enable: _movRefEnable(MOV_DATE_BASE),
     defaultDate: MOV_DATE_REF || undefined,
     onChange: (_, dstr) => onMovDateChange("ref", dstr),
   });
@@ -1016,18 +1028,24 @@ async function renderMovimentacoes() {
 }
 
 function onMovDateChange(which, dstr) {
-  if (!dstr) {
-    if (which === "ref") MOV_DATE_REF = null;
-    else return;
-  } else if (which === "base") {
+  if (which === "base") {
+    if (!dstr) return; // base é obrigatória
+    if (dstr === MOV_DATE_BASE) return;
     MOV_DATE_BASE = dstr;
-    if (MOV_DATE_REF === MOV_DATE_BASE) MOV_DATE_REF = null;
-    if (MOV_FP_REF) {
-      MOV_FP_REF.set("enable", (MOV_DATA.dates || []).filter(d => d !== MOV_DATE_BASE));
-      if (!MOV_DATE_REF) MOV_FP_REF.clear();
+    // Se a referência atual deixou de ser estritamente anterior à base, invalida-a.
+    if (MOV_DATE_REF != null && MOV_DATE_REF >= MOV_DATE_BASE) {
+      MOV_DATE_REF = null;
     }
-  } else {
-    MOV_DATE_REF = dstr;
+    if (MOV_FP_REF) {
+      MOV_FP_REF.set("enable", _movRefEnable(MOV_DATE_BASE));
+      if (MOV_DATE_REF == null) {
+        MOV_FP_REF.clear(false); // não dispara onChange
+      } else {
+        MOV_FP_REF.setDate(MOV_DATE_REF, false);
+      }
+    }
+  } else { // ref
+    MOV_DATE_REF = dstr || null;
   }
   refreshMovData();
 }
