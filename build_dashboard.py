@@ -243,8 +243,8 @@ def _top_movers_for(papers: list[dict]) -> dict:
         }
 
     return {
-        "abrindo": [_row(p) for p in movers_sorted[:5]],
-        "fechando": [_row(p) for p in movers_sorted[-5:][::-1]],
+        "abrindo": [_row(p) for p in movers_sorted[:10]],
+        "fechando": [_row(p) for p in movers_sorted[-10:][::-1]],
         "n_com_d1": len(movers),
     }
 
