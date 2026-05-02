@@ -375,6 +375,12 @@
       <label>Setor:
         <div id="disp-setor"></div>
       </label>
+      <label>Eixo Y:
+        <select id="disp-yaxis">
+          <option value="sp" selected>Spread</option>
+          <option value="pp">% do PAR</option>
+        </select>
+      </label>
     </div>
     <div id="chart-dispersion" class="chart-tall"></div>
   </div>
@@ -1210,6 +1216,8 @@ async function renderDispersao() {
   });
   document.getElementById("disp-cob").addEventListener("change", () =>
     onDispersionFilterChange());
+  document.getElementById("disp-yaxis").addEventListener("change", () =>
+    onDispersionFilterChange());
   setupTimeline(dates);
   await loadAndRenderDispersion(last);
 }
@@ -1267,6 +1275,11 @@ function colorForCompany(emissor) {
   return COMPANY_PALETTE[_hashStr(emissor || "") % COMPANY_PALETTE.length];
 }
 
+function getDispYAxis() {
+  const el = document.getElementById("disp-yaxis");
+  return el && el.value === "pp" ? "pp" : "sp";
+}
+
 function drawDispersion() {
   if (!DISP_DATA) return;
   const onlyCob = document.getElementById("disp-cob").checked;
@@ -1274,12 +1287,19 @@ function drawDispersion() {
   const setorSet = DISP_SETOR_MS ? DISP_SETOR_MS.getSelected() : null;
   // Cor por empresa apenas quando exatamente 1 setor está marcado (e não é "todos").
   const colorByCompany = !setorAll && setorSet && setorSet.size === 1;
+  const yKey = getDispYAxis();
+  const yIsPP = yKey === "pp";
+  const yUnit = yIsPP ? "%" : " pp";
+  const yHoverLbl = yIsPP ? "% do PAR" : "Spread";
+  const yHoverFmt = yIsPP ? "%{y:.4f}%" : "%{y:.2f} pp";
 
   const traces = {};
   for (const p of DISP_DATA.papers) {
     if (onlyCob && !isInWatchlist(p)) continue;
     if (!setorAll && (!setorSet || !setorSet.has(p.s))) continue;
     if (!paperPassesGlobalIdx(p.i)) continue;
+    const yVal = p[yKey];
+    if (yVal == null) continue;
     const groupKey = colorByCompany ? (p.e || "—") : p.s;
     if (!traces[groupKey]) {
       const color = colorByCompany
@@ -1291,11 +1311,11 @@ function drawDispersion() {
         hovertemplate:
           "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>" +
           "Duration %{x:.2f}a<br>Taxa %{customdata[2]:.2f}%<br>" +
-          "Spread %{y:.2f} pp<extra>%{customdata[3]}</extra>",
+          yHoverLbl + " " + yHoverFmt + "<extra>%{customdata[3]}</extra>",
       };
     }
     traces[groupKey].x.push(p.d);
-    traces[groupKey].y.push(p.sp);
+    traces[groupKey].y.push(yVal);
     traces[groupKey].customdata.push([p.c, (p.e||'').slice(0,40), p.t, p.s]);
   }
   const data = Object.values(traces);
@@ -1303,7 +1323,7 @@ function drawDispersion() {
     xaxis: Object.assign(PLOTLY_LAYOUT().xaxis,
       { title:"Duration (anos)" }),
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
-      { title:"Spread sobre NTN-B (pp)", ticksuffix:" pp" }),
+      { title:"Spread sobre NTN-B (pp)", ticksuffix: yUnit }),
     legend:{ font:{size:10}, orientation:"v" },
   });
   if (!data.length) {
@@ -1312,9 +1332,14 @@ function drawDispersion() {
     return;
   }
   const idxLbl = effectiveIdxLabel();
-  const yTitle = idxLbl === "DI+" ? "Spread sobre CDI (pp)"
-              : idxLbl === "Prefixado" ? "Spread sobre Pré (pp)"
-              : "Spread sobre NTN-B (pp)";
+  let yTitle;
+  if (yIsPP) {
+    yTitle = "% do PAR";
+  } else {
+    yTitle = idxLbl === "DI+" ? "Spread sobre CDI (pp)"
+           : idxLbl === "Prefixado" ? "Spread sobre Pré (pp)"
+           : "Spread sobre NTN-B (pp)";
+  }
   layout.yaxis.title = yTitle;
   if (TL_STATE.playing && TL_STATE.xRange && TL_STATE.yRange) {
     layout.xaxis.range = TL_STATE.xRange.slice();
@@ -1349,6 +1374,7 @@ function _computeTimelineAxisRange() {
   const onlyCob = document.getElementById("disp-cob").checked;
   const setorAll = !DISP_SETOR_MS || DISP_SETOR_MS.isAll();
   const setorSet = DISP_SETOR_MS ? DISP_SETOR_MS.getSelected() : null;
+  const yKey = getDispYAxis();
   let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity, n = 0;
   for (const d of dates) {
     const data = cache.get("data/dispersion/" + d + ".json");
@@ -1361,9 +1387,10 @@ function _computeTimelineAxisRange() {
         if (p.d < xMin) xMin = p.d;
         if (p.d > xMax) xMax = p.d;
       }
-      if (typeof p.sp === "number") {
-        if (p.sp < yMin) yMin = p.sp;
-        if (p.sp > yMax) yMax = p.sp;
+      const yVal = p[yKey];
+      if (typeof yVal === "number") {
+        if (yVal < yMin) yMin = yVal;
+        if (yVal > yMax) yMax = yVal;
       }
       n++;
     }
