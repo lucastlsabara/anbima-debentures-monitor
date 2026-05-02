@@ -171,6 +171,102 @@
   }
   .multi-select__opt.all { border-bottom:1px solid var(--border); font-weight:500; }
 
+  /* Icon button */
+  .icon-btn {
+    background:var(--surface2); color:var(--fg);
+    border:1px solid var(--border-strong); border-radius:4px;
+    padding:4px 8px; font-size:14px; cursor:pointer;
+    line-height:1; font-family:inherit;
+  }
+  .icon-btn:hover { border-color:var(--accent); color:var(--accent); }
+
+  /* Modal */
+  .modal-back {
+    position:fixed; inset:0; background:rgba(0,0,0,0.55);
+    display:none; z-index:200; align-items:center; justify-content:center;
+  }
+  .modal-back.open { display:flex; }
+  .modal {
+    background:var(--surface); border:1px solid var(--border-strong);
+    border-radius:8px; max-width:760px; width:92%;
+    max-height:85vh; display:flex; flex-direction:column;
+    box-shadow:0 10px 30px rgba(0,0,0,0.5);
+  }
+  .modal-head {
+    padding:14px 18px; border-bottom:1px solid var(--border);
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .modal-head h3 { margin:0; font-size:14px; font-weight:600; }
+  .modal-body { padding:14px 18px; overflow-y:auto; flex:1; }
+  .modal-foot {
+    padding:12px 18px; border-top:1px solid var(--border);
+    display:flex; gap:8px; justify-content:flex-end;
+  }
+  .modal-foot button {
+    background:var(--surface2); color:var(--fg);
+    border:1px solid var(--border-strong); border-radius:4px;
+    padding:6px 14px; font-size:12.5px; font-family:inherit; cursor:pointer;
+  }
+  .modal-foot button.primary { border-color:var(--accent); color:var(--accent); }
+  .modal-foot button:hover { border-color:var(--accent); }
+  .modal-section { margin-bottom:18px; }
+  .modal-section h4 {
+    margin:0 0 8px; font-size:11px; text-transform:uppercase;
+    letter-spacing:.07em; color:var(--muted); font-weight:500;
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .sector-grid {
+    display:grid; grid-template-columns:repeat(auto-fill, minmax(220px,1fr));
+    gap:6px;
+  }
+  .sector-grid label, .company-list label {
+    display:flex; align-items:center; gap:8px;
+    padding:5px 8px; font-size:12.5px; cursor:pointer;
+    border-radius:4px;
+  }
+  .sector-grid label:hover, .company-list label:hover { background:var(--surface2); }
+  .sector-grid label input, .company-list label input { margin:0; }
+  .company-search {
+    width:100%; background:var(--surface2); color:var(--fg);
+    border:1px solid var(--border-strong); border-radius:4px;
+    padding:7px 10px; font-size:12.5px; font-family:inherit;
+    margin-bottom:8px;
+  }
+  .company-list {
+    max-height:280px; overflow-y:auto;
+    border:1px solid var(--border); border-radius:4px;
+    padding:4px;
+  }
+  .company-list label.disabled {
+    color:var(--muted); cursor:not-allowed;
+  }
+  .company-list label.disabled:hover { background:transparent; }
+  .badge.via {
+    background:#2a2f3a; color:var(--muted);
+    margin-left:auto; font-size:10px;
+  }
+
+  /* Dispersao timeline controls */
+  .timeline-bar {
+    display:flex; gap:14px; align-items:center; flex-wrap:wrap;
+    margin-bottom:10px; padding:10px 14px;
+    background:var(--surface2); border:1px solid var(--border);
+    border-radius:6px;
+  }
+  .timeline-bar .now {
+    font-size:18px; font-weight:600; color:var(--accent);
+    font-variant-numeric:tabular-nums;
+    padding:2px 10px; border:1px solid var(--border-strong); border-radius:4px;
+    min-width:130px; text-align:center;
+  }
+  .timeline-bar .play-btn {
+    background:var(--accent); color:#0e1116; border:none;
+    border-radius:4px; padding:6px 16px; font-weight:600;
+    cursor:pointer; font-family:inherit; font-size:12.5px;
+  }
+  .timeline-bar .play-btn:hover { opacity:0.9; }
+  .timeline-bar .play-btn:disabled { opacity:0.5; cursor:wait; }
+
   /* Tabulator dark tweaks */
   .tabulator { font-size:12px; background:transparent; border:none; }
   .tabulator .tabulator-header {
@@ -253,6 +349,20 @@
 <!-- ===================== Tab: Dispersão IPCA+ ===================== -->
 <section id="tab-dispersao" class="tab hide">
   <div class="panel">
+    <div class="timeline-bar">
+      <label>Início: <input type="text" id="tl-start" placeholder="YYYY-MM-DD" style="width:120px"></label>
+      <label>Fim: <input type="text" id="tl-end" placeholder="YYYY-MM-DD" style="width:120px"></label>
+      <button type="button" id="tl-play" class="play-btn">▶ Play</button>
+      <div class="now" id="tl-now">—</div>
+      <label>Velocidade:
+        <select id="tl-speed">
+          <option value="500">0.5s</option>
+          <option value="1000" selected>1s</option>
+          <option value="2000">2s</option>
+        </select>
+      </label>
+      <span id="tl-status" style="color:var(--muted);font-size:11.5px"></span>
+    </div>
     <div class="controls">
       <label>Data:
         <input type="text" id="disp-date" placeholder="YYYY-MM-DD">
@@ -288,6 +398,7 @@
       <label>
         <input type="checkbox" id="mov-cob"> Cobertura
       </label>
+      <button type="button" id="mov-cob-edit" class="icon-btn" title="Editar watchlist">⚙</button>
       <label>
         <input type="checkbox" id="mov-hide-iliq" checked> Esconder ilíquidos
       </label>
@@ -312,6 +423,32 @@
 </section>
 
 </main>
+
+<!-- ===================== Watchlist editor modal ===================== -->
+<div class="modal-back" id="wl-modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="wl-title">
+    <div class="modal-head">
+      <h3 id="wl-title">Editar watchlist (cobertura)</h3>
+      <button class="icon-btn" type="button" id="wl-close" title="Fechar">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-section">
+        <h4><span>Por setor</span><span id="wl-sec-count">Setores: 0/0</span></h4>
+        <div class="sector-grid" id="wl-sectors"></div>
+      </div>
+      <div class="modal-section">
+        <h4>Por empresa (avulsa)</h4>
+        <input type="text" class="company-search" id="wl-search" placeholder="Buscar emissor…">
+        <div class="company-list" id="wl-companies"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" id="wl-reset">Reset para padrão</button>
+      <button type="button" id="wl-cancel">Cancelar</button>
+      <button type="button" id="wl-save" class="primary">Salvar</button>
+    </div>
+  </div>
+</div>
 
 <footer>
   Fonte: ANBIMA — mercado secundário de debêntures + ETTJ NTN-B.
@@ -446,6 +583,210 @@ async function loadJSON(path) {
   const j = await r.json();
   cache.set(path, j);
   return j;
+}
+
+/* ============================================================
+ *  Watchlist (cobertura editável)
+ * ============================================================ */
+const WL_STORAGE_KEY = "anbima_watchlist";
+// Padrões usados pra montar a lista default de empresas marcadas (matchados
+// case-insensitive contra o emissor normalizado disponível em movements.json).
+const WL_DEFAULT_PATTERNS = [
+  "AEGEA SANEAMENTO", "AGUAS DA IMPERATRIZ", "AGUAS DE BOMBINHAS",
+  "AGUAS DE ITAPEMA", "AGUAS DE JUTURNAIBA", "AGUAS DE TERESINA",
+  "AGUAS DO PARA A", "AGUAS DO PIAUI", "AGUAS DO RIO 4", "AGUAS DO SERTAO",
+  "BRK AMB. REG. MACEIO", "BRK AMBIENTAL", "CENTRO IMAGEM DIAGNOST",
+  "CSN MINERACAO", "HAPVIDA", "IGUA RIO DE JANEIRO", "IGUA SANEAMENTO",
+  "KORA SAUDE", "ONCOCLINICAS BRASIL", "ORIGEM ENERGIA", "PRIO FORTE",
+];
+
+let WATCHLIST = null;            // {sectors:Set<string>, companies:Set<string>}
+let WL_ALL_EMISSORES = null;     // string[] — populado quando MOV_DATA carrega
+let WL_ALL_SECTORS = null;       // string[]
+let WL_EMISSOR_TO_SECTOR = null; // Map<emissor, setor>
+
+function _stripDiacritics(s) {
+  return (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+function _emissorKey(s) {
+  return _stripDiacritics(s).toUpperCase().trim();
+}
+
+function watchlistDefaultCompanies() {
+  if (!WL_ALL_EMISSORES) return new Set();
+  const out = new Set();
+  for (const em of WL_ALL_EMISSORES) {
+    const k = _emissorKey(em);
+    for (const pat of WL_DEFAULT_PATTERNS) {
+      if (k.includes(pat)) { out.add(em); break; }
+    }
+  }
+  return out;
+}
+
+function loadWatchlist() {
+  let raw = null;
+  try { raw = localStorage.getItem(WL_STORAGE_KEY); } catch (_) {}
+  if (raw) {
+    try {
+      const j = JSON.parse(raw);
+      WATCHLIST = {
+        sectors: new Set(Array.isArray(j.sectors) ? j.sectors : []),
+        companies: new Set(Array.isArray(j.companies) ? j.companies : []),
+      };
+      return;
+    } catch (_) { /* fall through to default */ }
+  }
+  WATCHLIST = { sectors: new Set(), companies: watchlistDefaultCompanies() };
+  saveWatchlist();
+}
+function saveWatchlist() {
+  if (!WATCHLIST) return;
+  // Spec: companies só guarda empresas marcadas individualmente cujo setor
+  // não está marcado. Limpa antes de persistir.
+  const sectors = WATCHLIST.sectors;
+  const companies = new Set();
+  for (const c of WATCHLIST.companies) {
+    const sec = WL_EMISSOR_TO_SECTOR ? WL_EMISSOR_TO_SECTOR.get(c) : null;
+    if (!sec || !sectors.has(sec)) companies.add(c);
+  }
+  WATCHLIST.companies = companies;
+  try {
+    localStorage.setItem(WL_STORAGE_KEY, JSON.stringify({
+      sectors: [...sectors], companies: [...companies],
+    }));
+  } catch (_) {}
+}
+
+// Regra: setor sempre manda. Aceita objetos {setor, emissor} ou {s, e} (dispersion).
+function isInWatchlist(p) {
+  if (!WATCHLIST) return false;
+  const setor = p.setor != null ? p.setor : p.s;
+  const emissor = p.emissor != null ? p.emissor : p.e;
+  if (setor && WATCHLIST.sectors.has(setor)) return true;
+  if (emissor && WATCHLIST.companies.has(emissor)) return true;
+  return false;
+}
+
+function watchlistRebuildIndex() {
+  // Indexa todos emissores (e seus setores) a partir do snapshot mais recente.
+  if (!MOV_DATA) return;
+  const setSet = new Set();
+  const emMap = new Map();
+  for (const date of MOV_DATA.dates) {
+    for (const r of MOV_DATA.by_date[date].rows) {
+      if (r.setor) setSet.add(r.setor);
+      if (r.emissor && !emMap.has(r.emissor)) {
+        emMap.set(r.emissor, r.setor || null);
+      }
+    }
+  }
+  WL_ALL_SECTORS = [...setSet].sort((a,b) => a.localeCompare(b, "pt-BR"));
+  WL_ALL_EMISSORES = [...emMap.keys()].sort((a,b) => a.localeCompare(b, "pt-BR"));
+  WL_EMISSOR_TO_SECTOR = emMap;
+  if (!WATCHLIST) loadWatchlist();
+  // Se watchlist veio do default antes do índice estar pronto, recalcula companies.
+  if (WATCHLIST && WATCHLIST.companies.size === 0 && WATCHLIST.sectors.size === 0) {
+    WATCHLIST.companies = watchlistDefaultCompanies();
+    saveWatchlist();
+  }
+}
+
+/* -------- Modal UI -------- */
+let WL_DRAFT = null; // copia editável enquanto modal está aberto
+let WL_SEARCH_Q = "";
+
+function openWatchlistModal() {
+  if (!WL_ALL_SECTORS) watchlistRebuildIndex();
+  WL_DRAFT = {
+    sectors: new Set(WATCHLIST.sectors),
+    companies: new Set(WATCHLIST.companies),
+  };
+  WL_SEARCH_Q = "";
+  document.getElementById("wl-search").value = "";
+  renderWatchlistModal();
+  document.getElementById("wl-modal").classList.add("open");
+}
+function closeWatchlistModal() {
+  document.getElementById("wl-modal").classList.remove("open");
+  WL_DRAFT = null;
+}
+function renderWatchlistModal() {
+  if (!WL_DRAFT) return;
+  const secHost = document.getElementById("wl-sectors");
+  const sectors = WL_ALL_SECTORS || [];
+  const escape = s => String(s).replace(/[&<>"']/g, c =>
+    ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+  secHost.innerHTML = sectors.map(s =>
+    `<label><input type="checkbox" data-sec="${escape(s)}"` +
+    (WL_DRAFT.sectors.has(s) ? " checked" : "") + `> ${escape(s)}</label>`
+  ).join("");
+  document.getElementById("wl-sec-count").textContent =
+    `Setores: ${WL_DRAFT.sectors.size}/${sectors.length}`;
+  secHost.querySelectorAll("input[type=checkbox]").forEach(cb => {
+    cb.addEventListener("change", () => {
+      const v = cb.dataset.sec;
+      if (cb.checked) WL_DRAFT.sectors.add(v);
+      else WL_DRAFT.sectors.delete(v);
+      renderWatchlistModal();
+    });
+  });
+
+  // Companies (filtradas pela busca)
+  const list = document.getElementById("wl-companies");
+  const q = _emissorKey(WL_SEARCH_Q);
+  const all = WL_ALL_EMISSORES || [];
+  const filtered = q ? all.filter(e => _emissorKey(e).includes(q)) : all;
+  const items = filtered.slice(0, 500); // hard-cap pra não travar DOM
+  list.innerHTML = items.map(em => {
+    const sec = WL_EMISSOR_TO_SECTOR.get(em);
+    const viaSector = sec && WL_DRAFT.sectors.has(sec);
+    const checked = viaSector || WL_DRAFT.companies.has(em);
+    return `<label class="${viaSector?"disabled":""}">` +
+      `<input type="checkbox" data-em="${escape(em)}"` +
+        (checked ? " checked" : "") + (viaSector ? " disabled" : "") + `>` +
+      `<span>${escape(em)}</span>` +
+      (viaSector ? `<span class="badge via">via setor ${escape(sec)}</span>` : "") +
+      `</label>`;
+  }).join("") + (filtered.length > items.length
+      ? `<div class="empty">Mostrando 500 de ${filtered.length}; refine a busca.</div>`
+      : "");
+  list.querySelectorAll("input[type=checkbox]:not([disabled])").forEach(cb => {
+    cb.addEventListener("change", () => {
+      const em = cb.dataset.em;
+      if (cb.checked) WL_DRAFT.companies.add(em);
+      else WL_DRAFT.companies.delete(em);
+    });
+  });
+}
+
+function setupWatchlistModalEvents() {
+  if (setupWatchlistModalEvents._done) return;
+  setupWatchlistModalEvents._done = true;
+  document.getElementById("wl-close").addEventListener("click", closeWatchlistModal);
+  document.getElementById("wl-cancel").addEventListener("click", closeWatchlistModal);
+  document.getElementById("wl-modal").addEventListener("click", e => {
+    if (e.target.id === "wl-modal") closeWatchlistModal();
+  });
+  document.getElementById("wl-search").addEventListener("input", e => {
+    WL_SEARCH_Q = e.target.value;
+    renderWatchlistModal();
+  });
+  document.getElementById("wl-reset").addEventListener("click", () => {
+    WL_DRAFT = { sectors: new Set(), companies: watchlistDefaultCompanies() };
+    renderWatchlistModal();
+  });
+  document.getElementById("wl-save").addEventListener("click", () => {
+    WATCHLIST = WL_DRAFT;
+    saveWatchlist();
+    closeWatchlistModal();
+    // Re-aplica filtros das tabs que dependem da watchlist
+    if (MOV_TABLE) {
+      MOV_TABLE.redraw(true);
+      applyMovFilter();
+    }
+    if (DISP_DATA) drawDispersion();
+  });
 }
 
 /* ============================================================
@@ -848,23 +1189,34 @@ let DISP_SETOR_MS = null;
 
 async function renderDispersao() {
   DISP_INDEX = await loadJSON("data/dispersion/_index.json");
+  // Garante que o índice de watchlist (lista de emissores/setores) esteja
+  // pronto, mesmo quando o usuário abre Dispersão antes de Movimentações.
+  if (!MOV_DATA) {
+    MOV_DATA = await loadJSON("data/movements.json");
+    watchlistRebuildIndex();
+  }
   DISP_SETOR_MS = createMultiSelect({
     host: "disp-setor",
     options: DISP_INDEX.sectors.map(s => ({ value: s, label: s })),
     onChange: () => drawDispersion(),
   });
-  const last = DISP_INDEX.dates[DISP_INDEX.dates.length - 1];
-  flatpickr("#disp-date", {
-    dateFormat:"Y-m-d", enable: DISP_INDEX.dates, defaultDate: last,
+  const dates = DISP_INDEX.dates;
+  const last = dates[dates.length - 1];
+  DISP_FP_DATE = flatpickr("#disp-date", {
+    dateFormat:"Y-m-d", enable: dates, defaultDate: last,
     onChange: (_, dstr) => loadAndRenderDispersion(dstr),
   });
   document.getElementById("disp-cob").addEventListener("change", () =>
     drawDispersion());
+  setupTimeline(dates);
   await loadAndRenderDispersion(last);
 }
 
+let DISP_FP_DATE = null;
+
 async function loadAndRenderDispersion(date) {
   DISP_DATA = await loadJSON("data/dispersion/" + date + ".json");
+  document.getElementById("tl-now").textContent = brDate(date);
   drawDispersion();
 }
 
@@ -884,30 +1236,53 @@ const SECTOR_COLORS = {
   "Outros":"#444b58",
 };
 
+// Paleta para colorir por empresa quando exatamente 1 setor está selecionado.
+const COMPANY_PALETTE = [
+  "#5a9bff", "#d2a052", "#3aa66c", "#dc5752", "#a378d6",
+  "#4ab8b8", "#c97042", "#b85eaf", "#7a8d4a", "#a08a3a",
+  "#6e7a8c", "#e57373", "#81c784", "#64b5f6", "#ffb74d",
+  "#ba68c8", "#4db6ac", "#f06292", "#9575cd", "#aed581",
+  "#ff8a65", "#7986cb", "#a1887f", "#90a4ae", "#dce775",
+];
+function _hashStr(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+function colorForCompany(emissor) {
+  return COMPANY_PALETTE[_hashStr(emissor || "") % COMPANY_PALETTE.length];
+}
+
 function drawDispersion() {
   if (!DISP_DATA) return;
   const onlyCob = document.getElementById("disp-cob").checked;
   const setorAll = !DISP_SETOR_MS || DISP_SETOR_MS.isAll();
   const setorSet = DISP_SETOR_MS ? DISP_SETOR_MS.getSelected() : null;
+  // Cor por empresa apenas quando exatamente 1 setor está marcado (e não é "todos").
+  const colorByCompany = !setorAll && setorSet && setorSet.size === 1;
+
   const traces = {};
   for (const p of DISP_DATA.papers) {
-    if (onlyCob && !p.cob) continue;
+    if (onlyCob && !isInWatchlist(p)) continue;
     if (!setorAll && (!setorSet || !setorSet.has(p.s))) continue;
     if (!paperPassesGlobalIdx(p.i)) continue;
-    if (!traces[p.s]) {
-      traces[p.s] = { x:[], y:[], text:[], customdata:[], type:"scatter",
-        mode:"markers", name: p.s,
-        marker:{ color: SECTOR_COLORS[p.s] || "#888", size:6,
-                 opacity:0.7, line:{width:0} },
+    const groupKey = colorByCompany ? (p.e || "—") : p.s;
+    if (!traces[groupKey]) {
+      const color = colorByCompany
+        ? colorForCompany(p.e)
+        : (SECTOR_COLORS[p.s] || "#888");
+      traces[groupKey] = { x:[], y:[], text:[], customdata:[], type:"scatter",
+        mode:"markers", name: groupKey,
+        marker:{ color, size:6, opacity:0.85, line:{width:0} },
         hovertemplate:
           "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>" +
           "Duration %{x:.2f}a<br>Taxa %{customdata[2]:.2f}%<br>" +
           "Spread %{y:.2f} pp<extra>%{customdata[3]}</extra>",
       };
     }
-    traces[p.s].x.push(p.d);
-    traces[p.s].y.push(p.sp);
-    traces[p.s].customdata.push([p.c, (p.e||'').slice(0,40), p.t, p.s]);
+    traces[groupKey].x.push(p.d);
+    traces[groupKey].y.push(p.sp);
+    traces[groupKey].customdata.push([p.c, (p.e||'').slice(0,40), p.t, p.s]);
   }
   const data = Object.values(traces);
   const layout = Object.assign(PLOTLY_LAYOUT(), {
@@ -928,6 +1303,82 @@ function drawDispersion() {
               : "Spread sobre NTN-B (pp)";
   layout.yaxis.title = yTitle;
   Plotly.newPlot("chart-dispersion", data, layout, PLOTLY_CONFIG);
+}
+
+/* -------- Timeline animado -------- */
+let TL_STATE = {
+  start: null, end: null, current: null, speed: 1000,
+  playing: false, intervalId: null,
+};
+let TL_FP_START = null, TL_FP_END = null;
+
+function _datesInRange(start, end) {
+  const all = (DISP_INDEX && DISP_INDEX.dates) || [];
+  const i0 = all.indexOf(start), i1 = all.indexOf(end);
+  if (i0 < 0 || i1 < 0 || i0 > i1) return [];
+  return all.slice(i0, i1 + 1);
+}
+
+function setupTimeline(dates) {
+  if (!dates || !dates.length) return;
+  TL_STATE.start = dates[0];
+  TL_STATE.end = dates[dates.length - 1];
+  TL_STATE.speed = 1000;
+  TL_FP_START = flatpickr("#tl-start", {
+    dateFormat: "Y-m-d", enable: dates, defaultDate: dates[0],
+    onChange: (_, d) => { if (d) { TL_STATE.start = d; timelinePause(); } },
+  });
+  TL_FP_END = flatpickr("#tl-end", {
+    dateFormat: "Y-m-d", enable: dates, defaultDate: dates[dates.length - 1],
+    onChange: (_, d) => { if (d) { TL_STATE.end = d; timelinePause(); } },
+  });
+  document.getElementById("tl-speed").addEventListener("change", e => {
+    TL_STATE.speed = parseInt(e.target.value, 10) || 1000;
+    if (TL_STATE.playing) {
+      timelinePause(); timelinePlay();
+    }
+  });
+  document.getElementById("tl-play").addEventListener("click", () => {
+    if (TL_STATE.playing) timelinePause();
+    else timelinePlay();
+  });
+}
+
+async function timelinePlay() {
+  const range = _datesInRange(TL_STATE.start, TL_STATE.end);
+  if (range.length === 0) return;
+  const status = document.getElementById("tl-status");
+  const btn = document.getElementById("tl-play");
+  btn.disabled = true; status.textContent = "Carregando snapshots…";
+  // Pré-carrega tudo (em paralelo). Cache do loadJSON faz o resto.
+  await Promise.all(range.map(d => loadJSON("data/dispersion/" + d + ".json")));
+  btn.disabled = false; status.textContent = "";
+  TL_STATE.playing = true;
+  btn.textContent = "❚❚ Pause";
+  let idx = range.indexOf(TL_STATE.current);
+  if (idx < 0) idx = 0;
+  // Mostra primeira data imediatamente.
+  await _timelineGoto(range[idx]);
+  TL_STATE.intervalId = setInterval(async () => {
+    idx = (idx + 1) % range.length; // loop ao chegar no fim
+    await _timelineGoto(range[idx]);
+  }, TL_STATE.speed);
+}
+function timelinePause() {
+  TL_STATE.playing = false;
+  if (TL_STATE.intervalId != null) {
+    clearInterval(TL_STATE.intervalId);
+    TL_STATE.intervalId = null;
+  }
+  const btn = document.getElementById("tl-play");
+  if (btn) btn.textContent = "▶ Play";
+}
+async function _timelineGoto(date) {
+  TL_STATE.current = date;
+  DISP_DATA = await loadJSON("data/dispersion/" + date + ".json");
+  document.getElementById("tl-now").textContent = brDate(date);
+  if (DISP_FP_DATE) DISP_FP_DATE.setDate(date, false);
+  drawDispersion();
 }
 
 /* ============================================================
@@ -969,16 +1420,25 @@ function _movRowsForCurrentDates() {
   const refMap = _movSpreadMap(MOV_DATE_REF);
   return baseEntry.rows.map(r => {
     let delta = null;
-    if (refMap && r.spread_pp != null) {
+    let spreadRef = null;
+    if (refMap) {
       const old = refMap[r.codigo];
-      if (old != null) delta = Math.round((r.spread_pp - old) * 100.0 * 10) / 10;
+      if (old != null) {
+        spreadRef = old;
+        if (r.spread_pp != null) {
+          delta = Math.round((r.spread_pp - old) * 100.0 * 10) / 10;
+        }
+      }
     }
-    return Object.assign({}, r, { delta_bps: delta });
+    return Object.assign({}, r, { delta_bps: delta, spread_ref_pp: spreadRef });
   });
 }
 
 async function renderMovimentacoes() {
   MOV_DATA = await loadJSON("data/movements.json");
+  watchlistRebuildIndex();
+  setupWatchlistModalEvents();
+  document.getElementById("mov-cob-edit").addEventListener("click", openWatchlistModal);
   const dates = MOV_DATA.dates || [];
   MOV_DATE_BASE = MOV_DATA.latest || dates[dates.length - 1];
   // default: data referência = data anterior à base, se houver.
@@ -1057,17 +1517,35 @@ function refreshMovData() {
 }
 
 function buildMovTable() {
+  const fmtSpread = c => {
+    const v = c.getValue();
+    return v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + " pp";
+  };
+  // Mesma convenção do "Top 10 movimentações" (Visão Geral): positivo = abrindo (vermelho/neg),
+  // negativo = fechando (verde/pos), zero/null = neutro.
   const fmtDelta = c => {
     const v = c.getValue();
-    if (v == null) return "—";
     const el = c.getElement();
     el.classList.remove("neg", "pos");
-    el.classList.add(v > 0 ? "neg" : v < 0 ? "pos" : "");
+    if (v == null) return "—";
+    if (v > 0) el.classList.add("neg");
+    else if (v < 0) el.classList.add("pos");
     return (v >= 0 ? "+" : "") + v.toFixed(0);
+  };
+  // %PAR: vermelho < 100, verde > 100, cinza = 100 ou null.
+  const fmtPctPar = c => {
+    const v = c.getValue();
+    const el = c.getElement();
+    el.classList.remove("neg", "pos");
+    if (v == null) return "—";
+    if (v > 100) el.classList.add("pos");
+    else if (v < 100) el.classList.add("neg");
+    return v.toFixed(2) + "%";
   };
   MOV_TABLE = new Tabulator("#mov-table", {
     data: _movRowsForCurrentDates(),
-    layout: "fitDataStretch",
+    layout: "fitData",
+    resizableColumns: true,
     height: "70vh",
     initialSort: [{ column:"spread_pp", dir:"desc" }],
     columns: [
@@ -1075,18 +1553,26 @@ function buildMovTable() {
         formatter: c => {
           const r = c.getRow().getData();
           let s = c.getValue();
-          if (r.cobertura) s += `<span class="badge cob">${r.cobertura}</span>`;
+          if (isInWatchlist(r)) s += `<span class="badge cob">cob</span>`;
           if (r.estagnado) s += '<span class="badge warn">estag</span>';
           return s;
         } },
-      { title:"Emissor", field:"emissor", widthGrow:3, minWidth:200 },
+      { title:"Emissor", field:"emissor", minWidth:200 },
       { title:"Setor", field:"setor", width:170 },
       { title:"Idx", field:"indexador", width:80 },
       { title:"Vencimento", field:"vencimento", width:105 },
+      { title:"NTN-B Ref", field:"benchmark_vencimento", width:105,
+        formatter: c => {
+          const r = c.getRow().getData();
+          if (r.indexador !== "IPCA+") return "-";
+          return c.getValue() || "-";
+        } },
       { title:"Dur.", field:"duration_anos", width:78, hozAlign:"right",
         formatter: c => fmtAnos(c.getValue()) },
       { title:"Taxa", field:"taxa", width:78, hozAlign:"right",
         formatter: c => fmtPct(c.getValue()) },
+      { title:"% PAR", field:"pct_pu_par", width:84, hozAlign:"right",
+        formatter: fmtPctPar },
       { title:"Bench.", field:"benchmark_titulo", width:78,
         formatter: c => {
           const r = c.getRow().getData();
@@ -1097,8 +1583,10 @@ function buildMovTable() {
         } },
       { title:"Tx Bench", field:"taxa_benchmark", width:88, hozAlign:"right",
         formatter: c => fmtPct(c.getValue()) },
-      { title:"Spread (pp)", field:"spread_pp", width:100, hozAlign:"right",
-        formatter: c => c.getValue()==null?"—":(c.getValue()>=0?"+":"")+c.getValue().toFixed(2) },
+      { title:"Spread (base)", field:"spread_pp", width:108, hozAlign:"right",
+        formatter: fmtSpread },
+      { title:"Spread (ref)", field:"spread_ref_pp", width:108, hozAlign:"right",
+        formatter: fmtSpread },
       { title:"Δ spread bps", field:"delta_bps", width:110, hozAlign:"right", formatter: fmtDelta },
     ],
   });
@@ -1117,7 +1605,7 @@ function applyMovFilter() {
     if (!paperPassesGlobalIdx(d.indexador)) return false;
     if (idx && d.indexador !== idx) return false;
     if (!setorAll && (!setorSet || !setorSet.has(d.setor))) return false;
-    if (onlyCob && !d.cobertura) return false;
+    if (onlyCob && !isInWatchlist(d)) return false;
     if (q && !((d.codigo||'').toLowerCase().includes(q)
             || (d.emissor||'').toLowerCase().includes(q))) return false;
     return true;

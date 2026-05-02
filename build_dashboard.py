@@ -486,6 +486,8 @@ def build_movements(snaps: list[dict], enriched_today: list[dict]) -> dict:
                 "taxa_benchmark": p.get("taxa_benchmark"),
                 "spread_pp": p.get("spread_pp"),
                 "spread_metodo": p.get("spread_metodo"),
+                "pu": p.get("pu"),
+                "pct_pu_par": p.get("pct_pu_par"),
                 "iliquido": bool(p.get("flag_iliquido")),
                 "estagnado": bool(p.get("flag_estagnado")),
                 "dias_sem_variacao": p.get("dias_sem_variacao"),
