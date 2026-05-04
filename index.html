@@ -1771,9 +1771,9 @@ function buildMovTable() {
           if (r.indexador !== "IPCA+") return "-";
           return c.getValue() || "-";
         } },
-      { title:"Spread Atual", field:"spread_pp", width:120, hozAlign:"right",
-        formatter: fmtSpread },
       { title:"Spread Anterior", field:"spread_ref_pp", width:130, hozAlign:"right",
+        formatter: fmtSpread },
+      { title:"Spread Atual", field:"spread_pp", width:120, hozAlign:"right",
         formatter: fmtSpread },
       { title:"Delta Spread", field:"delta_bps", width:120, hozAlign:"right", formatter: fmtDelta },
     ],
