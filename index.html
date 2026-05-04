@@ -1672,15 +1672,14 @@ function buildMovTable() {
     const v = c.getValue();
     return v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + " pp";
   };
-  // Mesma convenção do "Top 10 movimentações" (Visão Geral): positivo = abrindo (vermelho/neg),
-  // negativo = fechando (verde/pos), zero/null = neutro.
+  // Delta Spread: verde positivo, vermelho negativo, zero/null = neutro.
   const fmtDelta = c => {
     const v = c.getValue();
     const el = c.getElement();
     el.classList.remove("neg", "pos");
     if (v == null) return "—";
-    if (v > 0) el.classList.add("neg");
-    else if (v < 0) el.classList.add("pos");
+    if (v > 0) el.classList.add("pos");
+    else if (v < 0) el.classList.add("neg");
     return (v >= 0 ? "+" : "") + v.toFixed(0);
   };
   // %PAR: vermelho < 100, verde > 100, cinza = 100 ou null.
@@ -1700,7 +1699,7 @@ function buildMovTable() {
     height: "70vh",
     initialSort: [{ column:"spread_pp", dir:"desc" }],
     columns: [
-      { title:"Código", field:"codigo", width:88, frozen:true,
+      { title:"Codigo", field:"codigo", width:88, frozen:true,
         formatter: c => {
           const r = c.getRow().getData();
           let s = c.getValue();
@@ -1710,35 +1709,25 @@ function buildMovTable() {
         } },
       { title:"Emissor", field:"emissor", minWidth:200 },
       { title:"Setor", field:"setor", width:170 },
-      { title:"Idx", field:"indexador", width:80 },
-      { title:"Vencimento", field:"vencimento", width:105 },
-      { title:"Dur.", field:"duration_anos", width:78, hozAlign:"right",
-        formatter: c => fmtAnos(c.getValue()) },
+      { title:"Index", field:"indexador", width:80 },
       { title:"Taxa", field:"taxa", width:78, hozAlign:"right",
         formatter: c => fmtPct(c.getValue()) },
-      { title:"% PAR", field:"pct_pu_par", width:84, hozAlign:"right",
+      { title:"%PAR", field:"pct_pu_par", width:84, hozAlign:"right",
         formatter: fmtPctPar },
-      { title:"Bench.", field:"benchmark_titulo", width:78,
-        formatter: c => {
-          const r = c.getRow().getData();
-          const t = c.getValue();
-          if (!t) return r.spread_metodo === "sem_referencia" ? "<span style='color:var(--warn)'>sem ref.</span>" : "—";
-          return r.benchmark_vencimento
-            ? `${t}<span class="badge">${r.benchmark_vencimento}</span>` : t;
-        } },
-      { title:"NTN-B Ref", field:"benchmark_vencimento", width:105,
+      { title:"Duration", field:"duration_anos", width:90, hozAlign:"right",
+        formatter: c => fmtAnos(c.getValue()) },
+      { title:"Vencimento", field:"vencimento", width:105 },
+      { title:"NTNB Ref", field:"benchmark_vencimento", width:105,
         formatter: c => {
           const r = c.getRow().getData();
           if (r.indexador !== "IPCA+") return "-";
           return c.getValue() || "-";
         } },
-      { title:"Tx Bench", field:"taxa_benchmark", width:88, hozAlign:"right",
-        formatter: c => fmtPct(c.getValue()) },
-      { title:"Spread (base)", field:"spread_pp", width:108, hozAlign:"right",
+      { title:"Spread Atual", field:"spread_pp", width:120, hozAlign:"right",
         formatter: fmtSpread },
-      { title:"Spread (ref)", field:"spread_ref_pp", width:108, hozAlign:"right",
+      { title:"Spread Anterior", field:"spread_ref_pp", width:130, hozAlign:"right",
         formatter: fmtSpread },
-      { title:"Δ spread bps", field:"delta_bps", width:110, hozAlign:"right", formatter: fmtDelta },
+      { title:"Delta Spread", field:"delta_bps", width:120, hozAlign:"right", formatter: fmtDelta },
     ],
   });
 }
