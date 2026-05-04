@@ -1542,6 +1542,49 @@ let MOV_DATE_BASE = null;
 let MOV_DATE_REF = null;
 let MOV_FP_BASE = null;
 let MOV_FP_REF = null;
+let MOV_STATS = null;
+
+function _computeMovStats(rows) {
+  const _pct = (arr, p) => arr.length ? arr[Math.min(arr.length - 1, Math.floor((arr.length - 1) * p + 0.5))] : null;
+  const ppar = rows.map(r => r.pct_pu_par).filter(v => v != null).sort((a,b)=>a-b);
+  const dlt  = rows.map(r => r.delta_bps).filter(v => v != null).sort((a,b)=>a-b);
+  const pparP5  = _pct(ppar, 0.05);
+  const pparP50 = _pct(ppar, 0.50);
+  const pparP95 = _pct(ppar, 0.95);
+  const dP5  = _pct(dlt, 0.05);
+  const dP95 = _pct(dlt, 0.95);
+  const deltaMax = Math.max(50, Math.abs(dP5 ?? 0), Math.abs(dP95 ?? 0));
+  return { pparP5, pparP50, pparP95, deltaMax };
+}
+
+// Background gradient para Delta Spread: positivo -> vermelho, negativo -> verde.
+// Saturacao de fundo interpola 0% (neutro) -> 50% (extremo) com |v|/maxAbs.
+function _bgForDelta(v, maxAbs) {
+  if (v == null || v === 0 || !maxAbs) return "";
+  const t = Math.min(Math.abs(v) / maxAbs, 1);
+  const sat = Math.round(50 * t);
+  const light = Math.round(95 - 15 * t);
+  const hue = v > 0 ? 0 : 120;
+  return `hsl(${hue}, ${sat}%, ${light}%)`;
+}
+
+// Background gradient para %PAR: alto (>=P95) -> vermelho saturado, baixo (<=P5) -> verde saturado,
+// mediana -> neutro. Interpolacao linear nas duas metades.
+function _bgForPctPar(v, p5, p50, p95) {
+  if (v == null || p50 == null) return "";
+  if (v >= p50) {
+    const span = (p95 ?? p50) - p50;
+    const t = span > 0 ? Math.min((v - p50) / span, 1) : 0;
+    const sat = Math.round(50 * t);
+    const light = Math.round(95 - 15 * t);
+    return `hsl(0, ${sat}%, ${light}%)`;
+  }
+  const span = p50 - (p5 ?? p50);
+  const t = span > 0 ? Math.min((p50 - v) / span, 1) : 0;
+  const sat = Math.round(50 * t);
+  const light = Math.round(95 - 15 * t);
+  return `hsl(120, ${sat}%, ${light}%)`;
+}
 
 function _movSpreadMap(date) {
   if (!date) return null;
@@ -1663,7 +1706,9 @@ function onMovDateChange(which, dstr) {
 
 function refreshMovData() {
   if (!MOV_TABLE) return;
-  MOV_TABLE.replaceData(_movRowsForCurrentDates());
+  const rows = _movRowsForCurrentDates();
+  MOV_STATS = _computeMovStats(rows);
+  MOV_TABLE.replaceData(rows);
   applyMovFilter();
 }
 
@@ -1672,28 +1717,36 @@ function buildMovTable() {
     const v = c.getValue();
     return v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + " pp";
   };
-  // Delta Spread: verde positivo, vermelho negativo, zero/null = neutro.
+  // Delta Spread: convencao credit analysis — positivo (abrindo) = vermelho/ruim, negativo (fechando) = verde/bom.
   const fmtDelta = c => {
     const v = c.getValue();
     const el = c.getElement();
     el.classList.remove("neg", "pos");
+    el.style.backgroundColor = "";
     if (v == null) return "—";
-    if (v > 0) el.classList.add("pos");
-    else if (v < 0) el.classList.add("neg");
+    if (v > 0) el.classList.add("neg");
+    else if (v < 0) el.classList.add("pos");
+    el.style.backgroundColor = _bgForDelta(v, MOV_STATS && MOV_STATS.deltaMax);
     return (v >= 0 ? "+" : "") + v.toFixed(0);
   };
-  // %PAR: vermelho < 100, verde > 100, cinza = 100 ou null.
+  // %PAR: cor de texto como hoje (verde >100, vermelho <100); fundo gradiente baseado em P5/P50/P95.
   const fmtPctPar = c => {
     const v = c.getValue();
     const el = c.getElement();
     el.classList.remove("neg", "pos");
+    el.style.backgroundColor = "";
     if (v == null) return "—";
     if (v > 100) el.classList.add("pos");
     else if (v < 100) el.classList.add("neg");
+    if (MOV_STATS) {
+      el.style.backgroundColor = _bgForPctPar(v, MOV_STATS.pparP5, MOV_STATS.pparP50, MOV_STATS.pparP95);
+    }
     return v.toFixed(2) + "%";
   };
+  const _initialRows = _movRowsForCurrentDates();
+  MOV_STATS = _computeMovStats(_initialRows);
   MOV_TABLE = new Tabulator("#mov-table", {
-    data: _movRowsForCurrentDates(),
+    data: _initialRows,
     layout: "fitData",
     resizableColumns: true,
     height: "70vh",
