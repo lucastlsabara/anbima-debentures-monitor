@@ -26,6 +26,23 @@ import requests
 
 from b3_calendar import resolve_default_date
 
+_MOZILLA_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+def _get(url: str, timeout: int = 30) -> requests.Response:
+    """GET with automatic Mozilla UA retry on HTTP errors."""
+    try:
+        r = requests.get(url, timeout=timeout)
+        r.raise_for_status()
+        return r
+    except requests.HTTPError:
+        r2 = requests.get(url, timeout=timeout, headers={"User-Agent": _MOZILLA_UA})
+        r2.raise_for_status()
+        return r2
+
 ROOT = Path(__file__).parent
 RAW_DIR = ROOT / "raw"
 
@@ -70,8 +87,7 @@ def _br_date(s: str) -> str | None:
 def fetch_db(target: date) -> str:
     yymmdd = target.strftime("%y%m%d")
     url = DB_URL.format(yymmdd=yymmdd)
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
+    r = _get(url)
     text = r.content.decode("latin-1")
     out = RAW_DIR / f"db{yymmdd}.txt"
     out.write_text(text, encoding="utf-8")
@@ -80,8 +96,7 @@ def fetch_db(target: date) -> str:
 
 def fetch_ettj(target: date) -> str:
     url = ETTJ_URL.format(dd=f"{target.day:02d}", mm=f"{target.month:02d}", yyyy=target.year)
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
+    r = _get(url)
     text = r.content.decode("latin-1")
     out = RAW_DIR / f"ettj_{_iso(target)}.csv"
     out.write_text(text, encoding="utf-8")
@@ -91,8 +106,7 @@ def fetch_ettj(target: date) -> str:
 def fetch_titulos_publicos(target: date) -> str:
     yymmdd = target.strftime("%y%m%d")
     url = TITPUB_URL.format(yymmdd=yymmdd)
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
+    r = _get(url)
     text = r.content.decode("latin-1")
     out = RAW_DIR / f"ms{yymmdd}.txt"
     out.write_text(text, encoding="utf-8")
@@ -228,20 +242,32 @@ def main() -> int:
     RAW_DIR.mkdir(exist_ok=True)
 
     print(f"[fetch] db de {target.isoformat()}", file=sys.stderr)
-    db_text = fetch_db(target)
+    try:
+        db_text = fetch_db(target)
+    except requests.HTTPError as e:
+        code = e.response.status_code if e.response is not None else "?"
+        print(f"[fetch] db HTTP {code} — dado não publicado para {target.isoformat()}", file=sys.stderr)
+        return 2
+    except requests.RequestException as e:
+        print(f"[fetch] erro de rede ao buscar db: {e}", file=sys.stderr)
+        return 1
     debentures = parse_db(db_text)
     print(f"[fetch]   -> {len(debentures)} papéis", file=sys.stderr)
 
     print(f"[fetch] ETTJ de {target.isoformat()}", file=sys.stderr)
-    ettj_text = fetch_ettj(target)
-    ettj_date, ettj_rows = parse_ettj(ettj_text)
-    print(f"[fetch]   -> {len(ettj_rows)} vértices (data publicada: {ettj_date})", file=sys.stderr)
-
-    if ettj_date and ettj_date != target.isoformat():
-        print(
-            f"[warn ] ETTJ retornou data {ettj_date} (esperado {target.isoformat()})",
-            file=sys.stderr,
-        )
+    ettj_date: str | None = None
+    ettj_rows: list[dict] = []
+    try:
+        ettj_text = fetch_ettj(target)
+        ettj_date, ettj_rows = parse_ettj(ettj_text)
+        print(f"[fetch]   -> {len(ettj_rows)} vértices (data publicada: {ettj_date})", file=sys.stderr)
+        if ettj_date and ettj_date != target.isoformat():
+            print(
+                f"[warn ] ETTJ retornou data {ettj_date} (esperado {target.isoformat()})",
+                file=sys.stderr,
+            )
+    except (requests.RequestException, RuntimeError) as e:
+        print(f"[warn ] ETTJ falhou ({e}); prosseguindo sem curva", file=sys.stderr)
 
     print(f"[fetch] títulos públicos de {target.isoformat()}", file=sys.stderr)
     titpub: dict[str, dict[str, float]] = {}
@@ -250,7 +276,7 @@ def main() -> int:
         titpub = parse_titulos_publicos(tp_text)
         sizes = ", ".join(f"{k}={len(v)}" for k, v in sorted(titpub.items()))
         print(f"[fetch]   -> {sizes}", file=sys.stderr)
-    except requests.HTTPError as e:
+    except (requests.RequestException, requests.HTTPError) as e:
         print(f"[warn ] títulos públicos indisponível ({e}); spreads ficarão sem referência",
               file=sys.stderr)
 
