@@ -24,6 +24,8 @@ from pathlib import Path
 
 import requests
 
+from b3_calendar import resolve_default_date
+
 ROOT = Path(__file__).parent
 RAW_DIR = ROOT / "raw"
 
@@ -207,14 +209,22 @@ def parse_ettj(text: str) -> tuple[str, list[dict]]:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Coleta ANBIMA (debêntures + ETTJ NTN-B).")
-    p.add_argument("--date", required=True, help="Data de referência (YYYY-MM-DD).")
+    p.add_argument(
+        "--date",
+        default=None,
+        help="Data de referência YYYY-MM-DD. Default: último dia útil B3 anterior a hoje (BRT).",
+    )
     p.add_argument("--out", default="parsed.json", help="Saída JSON consolidada.")
     return p.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    target = datetime.strptime(args.date, "%Y-%m-%d").date()
+    if args.date:
+        target = datetime.strptime(args.date, "%Y-%m-%d").date()
+    else:
+        target = resolve_default_date()
+        print(f"[fetch] --date não informado; usando default {target.isoformat()}", file=sys.stderr)
     RAW_DIR.mkdir(exist_ok=True)
 
     print(f"[fetch] db de {target.isoformat()}", file=sys.stderr)

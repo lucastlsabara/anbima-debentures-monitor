@@ -107,10 +107,12 @@ Brava, Origem.
 pip install -r requirements.txt
 
 # 1. coleta + parse (1 dia)
-python3 fetch_anbima.py --date 2026-04-30
+python3 fetch_anbima.py                  # default: último dia útil B3 anterior a hoje (BRT)
+python3 fetch_anbima.py --date 2026-04-30  # data específica
 
 # 2. spread + delta D-1 + history
-python3 compute_spreads.py
+python3 compute_spreads.py                 # default: mesmo do fetch
+python3 compute_spreads.py --date 2026-04-30
 
 # 3. agregação completa + HTML
 python3 build_dashboard.py
@@ -119,6 +121,18 @@ python3 build_dashboard.py
 python3 -m http.server 8000
 # abrir http://localhost:8000/index.html
 ```
+
+### Default de `--date`
+
+Tanto `fetch_anbima.py` quanto `compute_spreads.py` aceitam `--date YYYY-MM-DD`
+(opcional). Quando omitido, usam o **último dia útil B3 anterior a hoje (BRT)**
+— evitando o problema de rodar antes da publicação ANBIMA (entre 20h-22h BRT).
+Dias úteis B3 = seg-sex que não sejam feriado nacional brasileiro nem feriado
+B3-específico (Carnaval seg+ter, Sexta-feira Santa, Corpus Christi, aniversário
+de SP 25/jan, Consciência Negra 20/nov). Calendário em `b3_calendar.py`.
+
+Re-rodar a pipeline para uma data já capturada é idempotente: o
+`history/<YYYY-MM-DD>.json` é sobrescrito com o mesmo conteúdo determinístico.
 
 ## Convenção
 
