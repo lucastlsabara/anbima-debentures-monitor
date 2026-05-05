@@ -228,12 +228,32 @@ def main() -> int:
     RAW_DIR.mkdir(exist_ok=True)
 
     print(f"[fetch] db de {target.isoformat()}", file=sys.stderr)
-    db_text = fetch_db(target)
+    try:
+        db_text = fetch_db(target)
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            print(
+                f"[fetch] db de {target.isoformat()} ainda não publicado pela ANBIMA "
+                f"(404); pulando sem falhar.",
+                file=sys.stderr,
+            )
+            return 2
+        raise
     debentures = parse_db(db_text)
     print(f"[fetch]   -> {len(debentures)} papéis", file=sys.stderr)
 
     print(f"[fetch] ETTJ de {target.isoformat()}", file=sys.stderr)
-    ettj_text = fetch_ettj(target)
+    try:
+        ettj_text = fetch_ettj(target)
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            print(
+                f"[fetch] ETTJ de {target.isoformat()} ainda não publicada pela ANBIMA "
+                f"(404); pulando sem falhar.",
+                file=sys.stderr,
+            )
+            return 2
+        raise
     ettj_date, ettj_rows = parse_ettj(ettj_text)
     print(f"[fetch]   -> {len(ettj_rows)} vértices (data publicada: {ettj_date})", file=sys.stderr)
 
