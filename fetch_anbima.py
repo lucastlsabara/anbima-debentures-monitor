@@ -212,7 +212,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--date",
         default=None,
-        help="Data de referência YYYY-MM-DD. Default: último dia útil B3 anterior a hoje (BRT).",
+        help="Data de referência YYYY-MM-DD. Default: hoje (BRT).",
     )
     p.add_argument("--out", default="parsed.json", help="Saída JSON consolidada.")
     return p.parse_args()

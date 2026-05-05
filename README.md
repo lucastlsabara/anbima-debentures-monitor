@@ -107,7 +107,7 @@ Brava, Origem.
 pip install -r requirements.txt
 
 # 1. coleta + parse (1 dia)
-python3 fetch_anbima.py                  # default: último dia útil B3 anterior a hoje (BRT)
+python3 fetch_anbima.py                  # default: hoje (BRT) — pipeline roda 23h BRT
 python3 fetch_anbima.py --date 2026-04-30  # data específica
 
 # 2. spread + delta D-1 + history
@@ -125,11 +125,16 @@ python3 -m http.server 8000
 ### Default de `--date`
 
 Tanto `fetch_anbima.py` quanto `compute_spreads.py` aceitam `--date YYYY-MM-DD`
-(opcional). Quando omitido, usam o **último dia útil B3 anterior a hoje (BRT)**
-— evitando o problema de rodar antes da publicação ANBIMA (entre 20h-22h BRT).
-Dias úteis B3 = seg-sex que não sejam feriado nacional brasileiro nem feriado
-B3-específico (Carnaval seg+ter, Sexta-feira Santa, Corpus Christi, aniversário
-de SP 25/jan, Consciência Negra 20/nov). Calendário em `b3_calendar.py`.
+(opcional). Quando omitido, usam **hoje (BRT)**. A pipeline é agendada para
+rodar às 23h BRT — horário em que a ANBIMA já publicou os arquivos do dia.
+Em sábado, domingo ou feriado, hoje continua sendo o próprio dia: a ANBIMA
+retorna 404 e o script termina com exit code 2 (comportamento esperado).
+O calendário B3 (`b3_calendar.py`) continua disponível via
+`last_b3_business_day(today_brt())` para uso explícito quando se quer pular
+fim de semana / feriado: dias úteis B3 = seg-sex que não sejam feriado
+nacional brasileiro nem feriado B3-específico (Carnaval seg+ter,
+Sexta-feira Santa, Corpus Christi, aniversário de SP 25/jan, Consciência
+Negra 20/nov).
 
 Re-rodar a pipeline para uma data já capturada é idempotente: o
 `history/<YYYY-MM-DD>.json` é sobrescrito com o mesmo conteúdo determinístico.

@@ -72,5 +72,11 @@ def today_brt() -> date:
 
 
 def resolve_default_date() -> date:
-    """Data de referencia padrao: ultimo dia util B3 anterior a hoje (BRT)."""
-    return last_b3_business_day(today_brt())
+    """Data de referencia padrao: hoje (BRT).
+
+    Pipeline roda 23h BRT; nesse horario a ANBIMA ja publicou os arquivos do
+    dia. Em sabado/domingo/feriado, ANBIMA retorna 404 e o caller cai em
+    exit 2 (comportamento esperado). Para uso explicito do ultimo dia util
+    anterior, chame `last_b3_business_day(today_brt())`.
+    """
+    return today_brt()
