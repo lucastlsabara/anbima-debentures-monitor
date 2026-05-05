@@ -58,10 +58,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 from scipy.interpolate import CubicSpline
+
+from b3_calendar import resolve_default_date
 
 ROOT = Path(__file__).parent
 HIST_DIR = ROOT / "history"
@@ -111,6 +114,12 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Calcula spreads ANBIMA por lookup exato.")
     p.add_argument("--in", dest="inp", default="parsed.json")
     p.add_argument("--out", default="data.json")
+    p.add_argument(
+        "--date",
+        default=None,
+        help="Data de referência YYYY-MM-DD. Default: último dia útil B3 anterior a hoje (BRT). "
+             "Se informada, deve coincidir com data_referencia do parsed.json.",
+    )
     return p.parse_args()
 
 
@@ -118,6 +127,18 @@ def main() -> int:
     args = parse_args()
     raw = json.loads(Path(args.inp).read_text(encoding="utf-8"))
     today = raw["data_referencia"]
+
+    if args.date:
+        ref = datetime.strptime(args.date, "%Y-%m-%d").date().isoformat()
+    else:
+        ref = resolve_default_date().isoformat()
+        print(f"[spread] --date não informado; usando default {ref}", file=sys.stderr)
+    if ref != today:
+        print(
+            f"[spread] AVISO: --date {ref} difere de data_referencia do parsed.json ({today}); "
+            f"usando {today} (parsed.json é a fonte autoritativa).",
+            file=sys.stderr,
+        )
 
     titpub: dict[str, dict[str, float]] = raw.get("titulos_publicos") or {}
     ntnb_by_venc = titpub.get("NTN-B", {})
@@ -305,7 +326,10 @@ def main() -> int:
         json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8",
     )
     HIST_DIR.mkdir(exist_ok=True)
-    (HIST_DIR / f"{today}.json").write_text(
+    hist_path = HIST_DIR / f"{today}.json"
+    if hist_path.exists():
+        print(f"[spread] {hist_path.name} já existe; sobrescrevendo (idempotente)", file=sys.stderr)
+    hist_path.write_text(
         json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8",
     )
 
