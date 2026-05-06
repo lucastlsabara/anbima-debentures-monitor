@@ -918,6 +918,9 @@ function onDispDateChange(which, d) {
   } else {
     DISP_DATE_ANTERIOR = d;
     timelinePause();
+    // Mudar Data Anterior carrega o snapshot daquela data (frame 0 do Play),
+    // permitindo o usuário ver o estado "antes" sem precisar animar.
+    if (DISP_DATE_ANTERIOR) loadAndRenderDispersion(DISP_DATE_ANTERIOR);
   }
   _updatePlayRangeIndicator();
 }
