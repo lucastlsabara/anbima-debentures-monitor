@@ -122,6 +122,14 @@
   /* Filter rows (linhas explicitas de filtros) */
   .filter-row { margin-bottom: 8px; }
   .filter-row + .filter-row { margin-top: 0; }
+  /* Curvas Historicas: grid 2x2. Em telas estreitas, colapsa em coluna unica. */
+  .curves-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  }
+  .curves-grid > .panel { margin-bottom: 0; }
+  @media (max-width: 900px) {
+    .curves-grid { grid-template-columns: 1fr; }
+  }
   /* Dispersão timeline play button */
   .play-btn {
     background:var(--accent); color:#0e1116; border:none;
@@ -241,24 +249,28 @@
 <!-- ===================== Tab: Curvas Históricas ===================== -->
 <section id="tab-curvas" class="tab hide">
   <div class="panel">
-    <h2>Curva ETTJ NTN-B — últimos dias úteis</h2>
     <div class="controls">
       <label>Data Final: <input type="text" id="curve-date-atual" placeholder="YYYY-MM-DD"></label>
       <label>Data Inicial: <input type="text" id="curve-date-anterior" placeholder="YYYY-MM-DD"></label>
     </div>
-    <div id="chart-curves-compare" class="chart"></div>
   </div>
-  <div class="panel">
-    <h2>Heatmap temporal — taxa NTN-B (datas × vértices)</h2>
-    <div id="chart-curves-heatmap" class="chart-tall"></div>
-  </div>
-  <div class="panel">
-    <h2>Curva ETTJ Pré — últimos dias úteis</h2>
-    <div id="chart-curves-pre-compare" class="chart"></div>
-  </div>
-  <div class="panel">
-    <h2>Heatmap temporal — taxa Pré (datas × vértices)</h2>
-    <div id="chart-curves-pre-heatmap" class="chart-tall"></div>
+  <div class="curves-grid">
+    <div class="panel">
+      <h2>Curva ETTJ NTN-B — últimos dias úteis</h2>
+      <div id="chart-curves-compare" class="chart"></div>
+    </div>
+    <div class="panel">
+      <h2>Curva ETTJ Pré — últimos dias úteis</h2>
+      <div id="chart-curves-pre-compare" class="chart"></div>
+    </div>
+    <div class="panel">
+      <h2>Heatmap temporal — taxa NTN-B (datas × vértices)</h2>
+      <div id="chart-curves-heatmap" class="chart-tall"></div>
+    </div>
+    <div class="panel">
+      <h2>Heatmap temporal — taxa Pré (datas × vértices)</h2>
+      <div id="chart-curves-pre-heatmap" class="chart-tall"></div>
+    </div>
   </div>
 </section>
 
@@ -295,6 +307,7 @@
           <option value="pp">% do PAR</option>
         </select>
       </label>
+      <input type="text" id="disp-search" placeholder="Buscar código ou emissor..." style="min-width:220px;">
       <button type="button" id="tl-play" class="play-btn">▶ Play (Anterior → Atual)</button>
       <label>Velocidade:
         <select id="tl-speed">
@@ -960,6 +973,8 @@ let DISP_INDEX = null;
 let DISP_DATA = null;
 let DISP_FP_ATUAL = null, DISP_FP_ANTERIOR = null;
 let DISP_DATE_ATUAL = null, DISP_DATE_ANTERIOR = null;
+let DISP_SEARCH = "";
+const DISP_HIGHLIGHT_COLOR = "#fbbf24";
 
 // Paleta qualitativa (Tableau-ish) usada para colorir traces de setor/emissor.
 // 20 cores; ciclo automático se exceder.
@@ -1001,6 +1016,18 @@ async function renderDispersao() {
   });
   document.getElementById("disp-yaxis").addEventListener("change", drawDispersion);
   document.getElementById("disp-idx").addEventListener("change", drawDispersion);
+  // Busca com debounce: re-renderiza dispersão (ou frame atual do play)
+  // mantendo destaque persistente durante a animação.
+  const searchEl = document.getElementById("disp-search");
+  searchEl.value = DISP_SEARCH;
+  let _searchTimer = null;
+  searchEl.addEventListener("input", e => {
+    if (_searchTimer) clearTimeout(_searchTimer);
+    _searchTimer = setTimeout(() => {
+      DISP_SEARCH = (e.target.value || "").trim();
+      drawDispersion();
+    }, 250);
+  });
 
   setupTimeline();
   await loadAndRenderDispersion(DISP_DATE_ATUAL);
@@ -1051,6 +1078,13 @@ function drawDispersion() {
   const yIsPP = yKey === "pp";
   const idxSel = document.getElementById("disp-idx").value;
   const setoresSel = _getSetoresSelected();
+  const searchTerm = (DISP_SEARCH || "").toLowerCase();
+  const hasSearch = searchTerm.length > 0;
+  const _matches = p =>
+    hasSearch && (
+      (p.c || "").toLowerCase().includes(searchTerm) ||
+      (p.e || "").toLowerCase().includes(searchTerm)
+    );
 
   // Filtra papéis aplicáveis e descobre quantos setores únicos restam — se
   // for ≤1, agrupa por emissor; senão, agrupa por setor.
@@ -1065,6 +1099,8 @@ function drawDispersion() {
     if (p.s) setoresVisiveis.add(p.s);
   }
   const groupByEmissor = setoresVisiveis.size <= 1;
+  // Quando a busca está ativa, base traces ficam esmaecidos.
+  const baseOpacity = hasSearch ? 0.3 : 0.85;
 
   // Atribui cor estável por chave (1ª aparição → 1ª cor da paleta).
   const colorByKey = {};
@@ -1080,7 +1116,7 @@ function drawDispersion() {
       const fontColor = adaptiveTextColor(color);
       traces[grp] = {
         x:[], y:[], customdata:[], type:"scatter", mode:"markers", name: grp,
-        marker:{ color, size:6, opacity:0.85, line:{width:0} },
+        marker:{ color, size:6, opacity: baseOpacity, line:{width:0} },
         hoverlabel: {
           bgcolor: color, bordercolor: color,
           font: { color: fontColor },
@@ -1109,7 +1145,7 @@ function drawDispersion() {
     let totalTail = 0;
     const merged = {
       x:[], y:[], customdata:[], type:"scatter", mode:"markers",
-      name: "", marker:{ color: "#666", size:6, opacity:0.85, line:{width:0} },
+      name: "", marker:{ color: "#666", size:6, opacity: baseOpacity, line:{width:0} },
       hoverlabel: { bgcolor: "#666", bordercolor: "#666", font: { color: "#e6e9ef" } },
       hovertemplate:
         "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>" +
@@ -1129,6 +1165,29 @@ function drawDispersion() {
     head.push(merged);
     data.length = 0;
     data.push(...head);
+  }
+  // Trace de destaque (busca): renderizado por último → fica em cima.
+  if (hasSearch) {
+    const matched = filtered.filter(_matches);
+    const hi = {
+      x: matched.map(p => p.d),
+      y: matched.map(p => p[yKey]),
+      customdata: matched.map(p => [p.c, (p.e||'').slice(0,40), p.t, p.i, p.s || '—']),
+      type:"scatter", mode:"markers",
+      name: `Selecionado: ${DISP_SEARCH} (n=${matched.length})`,
+      marker:{ color: DISP_HIGHLIGHT_COLOR, size: 13, opacity: 1.0,
+               line:{ width: 1.5, color: "#0e1116" } },
+      hoverlabel: { bgcolor: DISP_HIGHLIGHT_COLOR, bordercolor: DISP_HIGHLIGHT_COLOR,
+                    font: { color: "#0e1116" } },
+      hovertemplate:
+        "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>" +
+        "Setor %{customdata[4]}<br>" +
+        "Indexador %{customdata[3]}<br>" +
+        "Duration %{x:.2f}a<br>Taxa %{customdata[2]:.2f}%<br>" +
+        (yIsPP ? "% do PAR %{y:.4f}%" : "Spread %{y:.2f} pp") +
+        "<extra></extra>",
+    };
+    data.push(hi);
   }
   let yTitle = yIsPP ? "% do PAR"
     : (idxSel === "DI+" ? "Spread sobre CDI (pp)"
@@ -1480,6 +1539,55 @@ function buildMovTable() {
     el.style.backgroundColor = _bgForPctPar(v, MOV_STATS && MOV_STATS.pparDistP95);
     return v.toFixed(2) + "%";
   };
+  // headerFilter helpers
+  const likeCI = (term, value) => {
+    if (term == null || term === "") return true;
+    const s = (value == null ? "" : String(value)).toLowerCase();
+    return s.includes(String(term).toLowerCase());
+  };
+  // Emissor: aceita múltiplos termos separados por vírgula (OR logico).
+  const likeMulti = (term, value) => {
+    if (term == null || term === "") return true;
+    const s = (value == null ? "" : String(value)).toLowerCase();
+    const parts = String(term).toLowerCase().split(",")
+      .map(t => t.trim()).filter(Boolean);
+    if (!parts.length) return true;
+    return parts.some(p => s.includes(p));
+  };
+  // Numeric: suporta sintaxe '>5', '<10', '>=2.5', '<=8', '=3' ou apenas
+  // substring se não casar com nenhum desses operadores.
+  const numericFilter = (term, value) => {
+    if (term == null || term === "") return true;
+    const s = String(term).trim();
+    if (value == null) return false;
+    const m = s.match(/^(>=|<=|>|<|=)\s*(-?\d+(?:[.,]\d+)?)$/);
+    if (m) {
+      const op = m[1];
+      const ref = parseFloat(m[2].replace(",", "."));
+      const v = Number(value);
+      if (Number.isNaN(v)) return false;
+      if (op === ">") return v > ref;
+      if (op === "<") return v < ref;
+      if (op === ">=") return v >= ref;
+      if (op === "<=") return v <= ref;
+      if (op === "=") return v === ref;
+    }
+    return likeCI(term, value);
+  };
+  const setorOpts = (() => {
+    const all = new Set();
+    for (const date of (MOV_DATA.dates || []))
+      for (const r of MOV_DATA.by_date[date].rows)
+        if (r.setor) all.add(r.setor);
+    return ["", ...[...all].sort()];
+  })();
+  const idxOpts = (() => {
+    const all = new Set();
+    for (const date of (MOV_DATA.dates || []))
+      for (const r of MOV_DATA.by_date[date].rows)
+        if (r.indexador) all.add(r.indexador);
+    return ["", ...[...all].sort()];
+  })();
   const _initialRows = _movRowsForCurrentDates();
   MOV_STATS = _computeMovStats(_initialRows);
   MOV_TABLE = new Tabulator("#mov-table", {
@@ -1490,30 +1598,53 @@ function buildMovTable() {
     initialSort: [{ column:"spread_pp", dir:"desc" }],
     columns: [
       { title:"Codigo", field:"codigo", width:88, frozen:true,
+        headerFilter: "input", headerFilterFunc: likeCI,
         formatter: c => {
           const r = c.getRow().getData();
           let s = c.getValue();
           if (r.estagnado) s += '<span class="badge warn">estag</span>';
           return s;
         } },
-      { title:"Emissor", field:"emissor", minWidth:200 },
+      { title:"Emissor", field:"emissor", minWidth:200,
+        headerFilter: "input", headerFilterFunc: likeMulti,
+        headerFilterPlaceholder: "ex: Aegea, Corsan" },
       { title:"Setor", field:"setor", width:160,
+        headerFilter: "list",
+        headerFilterParams: { values: setorOpts, clearable: true },
+        headerFilterFunc: "=",
         formatter: c => c.getValue() || "—" },
-      { title:"Index", field:"indexador", width:80 },
+      { title:"Index", field:"indexador", width:80,
+        headerFilter: "list",
+        headerFilterParams: { values: idxOpts, clearable: true },
+        headerFilterFunc: "=" },
       { title:"Taxa", field:"taxa", width:78, hozAlign:"right",
+        headerFilter: "input", headerFilterFunc: numericFilter,
+        headerFilterPlaceholder: ">5",
         formatter: c => fmtPct(c.getValue()) },
       { title:"%PAR", field:"pct_pu_par", width:84, hozAlign:"right",
+        headerFilter: "input", headerFilterFunc: numericFilter,
+        headerFilterPlaceholder: ">100",
         formatter: fmtPctPar },
       { title:"Duration", field:"duration_anos", width:90, hozAlign:"right",
+        headerFilter: "input", headerFilterFunc: numericFilter,
+        headerFilterPlaceholder: ">2",
         formatter: c => fmtAnos(c.getValue()) },
-      { title:"Vencimento", field:"vencimento", width:105 },
+      { title:"Vencimento", field:"vencimento", width:105,
+        headerFilter: "input", headerFilterFunc: likeCI },
       { title:"Ref Venc", field:"benchmark_vencimento", width:105,
+        headerFilter: "input", headerFilterFunc: likeCI,
         formatter: c => c.getValue() || "-" },
       { title:"Spread Anterior", field:"spread_ref_pp", width:130, hozAlign:"right",
+        headerFilter: "input", headerFilterFunc: numericFilter,
+        headerFilterPlaceholder: ">1.5",
         formatter: fmtSpread },
       { title:"Spread Atual", field:"spread_pp", width:120, hozAlign:"right",
+        headerFilter: "input", headerFilterFunc: numericFilter,
+        headerFilterPlaceholder: ">1.5",
         formatter: fmtSpread },
       { title:"Delta Spread", field:"delta_bps", width:120, hozAlign:"right",
+        headerFilter: "input", headerFilterFunc: numericFilter,
+        headerFilterPlaceholder: ">10",
         formatter: fmtDelta },
     ],
   });
@@ -1557,11 +1688,19 @@ function _heatBuckets() {
   return HEAT_IDX === "DI+" ? _HEAT_BUCKETS_SHORT : _HEAT_BUCKETS_LARGE;
 }
 
+// Label e separador visual da linha agregada no heatmap.
+const HEAT_TOTAL_LABEL = "TODOS";
+// Linha em branco entre o último setor e a linha agregada (visual divider).
+const HEAT_TOTAL_SPACER = "";
+
 function _heatGridFor(papers) {
-  // Retorna { means, counts } indexado por setor (linhas) × bucket (colunas).
+  // Retorna { means, counts, rows } indexado por linha (setores + spacer +
+  // TODOS) × bucket (colunas). A linha TODOS agrega todos os papéis que
+  // passaram pelo filtro de indexador, independente de setor.
   const setores = HEAT.setores || [];
   const buckets = _heatBuckets();
-  const acc = {};  // key "setor|i_bucket" -> array
+  const acc = {};      // key "setor|j" -> array
+  const total = {};    // j -> array
   for (const p of papers) {
     if (HEAT_IDX !== "ambos" && p.i !== HEAT_IDX) continue;
     let bi = -1;
@@ -1573,17 +1712,26 @@ function _heatGridFor(papers) {
     const k = p.s + "|" + bi;
     if (!acc[k]) acc[k] = [];
     acc[k].push(p.sp);
+    if (!total[bi]) total[bi] = [];
+    total[bi].push(p.sp);
   }
-  const means = setores.map(s => buckets.map((_, j) => {
-    const arr = acc[s + "|" + j];
-    if (!arr || !arr.length) return null;
-    return Math.round((arr.reduce((a,b)=>a+b,0) / arr.length) * 10000) / 10000;
-  }));
-  const counts = setores.map(s => buckets.map((_, j) => {
+  const _avg = arr => arr && arr.length
+    ? Math.round((arr.reduce((a,b)=>a+b,0) / arr.length) * 10000) / 10000
+    : null;
+  const meansSet = setores.map(s => buckets.map((_, j) => _avg(acc[s + "|" + j])));
+  const countsSet = setores.map(s => buckets.map((_, j) => {
     const arr = acc[s + "|" + j];
     return arr ? arr.length : 0;
   }));
-  return { means, counts };
+  const meansTotal = buckets.map((_, j) => _avg(total[j]));
+  const countsTotal = buckets.map((_, j) => total[j] ? total[j].length : 0);
+  // Spacer = linha de nulos entre setores e TODOS para criar separador visual.
+  const spacerRow = buckets.map(() => null);
+  const spacerCounts = buckets.map(() => 0);
+  const rows = [...setores, HEAT_TOTAL_SPACER, HEAT_TOTAL_LABEL];
+  const means = [...meansSet, spacerRow, meansTotal];
+  const counts = [...countsSet, spacerCounts, countsTotal];
+  return { means, counts, rows };
 }
 
 async function renderHeatmap() {
@@ -1643,9 +1791,9 @@ function drawHeatmap() {
     root.innerHTML = '<div class="empty">Sem snapshot na Data Atual.</div>';
     return;
   }
-  const setores = HEAT.setores || [];
   const buckets = _heatBuckets().map(b => b[0]);
   const curGrid = _heatGridFor(cur.papers || []);
+  const setores = curGrid.rows;
   let z, suffix, title;
   if (HEAT_MODE === "current") {
     z = curGrid.means;
@@ -1659,7 +1807,7 @@ function drawHeatmap() {
     }
     const oldGrid = _heatGridFor(old.papers || []);
     z = curGrid.means.map((row, i) => row.map((v, j) => {
-      const b = oldGrid.means[i][j];
+      const b = oldGrid.means[i] ? oldGrid.means[i][j] : null;
       return v == null || b == null ? null : Math.round((v - b) * 100.0 * 10) / 10;
     }));
     suffix = " bps";
