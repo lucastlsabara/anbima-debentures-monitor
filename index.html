@@ -176,7 +176,7 @@
 <body>
 
 <header class="top">
-  <h1 id="hdr-sub">Última Atualização: —</h1>
+  <h1 id="hdr-sub">Última Atualização em —</h1>
 </header>
 
 <nav class="tabs" id="tabs">
@@ -389,6 +389,16 @@ function brDate(iso) {
   return `${d}/${m}/${y}`;
 }
 
+const _MESES_PT = [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+];
+function brDateLong(iso) {
+  if (!iso) return "—";
+  const [, m, d] = iso.split("-");
+  return `${parseInt(d, 10)} de ${_MESES_PT[parseInt(m, 10) - 1]}`;
+}
+
 // Item 9: Default Data Anterior = data imediatamente anterior à atual em `dates`.
 function defaultAnteriorFor(atual, dates) {
   const i = dates.indexOf(atual);
@@ -442,10 +452,10 @@ async function init() {
   MANIFEST = await loadJSON("data/manifest.json");
   const hdr = document.getElementById("hdr-sub");
   if (!MANIFEST.dates.length) {
-    hdr.textContent = "Última Atualização: —";
+    hdr.textContent = "Última Atualização em —";
     return;
   }
-  hdr.textContent = "Última Atualização: " + brDate(MANIFEST.latest);
+  hdr.textContent = "Última Atualização em " + brDateLong(MANIFEST.latest);
   activateTab((location.hash || "#/visao").replace(/^#\//, ""));
 }
 
