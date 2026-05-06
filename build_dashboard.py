@@ -376,56 +376,12 @@ def build_overview(snaps: list[dict]) -> dict:
             "top_movements": top_by_idx,
         }
 
-    # Spread mediano por indexador (atual = última data; sparkline 21d).
     today = dates[-1] if dates else None
-    spread_by_indexador: list[dict] = []
-    if today:
-        enr_today = enriched_by_date[today]
-        by_grp_today: dict[str, list[float]] = defaultdict(list)
-        for p in enr_today:
-            if p.get("spread_pp") is not None and not p.get("flag_iliquido"):
-                by_grp_today[p["indexador_grupo"]].append(p["spread_pp"])
-        sparkline_window = 21
-        idx_today = len(snaps) - 1
-        start = max(0, idx_today - sparkline_window + 1)
-        spark_dates: list[str] = []
-        spark_by_grp: dict[str, list[float | None]] = defaultdict(list)
-        for j in range(start, idx_today + 1):
-            s = snaps[j]
-            spark_dates.append(s["data_referencia"])
-            bucket: dict[str, list[float]] = defaultdict(list)
-            for d in _filter_allowed(s["debentures"]):
-                sp = d.get("spread_pp")
-                if sp is None or d.get("flag_iliquido"):
-                    continue
-                bucket[_indexador_group(d.get("indice"))].append(sp)
-            for grp in by_grp_today.keys():
-                spark_by_grp[grp].append(_median(bucket.get(grp, [])))
-        # Gráfico Spread Mediano por Indexador: mantém apenas IPCA+ e DI+
-        # (Prefixado removido por inconsistência amostral).
-        for grp in ALLOWED_INDEXADORES:
-            if grp == "Prefixado":
-                continue
-            if grp not in by_grp_today:
-                continue
-            vals = by_grp_today[grp]
-            spread_by_indexador.append({
-                "label": grp,
-                "median_spread_pp": round(_median(vals), 4),
-                "mean_spread_pp": round(_mean(vals), 4),
-                "count": len(vals),
-                "sparkline_dates": spark_dates,
-                "sparkline_median": [
-                    round(v, 4) if v is not None else None for v in spark_by_grp[grp]
-                ],
-            })
-
     return {
         "dates": dates,
         "latest": today,
         "by_date": by_date,
         "by_pair": pairs,
-        "spread_by_indexador": spread_by_indexador,
         "diagnostico_metodo": snaps[-1].get("diagnostico_metodo") if snaps else None,
     }
 
@@ -498,53 +454,35 @@ _BUCKETS: list[tuple[str, float, float]] = [
 ]
 
 
-def _heatmap_grid_by_setor(papers: list[dict]
-                           ) -> tuple[list[list[float | None]], list[list[int]]]:
-    """Linhas = SECTORS, colunas = buckets. Médias e contagens."""
-    by_cell: dict[tuple[str, str], list[float]] = defaultdict(list)
-    for p in papers:
-        sp = p.get("spread_pp")
-        dur = p.get("duration_anos")
-        if sp is None or dur is None:
-            continue
-        setor = p.get("setor") or "Outros"
-        bucket = None
-        for label, lo, hi in _BUCKETS:
-            if lo <= dur < hi:
-                bucket = label
-                break
-        if bucket is None:
-            continue
-        by_cell[(setor, bucket)].append(sp)
-    means: list[list[float | None]] = []
-    counts: list[list[int]] = []
-    for setor in SECTORS:
-        row_m = []
-        row_c = []
-        for label, _, _ in _BUCKETS:
-            vs = by_cell.get((setor, label), [])
-            row_m.append(round(_mean(vs), 4) if vs else None)
-            row_c.append(len(vs))
-        means.append(row_m)
-        counts.append(row_c)
-    return means, counts
-
-
 def build_heatmap_history(snaps: list[dict]) -> dict:
-    """Emite o grid (setor × bucket) para CADA data — frontend faz Δ."""
+    """Emite papéis raw (setor, indexador, duration, spread) por data.
+
+    Frontend bucketiza on-the-fly conforme indexador selecionado:
+      - IPCA+ ou Ambos: buckets ano-a-ano até 10a + 10a+
+      - DI+ apenas:     buckets ano-a-ano até 5a + 5a+
+    """
     by_date: dict[str, dict] = {}
     for s in snaps:
         enr = _enrich(_filter_allowed(s["debentures"]))
-        liq = [d for d in enr
-               if not d.get("flag_iliquido") and d.get("spread_pp") is not None]
-        means, counts = _heatmap_grid_by_setor(liq)
-        by_date[s["data_referencia"]] = {
-            "spread_pp": means,
-            "counts": counts,
-        }
+        rows = []
+        for d in enr:
+            sp = d.get("spread_pp")
+            dur = d.get("duration_anos")
+            if sp is None or dur is None or d.get("flag_iliquido"):
+                continue
+            grp = d.get("indexador_grupo")
+            if grp not in ("IPCA+", "DI+"):
+                continue
+            rows.append({
+                "s": d.get("setor") or "Outros",
+                "i": grp,
+                "d": dur,
+                "sp": round(sp, 4),
+            })
+        by_date[s["data_referencia"]] = {"papers": rows}
     return {
         "setores": SECTORS,
-        "buckets": [b[0] for b in _BUCKETS],
+        "buckets": [b[0] for b in _BUCKETS],  # legado, ainda emitido p/ back-compat
         "dates": [s["data_referencia"] for s in snaps],
         "by_date": by_date,
     }

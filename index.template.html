@@ -119,6 +119,9 @@
     padding:20px 24px 28px; border-top:1px solid var(--border);
     margin-top:14px;
   }
+  /* Filter rows (linhas explicitas de filtros) */
+  .filter-row { margin-bottom: 8px; }
+  .filter-row + .filter-row { margin-top: 0; }
   /* Dispersão timeline play button */
   .play-btn {
     background:var(--accent); color:#0e1116; border:none;
@@ -229,8 +232,8 @@
       <div id="chart-curves-overlay" class="chart"></div>
     </div>
     <div class="panel">
-      <h2>Spread mediano por indexador (atual + sparkline 21d)</h2>
-      <div id="chart-spread-by-idx" class="chart"></div>
+      <h2>Curva Pré — Data Atual vs Data Anterior</h2>
+      <div id="chart-curves-pre" class="chart"></div>
     </div>
   </div>
 </section>
@@ -238,9 +241,10 @@
 <!-- ===================== Tab: Curvas Históricas ===================== -->
 <section id="tab-curvas" class="tab hide">
   <div class="panel">
+    <h2>Curva ETTJ NTN-B — últimos dias úteis</h2>
     <div class="controls">
-      <label>Data Atual: <input type="text" id="curve-date-atual" placeholder="YYYY-MM-DD"></label>
-      <label>Data Anterior: <input type="text" id="curve-date-anterior" placeholder="YYYY-MM-DD"></label>
+      <label>Data Final: <input type="text" id="curve-date-atual" placeholder="YYYY-MM-DD"></label>
+      <label>Data Inicial: <input type="text" id="curve-date-anterior" placeholder="YYYY-MM-DD"></label>
     </div>
     <div id="chart-curves-compare" class="chart"></div>
   </div>
@@ -248,18 +252,28 @@
     <h2>Heatmap temporal — taxa NTN-B (datas × vértices)</h2>
     <div id="chart-curves-heatmap" class="chart-tall"></div>
   </div>
+  <div class="panel">
+    <h2>Curva ETTJ Pré — últimos dias úteis</h2>
+    <div id="chart-curves-pre-compare" class="chart"></div>
+  </div>
+  <div class="panel">
+    <h2>Heatmap temporal — taxa Pré (datas × vértices)</h2>
+    <div id="chart-curves-pre-heatmap" class="chart-tall"></div>
+  </div>
 </section>
 
 <!-- ===================== Tab: Dispersão ===================== -->
 <section id="tab-dispersao" class="tab hide">
   <div class="panel">
-    <div class="controls">
+    <div class="controls filter-row">
       <label>Data Atual:
         <input type="text" id="disp-date-atual" placeholder="YYYY-MM-DD">
       </label>
       <label>Data Anterior:
         <input type="text" id="disp-date-anterior" placeholder="YYYY-MM-DD">
       </label>
+    </div>
+    <div class="controls filter-row">
       <label>Indexador:
         <select id="disp-idx"><option value="">Todos</option></select>
       </label>
@@ -330,6 +344,13 @@
       </label>
       <label>Data Anterior:
         <input type="text" id="hm-date-anterior" placeholder="YYYY-MM-DD">
+      </label>
+      <label>Indexador:
+        <select id="heat-idx">
+          <option value="ambos" selected>Ambos</option>
+          <option value="IPCA+">Apenas IPCA+</option>
+          <option value="DI+">Apenas CDI</option>
+        </select>
       </label>
       <button data-hm="current" class="hm-btn active">Spread atual (pp)</button>
       <button data-hm="delta" class="hm-btn">Δ atual − anterior (bps)</button>
@@ -536,7 +557,7 @@ function drawVisao() {
   renderTopMovers(topm["IPCA+"] || null, "IPCA+", "top-movers-ipca");
   renderTopMovers(topm["DI+"]   || null, "CDI+",  "top-movers-cdi");
   renderCurvesOverlay(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
-  renderSpreadByIndexador(OVERVIEW.spread_by_indexador);
+  renderCurvesPre(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
 }
 
 function _recomputeVisPair(atual, anterior) {
@@ -675,29 +696,35 @@ function renderCurvesOverlay(atual, anterior) {
   Plotly.newPlot("chart-curves-overlay", traces, layout, PLOTLY_CONFIG);
 }
 
-function renderSpreadByIndexador(rows) {
-  if (!rows || !rows.length) {
-    document.getElementById("chart-spread-by-idx").innerHTML =
-      '<div class="empty">Sem dados.</div>';
+function renderCurvesPre(atual, anterior) {
+  const root = document.getElementById("chart-curves-pre");
+  const cAt = OVERVIEW.by_date[atual];
+  const cAn = anterior ? OVERVIEW.by_date[anterior] : null;
+  const hasAt = cAt && cAt.curve_pre && cAt.curve_pre.length;
+  const hasAn = cAn && cAn.curve_pre && cAn.curve_pre.length;
+  if (!hasAt && !hasAn) {
+    root.innerHTML = '<div class="empty">Curva Pré indisponível para esta data.</div>';
     return;
   }
-  const bar = {
-    x: rows.map(r => r.label),
-    y: rows.map(r => r.median_spread_pp),
-    type: "bar",
-    marker: { color: cssVar("--accent") },
-    text: rows.map(r => r.median_spread_pp.toFixed(2) + " pp · n=" + r.count),
-    textposition: "outside",
-    hovertemplate: "%{x}<br>Mediana: %{y:.2f} pp<br>n=%{customdata}<extra></extra>",
-    customdata: rows.map(r => r.count),
-  };
-  const layout = Object.assign(PLOTLY_LAYOUT(), {
-    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
-      { title:"Mediana spread (pp)", ticksuffix:" pp" }),
-    showlegend: false,
-    margin:{ l:50, r:18, t:30, b:40 },
+  const traces = [];
+  if (hasAt) traces.push({
+    x: cAt.curve_pre.map(p => p.a), y: cAt.curve_pre.map(p => p.t),
+    type:"scatter", mode:"lines",
+    name: "Atual (" + brDate(atual) + ")",
+    line:{ width: 2.5, color: cssVar("--accent") },
   });
-  Plotly.newPlot("chart-spread-by-idx", [bar], layout, PLOTLY_CONFIG);
+  if (hasAn) traces.push({
+    x: cAn.curve_pre.map(p => p.a), y: cAn.curve_pre.map(p => p.t),
+    type:"scatter", mode:"lines",
+    name: "Anterior (" + brDate(anterior) + ")",
+    line:{ width: 1.5, color: cssVar("--muted") },
+  });
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title:"Vértice (anos)", type:"log" }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title:"Taxa Pré (%)", ticksuffix:"%" }),
+    showlegend: true,
+  });
+  Plotly.newPlot("chart-curves-pre", traces, layout, PLOTLY_CONFIG);
 }
 
 function renderHistogram(h, displayLabel, containerId) {
@@ -772,11 +799,16 @@ let CURVES = null;
 let CURVE_FP_ATUAL = null, CURVE_FP_ANTERIOR = null;
 let CURVE_DATE_ATUAL = null, CURVE_DATE_ANTERIOR = null;
 
+const CURVE_WINDOW_DEFAULT = 5;  // últimos N dias úteis
+
 async function renderCurvas() {
   CURVES = await loadJSON("data/curves_history.json");
   const dates = CURVES.dates;
   CURVE_DATE_ATUAL = dates[dates.length - 1];
-  CURVE_DATE_ANTERIOR = defaultAnteriorFor(CURVE_DATE_ATUAL, dates);
+  // Default: 5º dia útil para trás (4 índices atrás na lista de snapshots).
+  const idxFinal = dates.length - 1;
+  const idxInicial = Math.max(0, idxFinal - (CURVE_WINDOW_DEFAULT - 1));
+  CURVE_DATE_ANTERIOR = dates[idxInicial] || dates[0];
   if (CURVE_FP_ATUAL) CURVE_FP_ATUAL.destroy();
   if (CURVE_FP_ANTERIOR) CURVE_FP_ANTERIOR.destroy();
   CURVE_FP_ATUAL = flatpickr("#curve-date-atual", {
@@ -784,78 +816,141 @@ async function renderCurvas() {
     onChange: (_, d) => { if (d) onCurveDateChange("atual", d); },
   });
   CURVE_FP_ANTERIOR = flatpickr("#curve-date-anterior", {
-    dateFormat:"Y-m-d", enable: dates.filter(d => d < CURVE_DATE_ATUAL),
+    dateFormat:"Y-m-d", enable: dates.filter(d => d <= CURVE_DATE_ATUAL),
     defaultDate: CURVE_DATE_ANTERIOR || undefined,
     onChange: (_, d) => { if (d) onCurveDateChange("anterior", d); },
   });
-  drawCurvesCompare();
-  drawCurvesHeatmap();
+  drawCurvasMulti("ipca");
+  drawCurvasHeatmapTab("ipca");
+  drawCurvasMulti("pre");
+  drawCurvasHeatmapTab("pre");
 }
 
 function onCurveDateChange(which, d) {
   if (which === "atual") {
     CURVE_DATE_ATUAL = d;
-    if (CURVE_DATE_ANTERIOR && CURVE_DATE_ANTERIOR >= CURVE_DATE_ATUAL) {
-      CURVE_DATE_ANTERIOR = defaultAnteriorFor(CURVE_DATE_ATUAL, CURVES.dates);
+    if (CURVE_DATE_ANTERIOR && CURVE_DATE_ANTERIOR > CURVE_DATE_ATUAL) {
+      const dates = CURVES.dates;
+      const idxFinal = dates.indexOf(CURVE_DATE_ATUAL);
+      const idxInicial = Math.max(0, idxFinal - (CURVE_WINDOW_DEFAULT - 1));
+      CURVE_DATE_ANTERIOR = dates[idxInicial];
     }
     if (CURVE_FP_ANTERIOR) {
-      CURVE_FP_ANTERIOR.set("enable", CURVES.dates.filter(d2 => d2 < CURVE_DATE_ATUAL));
+      CURVE_FP_ANTERIOR.set("enable", CURVES.dates.filter(d2 => d2 <= CURVE_DATE_ATUAL));
       if (CURVE_DATE_ANTERIOR) CURVE_FP_ANTERIOR.setDate(CURVE_DATE_ANTERIOR, false);
       else CURVE_FP_ANTERIOR.clear(false);
     }
   } else {
     CURVE_DATE_ANTERIOR = d;
   }
-  drawCurvesCompare();
+  drawCurvasMulti("ipca");
+  drawCurvasHeatmapTab("ipca");
+  drawCurvasMulti("pre");
+  drawCurvasHeatmapTab("pre");
 }
 
-function drawCurvesCompare() {
+function _curveSeries(kind) {
+  // kind: "ipca" | "pre"
+  if (kind === "pre") {
+    return {
+      vertAnos: CURVES.vertices_pre_anos || CURVES.vertices_anos,
+      matrix: CURVES.matrix_pre || [],
+      yTitle: "Taxa Pré (%)",
+      containerCompare: "chart-curves-pre-compare",
+      containerHeatmap: "chart-curves-pre-heatmap",
+    };
+  }
+  return {
+    vertAnos: CURVES.vertices_anos,
+    matrix: CURVES.matrix_ipca || CURVES.matrix,
+    yTitle: "Taxa NTN-B (%)",
+    containerCompare: "chart-curves-compare",
+    containerHeatmap: "chart-curves-heatmap",
+  };
+}
+
+// Paleta gradiente do mais recente (azul intenso) ao mais antigo (cinza).
+function _curvePaletteN(n) {
+  if (n <= 0) return [];
+  const stops = [
+    "#5a9bff", "#7facff", "#9fbedf", "#b8c8d8", "#8a96a8",
+  ];
+  if (n <= stops.length) return stops.slice(0, n);
+  // Para N>5, interpola além da última.
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    out.push(stops[Math.min(stops.length - 1, Math.round(i * (stops.length - 1) / (n - 1)))]);
+  }
+  return out;
+}
+
+function _curveDateRange() {
   const dates = CURVES.dates;
-  const i1 = dates.indexOf(CURVE_DATE_ATUAL);
-  const i2 = CURVE_DATE_ANTERIOR ? dates.indexOf(CURVE_DATE_ANTERIOR) : -1;
-  const traces = [];
-  if (i1 >= 0) traces.push({
-    x: CURVES.vertices_anos, y: CURVES.matrix[i1],
-    type:"scatter", mode:"lines",
-    name: "Atual (" + brDate(dates[i1]) + ")",
-    line:{ color: cssVar("--accent"), width:2 },
-  });
-  if (i2 >= 0) traces.push({
-    x: CURVES.vertices_anos, y: CURVES.matrix[i2],
-    type:"scatter", mode:"lines",
-    name: "Anterior (" + brDate(dates[i2]) + ")",
-    line:{ color: cssVar("--muted"), width:2 },
-  });
-  const layout = Object.assign(PLOTLY_LAYOUT(), {
-    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis,
-      { title:"Vértice (anos)", type:"log" }),
-    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
-      { title:"Taxa NTN-B (%)", ticksuffix:"%" }),
-  });
-  Plotly.newPlot("chart-curves-compare", traces, layout, PLOTLY_CONFIG);
+  const iEnd = dates.indexOf(CURVE_DATE_ATUAL);
+  const iStart = CURVE_DATE_ANTERIOR != null ? dates.indexOf(CURVE_DATE_ANTERIOR) : -1;
+  if (iEnd < 0) return [];
+  const lo = iStart >= 0 ? Math.min(iStart, iEnd) : Math.max(0, iEnd - (CURVE_WINDOW_DEFAULT - 1));
+  return dates.slice(lo, iEnd + 1);
 }
 
-function drawCurvesHeatmap() {
-  const z = CURVES.matrix;
+function drawCurvasMulti(kind) {
+  const cfg = _curveSeries(kind);
+  const root = document.getElementById(cfg.containerCompare);
+  const range = _curveDateRange();
+  if (!range.length || !cfg.matrix.length) {
+    root.innerHTML = '<div class="empty">Sem dados de curva no intervalo.</div>';
+    return;
+  }
+  // Mais recente primeiro na ordem visual (legenda).
+  const ordered = range.slice().reverse();
+  const colors = _curvePaletteN(ordered.length);
+  const traces = [];
+  let hasData = false;
+  ordered.forEach((d, i) => {
+    const ix = CURVES.dates.indexOf(d);
+    if (ix < 0) return;
+    const y = cfg.matrix[ix];
+    if (!y || y.every(v => v == null)) return;
+    hasData = true;
+    traces.push({
+      x: cfg.vertAnos, y,
+      type:"scatter", mode:"lines",
+      name: brDate(d),
+      line:{ color: colors[i], width: i === 0 ? 2.5 : 1.5 },
+    });
+  });
+  if (!hasData) {
+    root.innerHTML = '<div class="empty">Curva indisponível para o intervalo selecionado.</div>';
+    return;
+  }
   const layout = Object.assign(PLOTLY_LAYOUT(), {
-    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis,
-      { title:"Vértice (anos)", type:"log" }),
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title:"Vértice (anos)", type:"log" }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title: cfg.yTitle, ticksuffix:"%" }),
+    showlegend: true,
+  });
+  Plotly.newPlot(cfg.containerCompare, traces, layout, PLOTLY_CONFIG);
+}
+
+function drawCurvasHeatmapTab(kind) {
+  const cfg = _curveSeries(kind);
+  const root = document.getElementById(cfg.containerHeatmap);
+  if (!cfg.matrix.length || CURVES.dates.length < 2) {
+    root.innerHTML = '<div class="empty">Heatmap requer ≥2 datas. Aguardando rotina diária.</div>';
+    return;
+  }
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title:"Vértice (anos)", type:"log" }),
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title:"Data" }),
     margin: { l:90, r:18, t:28, b:40 },
   });
   const trace = {
-    z, x: CURVES.vertices_anos, y: CURVES.dates,
+    z: cfg.matrix, x: cfg.vertAnos, y: CURVES.dates,
     type: "heatmap",
     colorscale: [[0,"#3a4d6b"],[0.5,"#7d92b3"],[1,"#dadfea"]],
     colorbar: { title:"Taxa (%)", thickness: 12, len: 0.8 },
     hovertemplate: "Data %{y}<br>Vértice %{x}a<br>Taxa %{z:.2f}%<extra></extra>",
   };
-  if (CURVES.dates.length < 2) {
-    document.getElementById("chart-curves-heatmap").innerHTML =
-      '<div class="empty">Heatmap requer ≥2 datas. Aguardando rotina diária.</div>';
-    return;
-  }
-  Plotly.newPlot("chart-curves-heatmap", [trace], layout, PLOTLY_CONFIG);
+  Plotly.newPlot(cfg.containerHeatmap, [trace], layout, PLOTLY_CONFIG);
 }
 
 /* ============================================================
@@ -1444,8 +1539,52 @@ function applyMovFilter() {
  * ============================================================ */
 let HEAT = null;
 let HEAT_MODE = "current";
+let HEAT_IDX = "ambos";
 let HM_DATE_ATUAL = null, HM_DATE_ANTERIOR = null;
 let HM_FP_ATUAL = null, HM_FP_ANTERIOR = null;
+
+const _HEAT_BUCKETS_LARGE = [
+  ["0–1a", 0, 1], ["1–2a", 1, 2], ["2–3a", 2, 3], ["3–4a", 3, 4],
+  ["4–5a", 4, 5], ["5–6a", 5, 6], ["6–7a", 6, 7], ["7–8a", 7, 8],
+  ["8–9a", 8, 9], ["9–10a", 9, 10], ["10a+", 10, 9999],
+];
+const _HEAT_BUCKETS_SHORT = [
+  ["0–1a", 0, 1], ["1–2a", 1, 2], ["2–3a", 2, 3],
+  ["3–4a", 3, 4], ["4–5a", 4, 5], ["5a+", 5, 9999],
+];
+
+function _heatBuckets() {
+  return HEAT_IDX === "DI+" ? _HEAT_BUCKETS_SHORT : _HEAT_BUCKETS_LARGE;
+}
+
+function _heatGridFor(papers) {
+  // Retorna { means, counts } indexado por setor (linhas) × bucket (colunas).
+  const setores = HEAT.setores || [];
+  const buckets = _heatBuckets();
+  const acc = {};  // key "setor|i_bucket" -> array
+  for (const p of papers) {
+    if (HEAT_IDX !== "ambos" && p.i !== HEAT_IDX) continue;
+    let bi = -1;
+    for (let i = 0; i < buckets.length; i++) {
+      const [, lo, hi] = buckets[i];
+      if (p.d >= lo && p.d < hi) { bi = i; break; }
+    }
+    if (bi < 0) continue;
+    const k = p.s + "|" + bi;
+    if (!acc[k]) acc[k] = [];
+    acc[k].push(p.sp);
+  }
+  const means = setores.map(s => buckets.map((_, j) => {
+    const arr = acc[s + "|" + j];
+    if (!arr || !arr.length) return null;
+    return Math.round((arr.reduce((a,b)=>a+b,0) / arr.length) * 10000) / 10000;
+  }));
+  const counts = setores.map(s => buckets.map((_, j) => {
+    const arr = acc[s + "|" + j];
+    return arr ? arr.length : 0;
+  }));
+  return { means, counts };
+}
 
 async function renderHeatmap() {
   HEAT = await loadJSON("data/heatmap_history.json");
@@ -1470,6 +1609,12 @@ async function renderHeatmap() {
       HEAT_MODE = b.dataset.hm;
       drawHeatmap();
     });
+  });
+  const idxEl = document.getElementById("heat-idx");
+  idxEl.value = HEAT_IDX;
+  idxEl.addEventListener("change", e => {
+    HEAT_IDX = e.target.value;
+    drawHeatmap();
   });
   drawHeatmap();
 }
@@ -1498,11 +1643,12 @@ function drawHeatmap() {
     root.innerHTML = '<div class="empty">Sem snapshot na Data Atual.</div>';
     return;
   }
-  const setores = HEAT.setores || HEAT.indexadores || [];
-  const buckets = HEAT.buckets || [];
+  const setores = HEAT.setores || [];
+  const buckets = _heatBuckets().map(b => b[0]);
+  const curGrid = _heatGridFor(cur.papers || []);
   let z, suffix, title;
   if (HEAT_MODE === "current") {
-    z = cur.spread_pp;
+    z = curGrid.means;
     suffix = " pp";
     title = "Spread médio (pp) — " + brDate(HM_DATE_ATUAL);
   } else {
@@ -1511,8 +1657,9 @@ function drawHeatmap() {
       root.innerHTML = '<div class="empty">Selecione Data Anterior para Δ.</div>';
       return;
     }
-    z = cur.spread_pp.map((row, i) => row.map((v, j) => {
-      const b = old.spread_pp[i][j];
+    const oldGrid = _heatGridFor(old.papers || []);
+    z = curGrid.means.map((row, i) => row.map((v, j) => {
+      const b = oldGrid.means[i][j];
       return v == null || b == null ? null : Math.round((v - b) * 100.0 * 10) / 10;
     }));
     suffix = " bps";
