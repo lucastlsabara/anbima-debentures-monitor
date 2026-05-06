@@ -133,6 +133,34 @@
     padding:4px 10px; border:1px solid var(--border-strong); border-radius:4px;
     min-width:120px; text-align:center;
   }
+  /* Multi-select (Setor na Dispersão) */
+  .multi-select {
+    position:relative; display:flex; align-items:center; gap:6px;
+    color:var(--muted); font-size:12px;
+  }
+  .ms-toggle {
+    background:var(--surface2); color:var(--fg);
+    border:1px solid var(--border-strong); border-radius:4px;
+    padding:6px 10px; font-size:12.5px; font-family:inherit;
+    cursor:pointer; min-width:160px; text-align:left;
+    display:inline-flex; justify-content:space-between; align-items:center; gap:8px;
+  }
+  .ms-toggle:hover { border-color:var(--accent); }
+  .ms-caret { color:var(--muted); font-size:10px; }
+  .ms-dropdown {
+    position:absolute; top:calc(100% + 4px); left:54px; z-index:50;
+    background:var(--surface2); border:1px solid var(--border-strong);
+    border-radius:4px; padding:6px 0; min-width:240px;
+    max-height:320px; overflow-y:auto;
+    box-shadow:0 4px 16px rgba(0,0,0,0.35);
+  }
+  .ms-item { padding:4px 12px; }
+  .ms-item label {
+    display:flex; align-items:center; gap:8px;
+    cursor:pointer; color:var(--fg); font-size:12.5px;
+  }
+  .ms-item:hover { background:#22293a; }
+  .ms-all { border-bottom:1px solid var(--border); margin-bottom:4px; padding-bottom:6px; }
   /* Tabulator dark tweaks */
   .tabulator { font-size:12px; background:transparent; border:none; }
   .tabulator .tabulator-header {
@@ -235,9 +263,18 @@
       <label>Indexador:
         <select id="disp-idx"><option value="">Todos</option></select>
       </label>
-      <label>Setor:
-        <select id="disp-setor"><option value="">Todos</option></select>
-      </label>
+      <div class="multi-select" id="disp-setor-wrap">
+        <label>Setor:</label>
+        <button type="button" class="ms-toggle" id="disp-setor-toggle">
+          <span id="disp-setor-summary">Todos</span> <span class="ms-caret">▾</span>
+        </button>
+        <div class="ms-dropdown hide" id="disp-setor-dropdown" role="listbox">
+          <div class="ms-item ms-all">
+            <label><input type="checkbox" id="disp-setor-all" checked> <strong>Todos</strong></label>
+          </div>
+          <div id="disp-setor-list"></div>
+        </div>
+      </div>
       <label>Eixo Y:
         <select id="disp-yaxis">
           <option value="sp" selected>Spread</option>
@@ -328,7 +365,10 @@ const PLOTLY_LAYOUT = () => ({
   xaxis: { gridcolor: cssVar("--border"), zerolinecolor: cssVar("--border-strong") },
   yaxis: { gridcolor: cssVar("--border"), zerolinecolor: cssVar("--border-strong") },
   legend: { bgcolor: "rgba(0,0,0,0)", font:{ size:11 } },
-  hoverlabel: { bgcolor: cssVar("--surface2"), bordercolor: cssVar("--border-strong") },
+  hoverlabel: {
+    bgcolor: "#1c2230", bordercolor: "#3a4150",
+    font: { family: "inherit", size: 12, color: "#e6e9ef" },
+  },
 });
 const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
   modeBarButtonsToRemove: ["lasso2d","select2d","autoScale2d"] };
@@ -480,7 +520,7 @@ function drawVisao() {
       topm = recomputed.top_movements;
     }
   }
-  renderKpis(kpis.Todos);
+  renderKpis(kpis);
   renderHistogram(pair.histogram["IPCA+"] || null, "IPCA+", "chart-histogram-ipca");
   renderHistogram(pair.histogram["DI+"]   || null, "CDI+",  "chart-histogram-cdi");
   renderTopMovers(topm["IPCA+"] || null, "IPCA+", "top-movers-ipca");
@@ -517,6 +557,11 @@ function _recomputeVisPair(atual, anterior) {
     (groups[r.indexador] = groups[r.indexador] || []).push(m);
   }
   const kpis = { Todos: _kpisFromMovs(cur.rows, refSp, atual, anterior) };
+  for (const k of Object.keys(groups)) {
+    if (k === "Todos") continue;
+    const groupRows = cur.rows.filter(r => r.indexador === k);
+    kpis[k] = _kpisFromMovs(groupRows, refSp, atual, anterior);
+  }
   const topm = {};
   for (const k of Object.keys(groups)) {
     const arr = groups[k].slice().sort((a,b) => b.delta_spread_bps - a.delta_spread_bps);
@@ -528,15 +573,19 @@ function _recomputeVisPair(atual, anterior) {
 function _kpisFromMovs(rows, refSp, atual, anterior) {
   let nT=rows.length, nL=0, nI=0, nE=0, nSp=0;
   const deltas = [];
+  const absSpreads = [];
   for (const r of rows) {
     if (r.iliquido) nI++; else nL++;
     if (r.estagnado) nE++;
     if (r.spread_pp != null) nSp++;
+    if (!r.iliquido && r.spread_pp != null) absSpreads.push(r.spread_pp);
     if (!r.iliquido && r.spread_pp != null && refSp[r.codigo] != null) {
       deltas.push((r.spread_pp - refSp[r.codigo]) * 100.0);
     }
   }
   const med = deltas.length ? deltas.reduce((a,b)=>a+b,0)/deltas.length : null;
+  const meanAbs = absSpreads.length
+    ? absSpreads.reduce((a,b)=>a+b,0)/absSpreads.length : null;
   return {
     data_referencia: atual,
     data_anterior: anterior,
@@ -547,24 +596,31 @@ function _kpisFromMovs(rows, refSp, atual, anterior) {
     n_com_spread: nSp,
     termometro_med_bps: med != null ? Math.round(med*10)/10 : null,
     n_com_d1: deltas.length,
+    mean_spread_abs_pp: meanAbs != null ? Math.round(meanAbs*10000)/10000 : null,
+    n_spread_abs: absSpreads.length,
   };
 }
 
-function renderKpis(k) {
-  // Item 5: termômetro = média da variação do spread em bps (não soma absoluta).
-  const t = k.termometro_med_bps;
-  const tCls = t == null ? "" : (t > 0 ? "neg" : t < 0 ? "pos" : "");
+function renderKpis(kpisMap) {
+  // kpisMap: { Todos, "IPCA+", "DI+", ... } — cada um do shape de _kpis_for.
+  const all = kpisMap.Todos || {};
+  const cdi = kpisMap["DI+"] || {};
+  const ipca = kpisMap["IPCA+"] || {};
+  const tCdi = cdi.termometro_med_bps;
+  const tCdiCls = tCdi == null ? "" : (tCdi > 0 ? "neg" : tCdi < 0 ? "pos" : "");
+  const sIpca = ipca.mean_spread_abs_pp;
   const cards = [
-    { label: "Papéis (IPCA+, CDI+, Pré)", val: k.n_total,
-      hint: `${k.n_liquidos} com taxa · ${k.n_com_spread} com spread oficial` },
-    { label: "Ilíquidos no dia", val: k.n_iliquidos,
-      hint: (k.pct_iliquidos ?? 0) + "% do total" },
-    { label: "Estagnados ≥5 d.u.", val: k.n_estagnados,
-      hint: (k.pct_estagnados ?? 0) + "% do total" },
-    { label: "Termômetro · média Δspread",
-      val: t == null ? "—" : (t >= 0 ? "+" : "") + t.toFixed(1) + " bps",
-      cls: tCls,
-      hint: k.n_com_d1 + " papéis com Δ vs " + brDate(k.data_anterior) },
+    { label: "Papéis (IPCA+, CDI+, Pré)", val: all.n_total,
+      hint: `${all.n_liquidos} com taxa · ${all.n_com_spread} com spread oficial` },
+    { label: "Ilíquidos no dia", val: all.n_iliquidos,
+      hint: (all.pct_iliquidos ?? 0) + "% do total" },
+    { label: "Termômetro CDI+ · média Δspread",
+      val: tCdi == null ? "—" : (tCdi >= 0 ? "+" : "") + tCdi.toFixed(1) + " bps",
+      cls: tCdiCls,
+      hint: (cdi.n_com_d1 ?? 0) + " papéis CDI+ com Δ vs " + brDate(all.data_anterior) },
+    { label: "Termômetro IPCA+ · spread médio",
+      val: sIpca == null ? "—" : sIpca.toFixed(2) + " pp",
+      hint: (ipca.n_spread_abs ?? 0) + " papéis IPCA+ com spread" },
   ];
   document.getElementById("kpi-row").innerHTML = cards.map(c =>
     `<div class="kpi"><div class="label">${c.label}</div>` +
@@ -810,13 +866,8 @@ async function renderDispersao() {
     idxSel.appendChild(o);
   }
 
-  // Setor select (lista vinda do _index.json da dispersão).
-  const setorSel = document.getElementById("disp-setor");
-  while (setorSel.options.length > 1) setorSel.remove(1);
-  for (const s of (DISP_INDEX.setores || [])) {
-    const o = document.createElement("option"); o.value = s; o.textContent = s;
-    setorSel.appendChild(o);
-  }
+  // Setor multi-select (checklist em popover).
+  _buildSetorMultiSelect(DISP_INDEX.setores || []);
 
   if (DISP_FP_ATUAL) DISP_FP_ATUAL.destroy();
   if (DISP_FP_ANTERIOR) DISP_FP_ANTERIOR.destroy();
@@ -831,7 +882,6 @@ async function renderDispersao() {
   });
   document.getElementById("disp-yaxis").addEventListener("change", drawDispersion);
   document.getElementById("disp-idx").addEventListener("change", drawDispersion);
-  document.getElementById("disp-setor").addEventListener("change", drawDispersion);
 
   setupTimeline();
   await loadAndRenderDispersion(DISP_DATE_ATUAL);
@@ -867,12 +917,12 @@ function drawDispersion() {
   const yKey = document.getElementById("disp-yaxis").value === "pp" ? "pp" : "sp";
   const yIsPP = yKey === "pp";
   const idxSel = document.getElementById("disp-idx").value;
-  const setorSel = document.getElementById("disp-setor").value;
+  const setoresSel = _getSetoresSelected();
 
   const traces = {};
   for (const p of DISP_DATA.papers) {
     if (idxSel && p.i !== idxSel) continue;
-    if (setorSel && p.s !== setorSel) continue;
+    if (setoresSel && !setoresSel.has(p.s)) continue;
     const yVal = p[yKey];
     if (yVal == null) continue;
     const grp = p.i;
@@ -925,6 +975,65 @@ function drawDispersion() {
   Plotly.newPlot("chart-dispersion", data, layout, PLOTLY_CONFIG);
 }
 
+/* -------- Multi-select de Setor (checklist em popover) -------- */
+function _buildSetorMultiSelect(setores) {
+  const list = document.getElementById("disp-setor-list");
+  const all = document.getElementById("disp-setor-all");
+  const toggle = document.getElementById("disp-setor-toggle");
+  const dropdown = document.getElementById("disp-setor-dropdown");
+  list.innerHTML = "";
+  for (const s of setores) {
+    const wrap = document.createElement("div");
+    wrap.className = "ms-item";
+    wrap.innerHTML =
+      `<label><input type="checkbox" class="disp-setor-cb" value="${s}" checked> ${s}</label>`;
+    list.appendChild(wrap);
+  }
+  // "Todos" sincroniza com checkboxes individuais.
+  all.onchange = () => {
+    document.querySelectorAll(".disp-setor-cb").forEach(cb => cb.checked = all.checked);
+    _updateSetorSummary(setores);
+    drawDispersion();
+  };
+  list.onchange = () => {
+    const cbs = [...document.querySelectorAll(".disp-setor-cb")];
+    const checked = cbs.filter(cb => cb.checked).length;
+    all.checked = (checked === cbs.length);
+    all.indeterminate = (checked > 0 && checked < cbs.length);
+    _updateSetorSummary(setores);
+    drawDispersion();
+  };
+  toggle.onclick = e => {
+    e.stopPropagation();
+    dropdown.classList.toggle("hide");
+  };
+  document.addEventListener("click", e => {
+    if (!document.getElementById("disp-setor-wrap").contains(e.target))
+      dropdown.classList.add("hide");
+  });
+  _updateSetorSummary(setores);
+}
+
+function _updateSetorSummary(allSetores) {
+  const cbs = [...document.querySelectorAll(".disp-setor-cb")];
+  const checked = cbs.filter(cb => cb.checked);
+  const sum = document.getElementById("disp-setor-summary");
+  if (checked.length === 0) sum.textContent = "Nenhum";
+  else if (checked.length === cbs.length) sum.textContent = "Todos";
+  else if (checked.length === 1) sum.textContent = checked[0].value;
+  else sum.textContent = checked.length + " setores";
+}
+
+// Retorna Set<string> com setores selecionados, ou null se "Todos"
+// (evita filtro desnecessário no hot path).
+function _getSetoresSelected() {
+  const cbs = [...document.querySelectorAll(".disp-setor-cb")];
+  if (!cbs.length) return null;
+  const checked = cbs.filter(cb => cb.checked);
+  if (checked.length === cbs.length) return null;
+  return new Set(checked.map(cb => cb.value));
+}
+
 /* -------- Timeline animado (Anterior → Atual) -------- */
 let TL_STATE = {
   current: null, speed: 500, playing: false, intervalId: null,
@@ -958,14 +1067,14 @@ function _computeTimelineAxisRange() {
   if (!dates.length) return null;
   const yKey = document.getElementById("disp-yaxis").value === "pp" ? "pp" : "sp";
   const idxSel = document.getElementById("disp-idx").value;
-  const setorSel = document.getElementById("disp-setor").value;
+  const setoresSel = _getSetoresSelected();
   let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity, n = 0;
   for (const d of dates) {
     const data = cache.get("data/dispersion/" + d + ".json");
     if (!data) continue;
     for (const p of data.papers) {
       if (idxSel && p.i !== idxSel) continue;
-      if (setorSel && p.s !== setorSel) continue;
+      if (setoresSel && !setoresSel.has(p.s)) continue;
       if (typeof p.d === "number") { if (p.d < xMin) xMin = p.d; if (p.d > xMax) xMax = p.d; }
       const yVal = p[yKey];
       if (typeof yVal === "number") { if (yVal < yMin) yMin = yVal; if (yVal > yMax) yMax = yVal; }
