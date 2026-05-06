@@ -990,7 +990,7 @@ function drawDispersion() {
       };
     }
     traces[grp].x.push(p.d);
-    traces[grp].y.push(yVal);
+    traces[grp].y.push(p[yKey]);
     traces[grp].customdata.push([p.c, (p.e||'').slice(0,40), p.t, p.i, p.s || '—']);
   }
   // Sort traces by count desc — legenda fica com os maiores em cima.
