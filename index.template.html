@@ -970,7 +970,7 @@ let DISP_DATA = null;
 let DISP_FP_ATUAL = null, DISP_FP_ANTERIOR = null;
 let DISP_DATE_ATUAL = null, DISP_DATE_ANTERIOR = null;
 let DISP_SEARCH = "";
-const DISP_HIGHLIGHT_COLOR = "#722F37";
+const DISP_HIGHLIGHT_COLOR = "#ffffff";
 
 // Paleta qualitativa (Tableau-ish) usada para colorir traces de setor/emissor.
 // 20 cores; ciclo automático se exceder.
@@ -1171,10 +1171,10 @@ function drawDispersion() {
       customdata: matched.map(p => [p.c, (p.e||'').slice(0,40), p.t, p.i, p.s || '—']),
       type:"scatter", mode:"markers",
       name: `Selecionado: ${DISP_SEARCH} (n=${matched.length})`,
-      marker:{ color: DISP_HIGHLIGHT_COLOR, size: 9, opacity: 1.0,
-               line:{ width: 1.2, color: "#0e1116" } },
-      hoverlabel: { bgcolor: DISP_HIGHLIGHT_COLOR, bordercolor: DISP_HIGHLIGHT_COLOR,
-                    font: { color: "#e6e9ef" } },
+      marker:{ color: DISP_HIGHLIGHT_COLOR, size: 11, opacity: 1.0,
+               line:{ width: 1.8, color: "#000000" } },
+      hoverlabel: { bgcolor: DISP_HIGHLIGHT_COLOR, bordercolor: "#000000",
+                    font: { color: "#0e1116" } },
       hovertemplate:
         "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>" +
         "Setor %{customdata[4]}<br>" +
