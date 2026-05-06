@@ -263,14 +263,14 @@
       <h2>Curva ETTJ Pré — últimos dias úteis</h2>
       <div id="chart-curves-pre-compare" class="chart"></div>
     </div>
-    <div class="panel">
-      <h2>Heatmap temporal — taxa NTN-B (datas × vértices)</h2>
-      <div id="chart-curves-heatmap" class="chart-tall"></div>
-    </div>
-    <div class="panel">
-      <h2>Heatmap temporal — taxa Pré (datas × vértices)</h2>
-      <div id="chart-curves-pre-heatmap" class="chart-tall"></div>
-    </div>
+  </div>
+  <div class="panel">
+    <h2>Heatmap temporal — taxa NTN-B (datas × vértices)</h2>
+    <div id="chart-curves-heatmap" class="chart-tall"></div>
+  </div>
+  <div class="panel">
+    <h2>Heatmap temporal — taxa Pré (datas × vértices)</h2>
+    <div id="chart-curves-pre-heatmap" class="chart-tall"></div>
   </div>
 </section>
 
@@ -333,12 +333,8 @@
       <label>Data Anterior:
         <input type="text" id="mov-date-anterior" placeholder="YYYY-MM-DD">
       </label>
-      <input id="mov-q" placeholder="Filtrar por código ou emissor…" style="flex:1;min-width:240px;">
       <label>Indexador:
         <select id="mov-idx"><option value="">Todos</option></select>
-      </label>
-      <label>Setor:
-        <select id="mov-setor"><option value="">Todos</option></select>
       </label>
       <label>
         <input type="checkbox" id="mov-hide-iliq" checked> Esconder ilíquidos
@@ -974,7 +970,7 @@ let DISP_DATA = null;
 let DISP_FP_ATUAL = null, DISP_FP_ANTERIOR = null;
 let DISP_DATE_ATUAL = null, DISP_DATE_ANTERIOR = null;
 let DISP_SEARCH = "";
-const DISP_HIGHLIGHT_COLOR = "#fbbf24";
+const DISP_HIGHLIGHT_COLOR = "#722F37";
 
 // Paleta qualitativa (Tableau-ish) usada para colorir traces de setor/emissor.
 // 20 cores; ciclo automático se exceder.
@@ -1175,10 +1171,10 @@ function drawDispersion() {
       customdata: matched.map(p => [p.c, (p.e||'').slice(0,40), p.t, p.i, p.s || '—']),
       type:"scatter", mode:"markers",
       name: `Selecionado: ${DISP_SEARCH} (n=${matched.length})`,
-      marker:{ color: DISP_HIGHLIGHT_COLOR, size: 13, opacity: 1.0,
-               line:{ width: 1.5, color: "#0e1116" } },
+      marker:{ color: DISP_HIGHLIGHT_COLOR, size: 9, opacity: 1.0,
+               line:{ width: 1.2, color: "#0e1116" } },
       hoverlabel: { bgcolor: DISP_HIGHLIGHT_COLOR, bordercolor: DISP_HIGHLIGHT_COLOR,
-                    font: { color: "#0e1116" } },
+                    font: { color: "#e6e9ef" } },
       hovertemplate:
         "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>" +
         "Setor %{customdata[4]}<br>" +
@@ -1443,21 +1439,12 @@ async function renderMovimentacoes() {
   const idxSel = document.getElementById("mov-idx");
   while (idxSel.options.length > 1) idxSel.remove(1);
   const idxs = new Set();
-  const setores = new Set();
   for (const date of dates)
-    for (const r of MOV_DATA.by_date[date].rows) {
+    for (const r of MOV_DATA.by_date[date].rows)
       if (r.indexador) idxs.add(r.indexador);
-      if (r.setor) setores.add(r.setor);
-    }
   for (const s of [...idxs].sort()) {
     const o = document.createElement("option"); o.value=s; o.textContent=s;
     idxSel.appendChild(o);
-  }
-  const setorSel = document.getElementById("mov-setor");
-  while (setorSel.options.length > 1) setorSel.remove(1);
-  for (const s of [...setores].sort()) {
-    const o = document.createElement("option"); o.value=s; o.textContent=s;
-    setorSel.appendChild(o);
   }
 
   if (MOV_FP_ATUAL) MOV_FP_ATUAL.destroy();
@@ -1473,9 +1460,7 @@ async function renderMovimentacoes() {
   });
 
   buildMovTable();
-  document.getElementById("mov-q").addEventListener("input", applyMovFilter);
   document.getElementById("mov-idx").addEventListener("change", applyMovFilter);
-  document.getElementById("mov-setor").addEventListener("change", applyMovFilter);
   document.getElementById("mov-hide-iliq").addEventListener("change", applyMovFilter);
   applyMovFilter();
 }
@@ -1651,16 +1636,11 @@ function buildMovTable() {
 }
 
 function applyMovFilter() {
-  const q = document.getElementById("mov-q").value.toLowerCase();
   const idx = document.getElementById("mov-idx").value;
-  const setor = document.getElementById("mov-setor").value;
   const hideIliq = document.getElementById("mov-hide-iliq").checked;
   MOV_TABLE.setFilter(d => {
     if (hideIliq && d.iliquido) return false;
     if (idx && d.indexador !== idx) return false;
-    if (setor && d.setor !== setor) return false;
-    if (q && !((d.codigo||'').toLowerCase().includes(q)
-            || (d.emissor||'').toLowerCase().includes(q))) return false;
     return true;
   });
 }
@@ -1689,7 +1669,7 @@ function _heatBuckets() {
 }
 
 // Label e separador visual da linha agregada no heatmap.
-const HEAT_TOTAL_LABEL = "TODOS";
+const HEAT_TOTAL_LABEL = "Todos";
 // Linha em branco entre o último setor e a linha agregada (visual divider).
 const HEAT_TOTAL_SPACER = "";
 
