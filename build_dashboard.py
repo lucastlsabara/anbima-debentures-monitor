@@ -239,6 +239,8 @@ def _kpis_for(papers: list[dict], date_atual: str, date_anterior: str | None,
                 deltas_bps.append(round((sp - old) * 100.0, 2))
     n_com_spread = sum(1 for p in papers if p.get("spread_pp") is not None)
     termometro_med = _mean(deltas_bps)
+    abs_spreads = [p["spread_pp"] for p in liq if p.get("spread_pp") is not None]
+    mean_abs_spread = _mean(abs_spreads)
     return {
         "data_referencia": date_atual,
         "data_referencia_br": _br_date(date_atual),
@@ -254,6 +256,9 @@ def _kpis_for(papers: list[dict], date_atual: str, date_anterior: str | None,
         # Item 5: termômetro agora é a média da variação spread em bps.
         "termometro_med_bps": round(termometro_med, 1) if termometro_med is not None else None,
         "n_com_d1": len(deltas_bps),
+        # Spread médio absoluto (em pp) — usado no card IPCA+.
+        "mean_spread_abs_pp": round(mean_abs_spread, 4) if mean_abs_spread is not None else None,
+        "n_spread_abs": len(abs_spreads),
     }
 
 
@@ -396,7 +401,11 @@ def build_overview(snaps: list[dict]) -> dict:
                 bucket[_indexador_group(d.get("indice"))].append(sp)
             for grp in by_grp_today.keys():
                 spark_by_grp[grp].append(_median(bucket.get(grp, [])))
+        # Gráfico Spread Mediano por Indexador: mantém apenas IPCA+ e DI+
+        # (Prefixado removido por inconsistência amostral).
         for grp in ALLOWED_INDEXADORES:
+            if grp == "Prefixado":
+                continue
             if grp not in by_grp_today:
                 continue
             vals = by_grp_today[grp]
