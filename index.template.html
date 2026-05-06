@@ -16,39 +16,28 @@
     --border:#262d39; --border-strong:#384354;
     --fg:#d6dde7; --muted:#8a96a8;
     --accent:#5a9bff;
-    --pos:#3aa66c;   /* spread fechando = positivo p/ vendido */
-    --neg:#dc5752;   /* spread abrindo */
-    --warn:#d2a052;
+    --pos:#3aa66c; --neg:#dc5752; --warn:#d2a052;
   }
   * { box-sizing:border-box; }
   html, body { background:var(--bg); color:var(--fg); }
   body {
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
-    margin:0; padding:0;
-    font-size:13px; line-height:1.45;
+    margin:0; padding:0; font-size:13px; line-height:1.45;
   }
   header.top {
     padding:18px 24px 14px; border-bottom:1px solid var(--border);
-    display:flex; align-items:flex-end; justify-content:space-between; gap:24px;
-    flex-wrap:wrap;
   }
-  header.top h1 {
-    font-size:18px; margin:0; font-weight:600; letter-spacing:.01em;
-  }
-  header.top .sub { color:var(--muted); font-size:12px; margin-top:4px; }
+  header.top h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.01em; }
   nav.tabs {
     display:flex; gap:2px; padding:0 24px; background:var(--surface);
     border-bottom:1px solid var(--border); overflow-x:auto;
   }
   nav.tabs a {
     padding:11px 16px; color:var(--muted); text-decoration:none;
-    font-size:12.5px; border-bottom:2px solid transparent;
-    white-space:nowrap;
+    font-size:12.5px; border-bottom:2px solid transparent; white-space:nowrap;
   }
   nav.tabs a:hover { color:var(--fg); }
-  nav.tabs a.active {
-    color:var(--fg); border-bottom-color:var(--accent);
-  }
+  nav.tabs a.active { color:var(--fg); border-bottom-color:var(--accent); }
   main { padding:18px 24px 32px; }
   .panel {
     background:var(--surface); border:1px solid var(--border);
@@ -74,12 +63,10 @@
   .kpi .val.pos { color:var(--pos); }
   .kpi .val.neg { color:var(--neg); }
   .kpi .hint { color:var(--muted); font-size:11px; margin-top:2px; }
-
   .grid-2x2 {
     display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px;
   }
   @media (max-width:1100px) { .grid-2x2 { grid-template-columns:1fr; } }
-
   .controls {
     display:flex; gap:10px; align-items:center; flex-wrap:wrap;
     margin-bottom:10px;
@@ -96,10 +83,8 @@
     color:var(--muted); font-size:12px;
     display:flex; align-items:center; gap:6px;
   }
-
   .chart { width:100%; min-height:340px; }
   .chart-tall { width:100%; min-height:520px; }
-
   table.mini { width:100%; border-collapse:collapse; table-layout:fixed; }
   table.mini th, table.mini td {
     padding:6px 10px; border-bottom:1px solid var(--border);
@@ -113,13 +98,11 @@
   table.mini td.num, table.mini th.num { text-align:right; font-variant-numeric:tabular-nums; }
   table.mini .pos { color:var(--pos); }
   table.mini .neg { color:var(--neg); }
-  /* Top movers: Código | Emissor | Dur. | Spread | Δ D-1 */
   table.mini th:nth-child(1), table.mini td:nth-child(1) { width:14%; }
   table.mini th:nth-child(2), table.mini td:nth-child(2) { width:42%; }
   table.mini th:nth-child(3), table.mini td:nth-child(3) { width:12%; }
   table.mini th:nth-child(4), table.mini td:nth-child(4) { width:14%; }
   table.mini th:nth-child(5), table.mini td:nth-child(5) { width:18%; }
-
   .hide { display:none !important; }
   .empty {
     color:var(--muted); font-style:italic; font-size:12.5px;
@@ -130,150 +113,26 @@
     font-size:10px; background:#2a2f3a; color:var(--muted);
     margin-left:6px; vertical-align:1px;
   }
-  .badge.cob { background:#23344d; color:#9ec3ff; }
   .badge.warn { background:#3d2f1f; color:var(--warn); }
   footer {
     color:var(--muted); font-size:10.5px; text-align:center;
     padding:20px 24px 28px; border-top:1px solid var(--border);
     margin-top:14px;
   }
-  /* Multi-select dropdown */
-  .multi-select { position:relative; display:inline-block; }
-  .multi-select__btn {
-    background:var(--surface2); color:var(--fg);
-    border:1px solid var(--border-strong); border-radius:4px;
-    padding:6px 26px 6px 10px; font-size:12.5px; font-family:inherit;
-    cursor:pointer; min-width:140px; text-align:left;
-    position:relative; line-height:1.3;
-    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  }
-  .multi-select__btn::after {
-    content:""; position:absolute; right:10px; top:50%;
-    width:6px; height:6px; transform:translateY(-70%) rotate(45deg);
-    border-right:1.5px solid var(--muted); border-bottom:1.5px solid var(--muted);
-    transition:transform .12s ease;
-  }
-  .multi-select__btn.open::after { transform:translateY(-30%) rotate(-135deg); }
-  .multi-select__btn:hover { border-color:var(--accent); }
-  .multi-select__pop {
-    position:absolute; z-index:50; top:calc(100% + 4px); left:0;
-    min-width:100%; max-height:280px; overflow-y:auto;
-    background:var(--surface2); border:1px solid var(--border-strong);
-    border-radius:4px; padding:4px 0;
-    box-shadow:0 6px 18px rgba(0,0,0,0.35);
-    display:none;
-  }
-  .multi-select__pop.right { left:auto; right:0; }
-  .multi-select__pop.open { display:block; }
-  .multi-select__opt {
-    display:flex; align-items:center; gap:8px;
-    padding:6px 12px; font-size:12.5px; cursor:pointer; color:var(--fg);
-    white-space:nowrap; user-select:none;
-  }
-  .multi-select__opt:hover { background:#22293a; }
-  .multi-select__opt input { margin:0; cursor:pointer; }
-  .multi-select__opt .count {
-    color:var(--muted); margin-left:auto; padding-left:14px; font-size:11px;
-    font-variant-numeric:tabular-nums;
-  }
-  .multi-select__opt.all { border-bottom:1px solid var(--border); font-weight:500; }
-
-  /* Icon button */
-  .icon-btn {
-    background:var(--surface2); color:var(--fg);
-    border:1px solid var(--border-strong); border-radius:4px;
-    padding:4px 8px; font-size:14px; cursor:pointer;
-    line-height:1; font-family:inherit;
-  }
-  .icon-btn:hover { border-color:var(--accent); color:var(--accent); }
-
-  /* Modal */
-  .modal-back {
-    position:fixed; inset:0; background:rgba(0,0,0,0.55);
-    display:none; z-index:200; align-items:center; justify-content:center;
-  }
-  .modal-back.open { display:flex; }
-  .modal {
-    background:var(--surface); border:1px solid var(--border-strong);
-    border-radius:8px; max-width:760px; width:92%;
-    max-height:85vh; display:flex; flex-direction:column;
-    box-shadow:0 10px 30px rgba(0,0,0,0.5);
-  }
-  .modal-head {
-    padding:14px 18px; border-bottom:1px solid var(--border);
-    display:flex; align-items:center; justify-content:space-between;
-  }
-  .modal-head h3 { margin:0; font-size:14px; font-weight:600; }
-  .modal-body { padding:14px 18px; overflow-y:auto; flex:1; }
-  .modal-foot {
-    padding:12px 18px; border-top:1px solid var(--border);
-    display:flex; gap:8px; justify-content:flex-end;
-  }
-  .modal-foot button {
-    background:var(--surface2); color:var(--fg);
-    border:1px solid var(--border-strong); border-radius:4px;
-    padding:6px 14px; font-size:12.5px; font-family:inherit; cursor:pointer;
-  }
-  .modal-foot button.primary { border-color:var(--accent); color:var(--accent); }
-  .modal-foot button:hover { border-color:var(--accent); }
-  .modal-section { margin-bottom:18px; }
-  .modal-section h4 {
-    margin:0 0 8px; font-size:11px; text-transform:uppercase;
-    letter-spacing:.07em; color:var(--muted); font-weight:500;
-    display:flex; align-items:center; justify-content:space-between;
-  }
-  .sector-grid {
-    display:grid; grid-template-columns:repeat(auto-fill, minmax(220px,1fr));
-    gap:6px;
-  }
-  .sector-grid label, .company-list label {
-    display:flex; align-items:center; gap:8px;
-    padding:5px 8px; font-size:12.5px; cursor:pointer;
-    border-radius:4px;
-  }
-  .sector-grid label:hover, .company-list label:hover { background:var(--surface2); }
-  .sector-grid label input, .company-list label input { margin:0; }
-  .company-search {
-    width:100%; background:var(--surface2); color:var(--fg);
-    border:1px solid var(--border-strong); border-radius:4px;
-    padding:7px 10px; font-size:12.5px; font-family:inherit;
-    margin-bottom:8px;
-  }
-  .company-list {
-    max-height:280px; overflow-y:auto;
-    border:1px solid var(--border); border-radius:4px;
-    padding:4px;
-  }
-  .company-list label.disabled {
-    color:var(--muted); cursor:not-allowed;
-  }
-  .company-list label.disabled:hover { background:transparent; }
-  .badge.via {
-    background:#2a2f3a; color:var(--muted);
-    margin-left:auto; font-size:10px;
-  }
-
-  /* Dispersao timeline controls */
-  .timeline-bar {
-    display:flex; gap:14px; align-items:center; flex-wrap:wrap;
-    margin-bottom:10px; padding:10px 14px;
-    background:var(--surface2); border:1px solid var(--border);
-    border-radius:6px;
-  }
-  .timeline-bar .now {
-    font-size:18px; font-weight:600; color:var(--accent);
-    font-variant-numeric:tabular-nums;
-    padding:2px 10px; border:1px solid var(--border-strong); border-radius:4px;
-    min-width:130px; text-align:center;
-  }
-  .timeline-bar .play-btn {
+  /* Dispersão timeline play button */
+  .play-btn {
     background:var(--accent); color:#0e1116; border:none;
     border-radius:4px; padding:6px 16px; font-weight:600;
     cursor:pointer; font-family:inherit; font-size:12.5px;
   }
-  .timeline-bar .play-btn:hover { opacity:0.9; }
-  .timeline-bar .play-btn:disabled { opacity:0.5; cursor:wait; }
-
+  .play-btn:hover { opacity:0.9; }
+  .play-btn:disabled { opacity:0.5; cursor:wait; }
+  .now {
+    font-size:14px; font-weight:600; color:var(--accent);
+    font-variant-numeric:tabular-nums;
+    padding:4px 10px; border:1px solid var(--border-strong); border-radius:4px;
+    min-width:120px; text-align:center;
+  }
   /* Tabulator dark tweaks */
   .tabulator { font-size:12px; background:transparent; border:none; }
   .tabulator .tabulator-header {
@@ -289,17 +148,7 @@
 <body>
 
 <header class="top">
-  <div>
-    <h1>ANBIMA · Mercado Secundário de Debêntures</h1>
-    <div class="sub" id="hdr-sub">Carregando…</div>
-  </div>
-  <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
-    <div class="sub" style="display:flex;flex-direction:column;gap:4px">
-      <span style="text-transform:uppercase;letter-spacing:.07em;font-size:10.5px">Indexador</span>
-      <div id="global-idx"></div>
-    </div>
-    <div class="sub" id="hdr-info" style="max-width:340px;text-align:right"></div>
-  </div>
+  <h1 id="hdr-sub">Última Atualização: —</h1>
 </header>
 
 <nav class="tabs" id="tabs">
@@ -307,23 +156,36 @@
   <a href="#/curvas" data-tab="curvas">Curvas Históricas</a>
   <a href="#/dispersao" data-tab="dispersao">Dispersão</a>
   <a href="#/movimentacoes" data-tab="movimentacoes">Movimentações</a>
-  <a href="#/heatmap" data-tab="heatmap">Heatmap Setor × Duration</a>
+  <a href="#/heatmap" data-tab="heatmap">Heatmap Indexador × Duration</a>
 </nav>
 
 <main>
 
 <!-- ===================== Tab: Visão Geral ===================== -->
 <section id="tab-visao" class="tab">
+  <div class="panel">
+    <div class="controls">
+      <label>Data Atual:
+        <input type="text" id="vis-date-atual" placeholder="YYYY-MM-DD">
+      </label>
+      <label>Data Anterior:
+        <input type="text" id="vis-date-anterior" placeholder="YYYY-MM-DD">
+      </label>
+    </div>
+  </div>
   <div class="grid-kpi" id="kpi-row"></div>
+  <!-- Item 2: Top 20 movimentações sobem para acima de ETTJ + Spread Mediano. -->
   <div class="grid-2x2">
     <div class="panel">
-      <h2>Curva ETTJ NTN-B — overlay temporal</h2>
-      <div id="chart-curves-overlay" class="chart"></div>
+      <h2>Top 20 movimentações IPCA+ (Δ spread)</h2>
+      <div id="top-movers-ipca"></div>
     </div>
     <div class="panel">
-      <h2>Spread mediano por indexador (atual + sparkline 21d)</h2>
-      <div id="chart-spread-by-idx" class="chart"></div>
+      <h2>Top 20 movimentações CDI+ (Δ spread)</h2>
+      <div id="top-movers-cdi"></div>
     </div>
+  </div>
+  <div class="grid-2x2">
     <div class="panel">
       <h2>Histograma — spreads IPCA+ no dia</h2>
       <div id="chart-histogram-ipca" class="chart"></div>
@@ -335,12 +197,12 @@
   </div>
   <div class="grid-2x2">
     <div class="panel">
-      <h2>Top 20 movimentações IPCA+ (Δ spread D-1)</h2>
-      <div id="top-movers-ipca"></div>
+      <h2>Curva ETTJ NTN-B — Data Atual vs Data Anterior</h2>
+      <div id="chart-curves-overlay" class="chart"></div>
     </div>
     <div class="panel">
-      <h2>Top 20 movimentações CDI+ (Δ spread D-1)</h2>
-      <div id="top-movers-cdi"></div>
+      <h2>Spread mediano por indexador (atual + sparkline 21d)</h2>
+      <div id="chart-spread-by-idx" class="chart"></div>
     </div>
   </div>
 </section>
@@ -349,13 +211,8 @@
 <section id="tab-curvas" class="tab hide">
   <div class="panel">
     <div class="controls">
-      <label>Comparar:
-        <button data-cmp="d30" class="cmp-btn">Hoje vs 30d</button>
-        <button data-cmp="d90" class="cmp-btn">Hoje vs 90d</button>
-        <button data-cmp="custom" class="cmp-btn">Customizado</button>
-      </label>
-      <label>Data 1: <input type="text" id="curve-date1" placeholder="YYYY-MM-DD"></label>
-      <label>Data 2: <input type="text" id="curve-date2" placeholder="YYYY-MM-DD"></label>
+      <label>Data Atual: <input type="text" id="curve-date-atual" placeholder="YYYY-MM-DD"></label>
+      <label>Data Anterior: <input type="text" id="curve-date-anterior" placeholder="YYYY-MM-DD"></label>
     </div>
     <div id="chart-curves-compare" class="chart"></div>
   </div>
@@ -365,32 +222,18 @@
   </div>
 </section>
 
-<!-- ===================== Tab: Dispersão IPCA+ ===================== -->
+<!-- ===================== Tab: Dispersão ===================== -->
 <section id="tab-dispersao" class="tab hide">
   <div class="panel">
-    <div class="timeline-bar">
-      <label>Início: <input type="text" id="tl-start" placeholder="YYYY-MM-DD" style="width:120px"></label>
-      <label>Fim: <input type="text" id="tl-end" placeholder="YYYY-MM-DD" style="width:120px"></label>
-      <button type="button" id="tl-play" class="play-btn">▶ Play</button>
-      <div class="now" id="tl-now">—</div>
-      <label>Velocidade:
-        <select id="tl-speed">
-          <option value="500">0.5s</option>
-          <option value="1000" selected>1s</option>
-          <option value="2000">2s</option>
-        </select>
-      </label>
-      <span id="tl-status" style="color:var(--muted);font-size:11.5px"></span>
-    </div>
     <div class="controls">
-      <label>Data:
-        <input type="text" id="disp-date" placeholder="YYYY-MM-DD">
+      <label>Data Atual:
+        <input type="text" id="disp-date-atual" placeholder="YYYY-MM-DD">
       </label>
-      <label>
-        <input type="checkbox" id="disp-cob"> Só minha cobertura
+      <label>Data Anterior:
+        <input type="text" id="disp-date-anterior" placeholder="YYYY-MM-DD">
       </label>
-      <label>Setor:
-        <div id="disp-setor"></div>
+      <label>Indexador:
+        <select id="disp-idx"><option value="">Todos</option></select>
       </label>
       <label>Eixo Y:
         <select id="disp-yaxis">
@@ -398,6 +241,16 @@
           <option value="pp">% do PAR</option>
         </select>
       </label>
+      <button type="button" id="tl-play" class="play-btn">▶ Play (Anterior → Atual)</button>
+      <label>Velocidade:
+        <select id="tl-speed">
+          <option value="500" selected>0.5s</option>
+          <option value="1000">1s</option>
+          <option value="2000">2s</option>
+        </select>
+      </label>
+      <div class="now" id="tl-now">—</div>
+      <span id="tl-status" style="color:var(--muted);font-size:11.5px"></span>
     </div>
     <div id="chart-dispersion" class="chart-tall"></div>
   </div>
@@ -407,23 +260,16 @@
 <section id="tab-movimentacoes" class="tab hide">
   <div class="panel">
     <div class="controls">
-      <label>Data atual:
-        <input type="text" id="mov-date-base" placeholder="YYYY-MM-DD">
+      <label>Data Atual:
+        <input type="text" id="mov-date-atual" placeholder="YYYY-MM-DD">
       </label>
-      <label>Data anterior:
-        <input type="text" id="mov-date-ref" placeholder="YYYY-MM-DD">
+      <label>Data Anterior:
+        <input type="text" id="mov-date-anterior" placeholder="YYYY-MM-DD">
       </label>
       <input id="mov-q" placeholder="Filtrar por código ou emissor…" style="flex:1;min-width:240px;">
       <label>Indexador:
         <select id="mov-idx"><option value="">Todos</option></select>
       </label>
-      <label>Setor:
-        <div id="mov-setor"></div>
-      </label>
-      <label>
-        <input type="checkbox" id="mov-cob"> Cobertura
-      </label>
-      <button type="button" id="mov-cob-edit" class="icon-btn" title="Editar watchlist">⚙</button>
       <label>
         <input type="checkbox" id="mov-hide-iliq" checked> Esconder ilíquidos
       </label>
@@ -432,13 +278,18 @@
   </div>
 </section>
 
-<!-- ===================== Tab: Heatmap Setor x Duration ===================== -->
+<!-- ===================== Tab: Heatmap Indexador × Duration ===================== -->
 <section id="tab-heatmap" class="tab hide">
   <div class="panel">
     <div class="controls">
+      <label>Data Atual:
+        <input type="text" id="hm-date-atual" placeholder="YYYY-MM-DD">
+      </label>
+      <label>Data Anterior:
+        <input type="text" id="hm-date-anterior" placeholder="YYYY-MM-DD">
+      </label>
       <button data-hm="current" class="hm-btn active">Spread atual (pp)</button>
-      <button data-hm="d7" class="hm-btn">Δ 7d (bps)</button>
-      <button data-hm="d30" class="hm-btn">Δ 30d (bps)</button>
+      <button data-hm="delta" class="hm-btn">Δ atual − anterior (bps)</button>
     </div>
     <div id="chart-heatmap" class="chart-tall"></div>
   </div>
@@ -446,36 +297,8 @@
 
 </main>
 
-<!-- ===================== Watchlist editor modal ===================== -->
-<div class="modal-back" id="wl-modal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="wl-title">
-    <div class="modal-head">
-      <h3 id="wl-title">Editar watchlist (cobertura)</h3>
-      <button class="icon-btn" type="button" id="wl-close" title="Fechar">×</button>
-    </div>
-    <div class="modal-body">
-      <div class="modal-section">
-        <h4><span>Por setor</span><span id="wl-sec-count">Setores: 0/0</span></h4>
-        <div class="sector-grid" id="wl-sectors"></div>
-      </div>
-      <div class="modal-section">
-        <h4>Por empresa (avulsa)</h4>
-        <input type="text" class="company-search" id="wl-search" placeholder="Buscar emissor…">
-        <div class="company-list" id="wl-companies"></div>
-      </div>
-    </div>
-    <div class="modal-foot">
-      <button type="button" id="wl-reset">Reset para padrão</button>
-      <button type="button" id="wl-cancel">Cancelar</button>
-      <button type="button" id="wl-save" class="primary">Salvar</button>
-    </div>
-  </div>
-</div>
-
 <footer>
-  Fonte: ANBIMA — mercado secundário de debêntures + ETTJ NTN-B.
-  Pipeline <code>fetch_anbima.py</code> + <code>compute_spreads.py</code> + <code>build_dashboard.py</code>.
-  Spread = (1 + Taxa Indicativa) / (1 + Taxa NTN-B referência) − 1, em pp. Lookup oficial ANBIMA por vencimento exato, sem interpolação. DI+/%DI exibem a taxa publicada pela ANBIMA.
+  Fonte: ANBIMA
 </footer>
 
 <script>
@@ -504,120 +327,6 @@ const PLOTLY_LAYOUT = () => ({
 const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
   modeBarButtonsToRemove: ["lasso2d","select2d","autoScale2d"] };
 
-/* ============================================================
- *  multi-select component (vanilla)
- * ============================================================ */
-function createMultiSelect({ host, options, selected, allLabel = "Todos",
-                              alignRight = false, onChange = () => {} }) {
-  if (typeof host === "string") host = document.getElementById(host);
-  host.classList.add("multi-select");
-  host.innerHTML =
-    '<button type="button" class="multi-select__btn"></button>' +
-    '<div class="multi-select__pop' + (alignRight ? " right" : "") + '"></div>';
-  const btn = host.querySelector(".multi-select__btn");
-  const pop = host.querySelector(".multi-select__pop");
-  let opts = options.slice();
-  const sel = new Set(selected == null ? opts.map(o => o.value) : selected);
-  // Valores marcados como ocultos: não aparecem no popover, não contam para
-  // isAll()/summary() nem para o checkbox "Todos". A seleção desses valores
-  // permanece em `sel` (estado preservado entre tabs).
-  const hidden = new Set();
-  const visibleOpts = () => opts.filter(o => !hidden.has(o.value));
-
-  const isAll = () => {
-    const v = visibleOpts();
-    return v.length > 0 && v.every(o => sel.has(o.value));
-  };
-  const summary = () => {
-    const v = visibleOpts();
-    if (isAll()) return allLabel;
-    const visSel = v.filter(o => sel.has(o.value));
-    if (visSel.length === 0) return "Nenhum";
-    if (visSel.length === 1) return visSel[0].label;
-    return visSel[0].label + " (+" + (visSel.length - 1) + ")";
-  };
-  const escape = s => String(s).replace(/[&<>"']/g, c =>
-    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
-
-  function render() {
-    btn.textContent = summary();
-    const v = visibleOpts();
-    btn.title = isAll() ? allLabel
-      : (v.filter(o => sel.has(o.value)).map(o => o.label).join(", ") || "Nenhum");
-    pop.innerHTML =
-      '<label class="multi-select__opt all"><input type="checkbox" data-all="1"' +
-        (isAll() ? " checked" : "") + '> ' + escape(allLabel) + '</label>' +
-      v.map(o =>
-        '<label class="multi-select__opt">' +
-          '<input type="checkbox" value="' + escape(o.value) + '"' +
-            (sel.has(o.value) ? " checked" : "") + '>' +
-          '<span>' + escape(o.label) + '</span>' +
-          (o.count != null ? '<span class="count">' + o.count + '</span>' : '') +
-        '</label>'
-      ).join("");
-    pop.querySelectorAll("input[type=checkbox]").forEach(cb => {
-      cb.addEventListener("change", () => {
-        if (cb.dataset.all) {
-          // "Todos" toggla apenas as opções visíveis — preserva seleção oculta.
-          const vis = visibleOpts();
-          if (cb.checked) vis.forEach(o => sel.add(o.value));
-          else            vis.forEach(o => sel.delete(o.value));
-        } else {
-          if (cb.checked) sel.add(cb.value);
-          else sel.delete(cb.value);
-        }
-        render();
-        onChange(api);
-      });
-    });
-  }
-
-  btn.addEventListener("click", e => {
-    e.stopPropagation();
-    document.querySelectorAll(".multi-select__pop.open").forEach(p => {
-      if (p !== pop) {
-        p.classList.remove("open");
-        p.previousElementSibling && p.previousElementSibling.classList.remove("open");
-      }
-    });
-    const open = pop.classList.toggle("open");
-    btn.classList.toggle("open", open);
-  });
-  pop.addEventListener("click", e => e.stopPropagation());
-  document.addEventListener("click", () => {
-    pop.classList.remove("open"); btn.classList.remove("open");
-  });
-
-  const api = {
-    getSelected: () => new Set(sel),
-    getSelectedArray: () => opts.filter(o => sel.has(o.value)).map(o => o.value),
-    isAll,
-    size: () => sel.size,
-    has: v => sel.has(v),
-    setOptions(newOpts, newSel) {
-      opts = newOpts.slice();
-      sel.clear();
-      (newSel == null ? opts.map(o => o.value) : newSel).forEach(v => sel.add(v));
-      render();
-    },
-    setSelected(values) {
-      sel.clear();
-      values.forEach(v => sel.add(v));
-      render();
-    },
-    // Esconde do popover os valores informados (sem alterar a seleção em si).
-    // Usado para filtrar opções do seletor global quando a tab ativa só
-    // suporta um subconjunto delas (ex.: Heatmap → IPCA+/DI+).
-    setHiddenValues(values) {
-      hidden.clear();
-      (values || []).forEach(v => hidden.add(v));
-      render();
-    },
-  };
-  render();
-  return api;
-}
-
 const cache = new Map();
 async function loadJSON(path) {
   if (cache.has(path)) return cache.get(path);
@@ -628,208 +337,29 @@ async function loadJSON(path) {
   return j;
 }
 
-/* ============================================================
- *  Watchlist (cobertura editável)
- * ============================================================ */
-const WL_STORAGE_KEY = "anbima_watchlist";
-// Padrões usados pra montar a lista default de empresas marcadas (matchados
-// case-insensitive contra o emissor normalizado disponível em movements.json).
-const WL_DEFAULT_PATTERNS = [
-  "AEGEA SANEAMENTO", "AGUAS DA IMPERATRIZ", "AGUAS DE BOMBINHAS",
-  "AGUAS DE ITAPEMA", "AGUAS DE JUTURNAIBA", "AGUAS DE TERESINA",
-  "AGUAS DO PARA A", "AGUAS DO PIAUI", "AGUAS DO RIO 4", "AGUAS DO SERTAO",
-  "BRK AMB. REG. MACEIO", "BRK AMBIENTAL", "CENTRO IMAGEM DIAGNOST",
-  "CSN MINERACAO", "HAPVIDA", "IGUA RIO DE JANEIRO", "IGUA SANEAMENTO",
-  "KORA SAUDE", "ONCOCLINICAS BRASIL", "ORIGEM ENERGIA", "PRIO FORTE",
-];
-
-let WATCHLIST = null;            // {sectors:Set<string>, companies:Set<string>}
-let WL_ALL_EMISSORES = null;     // string[] — populado quando MOV_DATA carrega
-let WL_ALL_SECTORS = null;       // string[]
-let WL_EMISSOR_TO_SECTOR = null; // Map<emissor, setor>
-
-function _stripDiacritics(s) {
-  return (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-}
-function _emissorKey(s) {
-  return _stripDiacritics(s).toUpperCase().trim();
+function brDate(iso) {
+  if (!iso) return "—";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
 }
 
-function watchlistDefaultCompanies() {
-  if (!WL_ALL_EMISSORES) return new Set();
-  const out = new Set();
-  for (const em of WL_ALL_EMISSORES) {
-    const k = _emissorKey(em);
-    for (const pat of WL_DEFAULT_PATTERNS) {
-      if (k.includes(pat)) { out.add(em); break; }
-    }
-  }
-  return out;
+// Item 9: Default Data Anterior = data imediatamente anterior à atual em `dates`.
+function defaultAnteriorFor(atual, dates) {
+  const i = dates.indexOf(atual);
+  if (i > 0) return dates[i - 1];
+  return null;
 }
 
-function loadWatchlist() {
-  let raw = null;
-  try { raw = localStorage.getItem(WL_STORAGE_KEY); } catch (_) {}
-  if (raw) {
-    try {
-      const j = JSON.parse(raw);
-      WATCHLIST = {
-        sectors: new Set(Array.isArray(j.sectors) ? j.sectors : []),
-        companies: new Set(Array.isArray(j.companies) ? j.companies : []),
-      };
-      return;
-    } catch (_) { /* fall through to default */ }
-  }
-  WATCHLIST = { sectors: new Set(), companies: watchlistDefaultCompanies() };
-  saveWatchlist();
+// Item 3: cor de texto adaptativa por luminância YIQ (mesma lógica do PR #31
+// no heatmap). Retorna "#0e1116" para fundos claros, "#e6e9ef" para escuros.
+function _hex2rgb(h) {
+  const s = h.replace("#","");
+  return [parseInt(s.slice(0,2),16), parseInt(s.slice(2,4),16), parseInt(s.slice(4,6),16)];
 }
-function saveWatchlist() {
-  if (!WATCHLIST) return;
-  // Spec: companies só guarda empresas marcadas individualmente cujo setor
-  // não está marcado. Limpa antes de persistir.
-  const sectors = WATCHLIST.sectors;
-  const companies = new Set();
-  for (const c of WATCHLIST.companies) {
-    const sec = WL_EMISSOR_TO_SECTOR ? WL_EMISSOR_TO_SECTOR.get(c) : null;
-    if (!sec || !sectors.has(sec)) companies.add(c);
-  }
-  WATCHLIST.companies = companies;
-  try {
-    localStorage.setItem(WL_STORAGE_KEY, JSON.stringify({
-      sectors: [...sectors], companies: [...companies],
-    }));
-  } catch (_) {}
-}
-
-// Regra: setor sempre manda. Aceita objetos {setor, emissor} ou {s, e} (dispersion).
-function isInWatchlist(p) {
-  if (!WATCHLIST) return false;
-  const setor = p.setor != null ? p.setor : p.s;
-  const emissor = p.emissor != null ? p.emissor : p.e;
-  if (setor && WATCHLIST.sectors.has(setor)) return true;
-  if (emissor && WATCHLIST.companies.has(emissor)) return true;
-  return false;
-}
-
-function watchlistRebuildIndex() {
-  // Indexa todos emissores (e seus setores) a partir do snapshot mais recente.
-  if (!MOV_DATA) return;
-  const setSet = new Set();
-  const emMap = new Map();
-  for (const date of MOV_DATA.dates) {
-    for (const r of MOV_DATA.by_date[date].rows) {
-      if (r.setor) setSet.add(r.setor);
-      if (r.emissor && !emMap.has(r.emissor)) {
-        emMap.set(r.emissor, r.setor || null);
-      }
-    }
-  }
-  WL_ALL_SECTORS = [...setSet].sort((a,b) => a.localeCompare(b, "pt-BR"));
-  WL_ALL_EMISSORES = [...emMap.keys()].sort((a,b) => a.localeCompare(b, "pt-BR"));
-  WL_EMISSOR_TO_SECTOR = emMap;
-  if (!WATCHLIST) loadWatchlist();
-  // Se watchlist veio do default antes do índice estar pronto, recalcula companies.
-  if (WATCHLIST && WATCHLIST.companies.size === 0 && WATCHLIST.sectors.size === 0) {
-    WATCHLIST.companies = watchlistDefaultCompanies();
-    saveWatchlist();
-  }
-}
-
-/* -------- Modal UI -------- */
-let WL_DRAFT = null; // copia editável enquanto modal está aberto
-let WL_SEARCH_Q = "";
-
-function openWatchlistModal() {
-  if (!WL_ALL_SECTORS) watchlistRebuildIndex();
-  WL_DRAFT = {
-    sectors: new Set(WATCHLIST.sectors),
-    companies: new Set(WATCHLIST.companies),
-  };
-  WL_SEARCH_Q = "";
-  document.getElementById("wl-search").value = "";
-  renderWatchlistModal();
-  document.getElementById("wl-modal").classList.add("open");
-}
-function closeWatchlistModal() {
-  document.getElementById("wl-modal").classList.remove("open");
-  WL_DRAFT = null;
-}
-function renderWatchlistModal() {
-  if (!WL_DRAFT) return;
-  const secHost = document.getElementById("wl-sectors");
-  const sectors = WL_ALL_SECTORS || [];
-  const escape = s => String(s).replace(/[&<>"']/g, c =>
-    ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
-  secHost.innerHTML = sectors.map(s =>
-    `<label><input type="checkbox" data-sec="${escape(s)}"` +
-    (WL_DRAFT.sectors.has(s) ? " checked" : "") + `> ${escape(s)}</label>`
-  ).join("");
-  document.getElementById("wl-sec-count").textContent =
-    `Setores: ${WL_DRAFT.sectors.size}/${sectors.length}`;
-  secHost.querySelectorAll("input[type=checkbox]").forEach(cb => {
-    cb.addEventListener("change", () => {
-      const v = cb.dataset.sec;
-      if (cb.checked) WL_DRAFT.sectors.add(v);
-      else WL_DRAFT.sectors.delete(v);
-      renderWatchlistModal();
-    });
-  });
-
-  // Companies (filtradas pela busca)
-  const list = document.getElementById("wl-companies");
-  const q = _emissorKey(WL_SEARCH_Q);
-  const all = WL_ALL_EMISSORES || [];
-  const filtered = q ? all.filter(e => _emissorKey(e).includes(q)) : all;
-  const items = filtered.slice(0, 500); // hard-cap pra não travar DOM
-  list.innerHTML = items.map(em => {
-    const sec = WL_EMISSOR_TO_SECTOR.get(em);
-    const viaSector = sec && WL_DRAFT.sectors.has(sec);
-    const checked = viaSector || WL_DRAFT.companies.has(em);
-    return `<label class="${viaSector?"disabled":""}">` +
-      `<input type="checkbox" data-em="${escape(em)}"` +
-        (checked ? " checked" : "") + (viaSector ? " disabled" : "") + `>` +
-      `<span>${escape(em)}</span>` +
-      (viaSector ? `<span class="badge via">via setor ${escape(sec)}</span>` : "") +
-      `</label>`;
-  }).join("") + (filtered.length > items.length
-      ? `<div class="empty">Mostrando 500 de ${filtered.length}; refine a busca.</div>`
-      : "");
-  list.querySelectorAll("input[type=checkbox]:not([disabled])").forEach(cb => {
-    cb.addEventListener("change", () => {
-      const em = cb.dataset.em;
-      if (cb.checked) WL_DRAFT.companies.add(em);
-      else WL_DRAFT.companies.delete(em);
-    });
-  });
-}
-
-function setupWatchlistModalEvents() {
-  if (setupWatchlistModalEvents._done) return;
-  setupWatchlistModalEvents._done = true;
-  document.getElementById("wl-close").addEventListener("click", closeWatchlistModal);
-  document.getElementById("wl-cancel").addEventListener("click", closeWatchlistModal);
-  document.getElementById("wl-modal").addEventListener("click", e => {
-    if (e.target.id === "wl-modal") closeWatchlistModal();
-  });
-  document.getElementById("wl-search").addEventListener("input", e => {
-    WL_SEARCH_Q = e.target.value;
-    renderWatchlistModal();
-  });
-  document.getElementById("wl-reset").addEventListener("click", () => {
-    WL_DRAFT = { sectors: new Set(), companies: watchlistDefaultCompanies() };
-    renderWatchlistModal();
-  });
-  document.getElementById("wl-save").addEventListener("click", () => {
-    WATCHLIST = WL_DRAFT;
-    saveWatchlist();
-    closeWatchlistModal();
-    // Re-aplica filtros das tabs que dependem da watchlist
-    if (MOV_TABLE) {
-      MOV_TABLE.redraw(true);
-      applyMovFilter();
-    }
-    if (DISP_DATA) drawDispersion();
-  });
+function adaptiveTextColor(bgHex) {
+  const [r, g, b] = _hex2rgb(bgHex);
+  const L = 0.299*r + 0.587*g + 0.114*b;
+  return L < 140 ? "#e6e9ef" : "#0e1116";
 }
 
 /* ============================================================
@@ -837,19 +367,6 @@ function setupWatchlistModalEvents() {
  * ============================================================ */
 const TABS = ["visao","curvas","dispersao","movimentacoes","heatmap"];
 const loaded = new Set();
-// Indexadores suportados pelo heatmap (tem agregação por nº de papéis).
-// Em outras tabs, todos os indexadores presentes no manifest são mostrados.
-const HEATMAP_VISIBLE_IDX = ["IPCA+", "DI+"];
-
-function applyTabIndexadorFilter(name) {
-  if (!GLOBAL_IDX_MS) return;
-  if (name === "heatmap") {
-    const hide = GLOBAL_IDX_OPTIONS.filter(o => !HEATMAP_VISIBLE_IDX.includes(o));
-    GLOBAL_IDX_MS.setHiddenValues(hide);
-  } else {
-    GLOBAL_IDX_MS.setHiddenValues([]);
-  }
-}
 
 function activateTab(name) {
   if (!TABS.includes(name)) name = "visao";
@@ -857,7 +374,6 @@ function activateTab(name) {
     a.classList.toggle("active", a.dataset.tab === name));
   document.querySelectorAll("section.tab").forEach(s =>
     s.classList.toggle("hide", s.id !== "tab-" + name));
-  applyTabIndexadorFilter(name);
   if (!loaded.has(name)) {
     loaded.add(name);
     renderTab(name).catch(err => {
@@ -875,95 +391,18 @@ window.addEventListener("hashchange", () => {
  *  bootstrap
  * ============================================================ */
 let MANIFEST = null;
-let GLOBAL_IDX_MS = null;       // multi-select api
-let GLOBAL_IDX_OPTIONS = [];    // available indexador labels (sem "Todos")
-
-function getGlobalIdxSet() {
-  if (!GLOBAL_IDX_MS) return new Set(GLOBAL_IDX_OPTIONS);
-  return GLOBAL_IDX_MS.getSelected();
-}
-function isGlobalIdxAll() {
-  return !GLOBAL_IDX_MS || GLOBAL_IDX_MS.isAll();
-}
-/* Para visões agregadas (KPIs, histograma, top movers, heatmap por indexador):
-   "Todos" se todos selecionados ou múltiplos com seleção parcial; o label único
-   se exatamente 1 selecionado. */
-function effectiveIdxLabel() {
-  if (isGlobalIdxAll()) return "Todos";
-  const s = getGlobalIdxSet();
-  if (s.size === 0) return "Todos";
-  if (s.size === 1) return [...s][0];
-  return "Todos";
-}
-function paperPassesGlobalIdx(idxValue) {
-  if (isGlobalIdxAll()) return true;
-  const s = getGlobalIdxSet();
-  if (s.size === 0) return false;
-  return s.has(idxValue);
-}
 
 async function init() {
   MANIFEST = await loadJSON("data/manifest.json");
   const hdr = document.getElementById("hdr-sub");
-  const info = document.getElementById("hdr-info");
   if (!MANIFEST.dates.length) {
-    hdr.textContent = "Sem snapshots em history/.";
+    hdr.textContent = "Última Atualização: —";
     return;
   }
-  const latest = MANIFEST.latest;
-  hdr.innerHTML =
-    "Data: <strong>" + brDate(latest) + "</strong> · " +
-    MANIFEST.n_snapshots + " snapshot(s) · " +
-    MANIFEST.dates[0] + " → " + MANIFEST.dates[MANIFEST.dates.length - 1];
-  info.innerHTML =
-    "Spread = Taxa Indicativa − NTN-B de referência (vencimento exato).<br>" +
-    "<span style='opacity:.85'>Lookup oficial ANBIMA · sem interpolação. " +
-    "DI+/%DI exibem taxa publicada.</span>";
-  setupGlobalIndexador();
+  hdr.textContent = "Última Atualização: " + brDate(MANIFEST.latest);
   activateTab((location.hash || "#/visao").replace(/^#\//, ""));
 }
 
-function setupGlobalIndexador() {
-  const present = MANIFEST.indexadores_presentes || [];
-  GLOBAL_IDX_OPTIONS = present.map(p => p.label);
-  const options = present.map(p => ({
-    value: p.label,
-    label: p.label,
-    count: (p.n_com_spread != null && p.n_com_spread < p.n)
-      ? p.n_com_spread + "/" + p.n
-      : p.n,
-  }));
-  // Override por hash query (?idx=IPCA+ ou ?idx=IPCA+,DI+)
-  let initial = null;
-  const m = location.hash.match(/[?&]idx=([^&]+)/);
-  if (m) {
-    const wanted = decodeURIComponent(m[1]).split(",").map(s => s.trim());
-    const valid = wanted.filter(w => GLOBAL_IDX_OPTIONS.includes(w));
-    if (valid.length) initial = valid;
-  }
-  GLOBAL_IDX_MS = createMultiSelect({
-    host: "global-idx",
-    options,
-    selected: initial,
-    alignRight: true,
-    onChange: () => {
-      // Re-renderiza a tab ativa (zera cache específico do filtro)
-      loaded.clear();
-      const cur = (location.hash || "#/visao").replace(/^#\//, "").split("?")[0];
-      activateTab(cur);
-    },
-  });
-}
-
-function brDate(iso) {
-  if (!iso) return "—";
-  const [y, m, d] = iso.split("-");
-  return `${d}/${m}/${y}`;
-}
-
-/* ============================================================
- *  router
- * ============================================================ */
 async function renderTab(name) {
   if (name === "visao") return renderVisao();
   if (name === "curvas") return renderCurvas();
@@ -975,35 +414,149 @@ async function renderTab(name) {
 /* ============================================================
  *  Tab 1 — Visão Geral
  * ============================================================ */
+let OVERVIEW = null;
+let VIS_FP_ATUAL = null, VIS_FP_ANTERIOR = null;
+let VIS_DATE_ATUAL = null, VIS_DATE_ANTERIOR = null;
+
 async function renderVisao() {
-  const o = await loadJSON("data/overview.json");
-  const idx = effectiveIdxLabel();
-  const kpis = (o.kpis_by_indexador && o.kpis_by_indexador[idx])
-            || o.kpis_by_indexador.Todos;
-  renderKpis(kpis, idx);
-  renderCurvesOverlay(o.curves_overlay);
-  renderSpreadByIndexador(o.spread_by_indexador);
-  const hbi = o.histogram_by_indexador || {};
-  renderHistogram(hbi["IPCA+"] || null, "IPCA+", "chart-histogram-ipca");
-  renderHistogram(hbi["DI+"]  || null, "CDI+", "chart-histogram-cdi");
-  const tmbi = o.top_movements_by_indexador || {};
-  renderTopMovers(tmbi["IPCA+"] || null, "IPCA+", "top-movers-ipca");
-  renderTopMovers(tmbi["DI+"]  || null, "CDI+", "top-movers-cdi");
+  OVERVIEW = await loadJSON("data/overview.json");
+  const dates = OVERVIEW.dates;
+  VIS_DATE_ATUAL = OVERVIEW.latest;
+  VIS_DATE_ANTERIOR = defaultAnteriorFor(VIS_DATE_ATUAL, dates);
+  if (VIS_FP_ATUAL) VIS_FP_ATUAL.destroy();
+  if (VIS_FP_ANTERIOR) VIS_FP_ANTERIOR.destroy();
+  VIS_FP_ATUAL = flatpickr("#vis-date-atual", {
+    dateFormat:"Y-m-d", enable: dates, defaultDate: VIS_DATE_ATUAL,
+    onChange: (_, d) => { if (d) onVisDateChange("atual", d); },
+  });
+  VIS_FP_ANTERIOR = flatpickr("#vis-date-anterior", {
+    dateFormat:"Y-m-d", enable: _visAnteriorEnable(VIS_DATE_ATUAL),
+    defaultDate: VIS_DATE_ANTERIOR || undefined,
+    onChange: (_, d) => { if (d) onVisDateChange("anterior", d); },
+  });
+  drawVisao();
 }
 
-function renderKpis(k, idx) {
-  const t = k.termometro_bps;
+function _visAnteriorEnable(atual) {
+  const dates = OVERVIEW.dates;
+  const i = dates.indexOf(atual);
+  return i > 0 ? dates.slice(0, i) : [];
+}
+
+function onVisDateChange(which, d) {
+  if (which === "atual") {
+    VIS_DATE_ATUAL = d;
+    if (VIS_DATE_ANTERIOR != null && VIS_DATE_ANTERIOR >= VIS_DATE_ATUAL) {
+      VIS_DATE_ANTERIOR = defaultAnteriorFor(VIS_DATE_ATUAL, OVERVIEW.dates);
+    }
+    if (VIS_FP_ANTERIOR) {
+      VIS_FP_ANTERIOR.set("enable", _visAnteriorEnable(VIS_DATE_ATUAL));
+      if (VIS_DATE_ANTERIOR) VIS_FP_ANTERIOR.setDate(VIS_DATE_ANTERIOR, false);
+      else VIS_FP_ANTERIOR.clear(false);
+    }
+  } else {
+    VIS_DATE_ANTERIOR = d;
+  }
+  drawVisao();
+}
+
+function drawVisao() {
+  const pair = OVERVIEW.by_pair[VIS_DATE_ATUAL];
+  if (!pair) return;
+  // Sobrescreve o snapshot "anterior" do par pré-computado se o usuário
+  // escolheu uma data diferente.
+  let kpis = pair.kpis;
+  let topm = pair.top_movements;
+  if (VIS_DATE_ANTERIOR && VIS_DATE_ANTERIOR !== pair.anterior) {
+    const recomputed = _recomputeVisPair(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
+    if (recomputed) {
+      kpis = recomputed.kpis;
+      topm = recomputed.top_movements;
+    }
+  }
+  renderKpis(kpis.Todos);
+  renderHistogram(pair.histogram["IPCA+"] || null, "IPCA+", "chart-histogram-ipca");
+  renderHistogram(pair.histogram["DI+"]   || null, "CDI+",  "chart-histogram-cdi");
+  renderTopMovers(topm["IPCA+"] || null, "IPCA+", "top-movers-ipca");
+  renderTopMovers(topm["DI+"]   || null, "CDI+",  "top-movers-cdi");
+  renderCurvesOverlay(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
+  renderSpreadByIndexador(OVERVIEW.spread_by_indexador);
+}
+
+function _recomputeVisPair(atual, anterior) {
+  // Busca movements.json — fonte autoritativa por papel — para recomputar o
+  // par escolhido pelo usuário quando difere do par default em by_pair.
+  if (!MOV_DATA) {
+    // dispara load assíncrono e força redraw quando estiver pronto
+    loadJSON("data/movements.json").then(d => { MOV_DATA = d; drawVisao(); });
+    return null;
+  }
+  const cur = MOV_DATA.by_date[atual];
+  const ref = MOV_DATA.by_date[anterior];
+  if (!cur || !ref) return null;
+  const refSp = {};
+  for (const r of ref.rows) if (r.spread_pp != null) refSp[r.codigo] = r.spread_pp;
+  const groups = { Todos: [] };
+  for (const r of cur.rows) {
+    const sp = r.spread_pp; const old = refSp[r.codigo];
+    if (sp == null || old == null) continue;
+    const delta = (sp - old) * 100.0;
+    const m = {
+      codigo: r.codigo, emissor: r.emissor,
+      duration_anos: r.duration_anos, spread_pp: sp,
+      taxa: r.taxa, delta_spread_bps: delta,
+      indexador: r.indexador,
+    };
+    groups.Todos.push(m);
+    (groups[r.indexador] = groups[r.indexador] || []).push(m);
+  }
+  const kpis = { Todos: _kpisFromMovs(cur.rows, refSp, atual, anterior) };
+  const topm = {};
+  for (const k of Object.keys(groups)) {
+    const arr = groups[k].slice().sort((a,b) => b.delta_spread_bps - a.delta_spread_bps);
+    topm[k] = { abrindo: arr.slice(0,10), fechando: arr.slice(-10).reverse(), n_com_d1: arr.length };
+  }
+  return { kpis, top_movements: topm };
+}
+
+function _kpisFromMovs(rows, refSp, atual, anterior) {
+  let nT=rows.length, nL=0, nI=0, nE=0, nSp=0;
+  const deltas = [];
+  for (const r of rows) {
+    if (r.iliquido) nI++; else nL++;
+    if (r.estagnado) nE++;
+    if (r.spread_pp != null) nSp++;
+    if (!r.iliquido && r.spread_pp != null && refSp[r.codigo] != null) {
+      deltas.push((r.spread_pp - refSp[r.codigo]) * 100.0);
+    }
+  }
+  const med = deltas.length ? deltas.reduce((a,b)=>a+b,0)/deltas.length : null;
+  return {
+    data_referencia: atual,
+    data_anterior: anterior,
+    n_total: nT, n_liquidos: nL, n_iliquidos: nI,
+    pct_iliquidos: nT ? Math.round(100.0*nI/nT*100)/100 : null,
+    n_estagnados: nE,
+    pct_estagnados: nT ? Math.round(100.0*nE/nT*100)/100 : null,
+    n_com_spread: nSp,
+    termometro_med_bps: med != null ? Math.round(med*10)/10 : null,
+    n_com_d1: deltas.length,
+  };
+}
+
+function renderKpis(k) {
+  // Item 5: termômetro = média da variação do spread em bps (não soma absoluta).
+  const t = k.termometro_med_bps;
   const tCls = t == null ? "" : (t > 0 ? "neg" : t < 0 ? "pos" : "");
-  const labelPapeis = idx === "Todos" ? "Papéis (todos indexadores)" : "Papéis " + idx;
-  const hintLiq = k.n_com_spread != null
-    ? `${k.n_liquidos} com taxa · ${k.n_com_spread} com spread oficial`
-    : `${k.n_liquidos} com taxa publicada`;
   const cards = [
-    { label: labelPapeis,          val: k.n_total, hint: hintLiq },
-    { label: "Ilíquidos no dia",   val: k.n_iliquidos, hint: (k.pct_iliquidos ?? 0) + "% do total" },
-    { label: "Estagnados ≥5 d.u.", val: k.n_estagnados, hint: (k.pct_estagnados ?? 0) + "% do total" },
-    { label: "Termômetro Σ Δspread D-1",
-      val: t == null ? "—" : (t >= 0 ? "+" : "") + t.toFixed(0) + " bps",
+    { label: "Papéis (IPCA+, CDI+, Pré)", val: k.n_total,
+      hint: `${k.n_liquidos} com taxa · ${k.n_com_spread} com spread oficial` },
+    { label: "Ilíquidos no dia", val: k.n_iliquidos,
+      hint: (k.pct_iliquidos ?? 0) + "% do total" },
+    { label: "Estagnados ≥5 d.u.", val: k.n_estagnados,
+      hint: (k.pct_estagnados ?? 0) + "% do total" },
+    { label: "Termômetro · média Δspread",
+      val: t == null ? "—" : (t >= 0 ? "+" : "") + t.toFixed(1) + " bps",
       cls: tCls,
       hint: k.n_com_d1 + " papéis com Δ vs " + brDate(k.data_anterior) },
   ];
@@ -1013,23 +566,24 @@ function renderKpis(k, idx) {
     `<div class="hint">${c.hint}</div></div>`).join("");
 }
 
-function renderCurvesOverlay(co) {
-  const order = [["d63","T-63",0.4], ["d21","T-21",0.55], ["d5","T-5",0.7],
-                 ["d1","T-1",0.85], ["today","Hoje",1.0]];
+function renderCurvesOverlay(atual, anterior) {
   const traces = [];
-  for (const [k, label, opacity] of order) {
-    const c = co[k];
-    if (!c) continue;
+  const cAt = OVERVIEW.by_date[atual];
+  const cAn = anterior ? OVERVIEW.by_date[anterior] : null;
+  if (cAt && cAt.curve_ipca && cAt.curve_ipca.length) {
     traces.push({
-      x: c.points.map(p => p.a), y: c.points.map(p => p.t),
+      x: cAt.curve_ipca.map(p => p.a), y: cAt.curve_ipca.map(p => p.t),
       type:"scatter", mode:"lines",
-      name: label + " (" + brDate(c.date) + ")",
-      line:{ width: k==="today"?2.5:1.5,
-             color: k==="today" ? cssVar("--accent") :
-                    k==="d1" ? "#7facff" :
-                    k==="d5" ? "#5d7aae" :
-                    k==="d21" ? "#43597d" : "#324155" },
-      opacity,
+      name: "Atual (" + brDate(atual) + ")",
+      line:{ width: 2.5, color: cssVar("--accent") },
+    });
+  }
+  if (cAn && cAn.curve_ipca && cAn.curve_ipca.length) {
+    traces.push({
+      x: cAn.curve_ipca.map(p => p.a), y: cAn.curve_ipca.map(p => p.t),
+      type:"scatter", mode:"lines",
+      name: "Anterior (" + brDate(anterior) + ")",
+      line:{ width: 1.5, color: cssVar("--muted") },
     });
   }
   const layout = Object.assign(PLOTLY_LAYOUT(), {
@@ -1037,7 +591,7 @@ function renderCurvesOverlay(co) {
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title:"Taxa NTN-B (%)", ticksuffix:"%" }),
     showlegend: true,
   });
-  if (traces.length === 0) {
+  if (!traces.length) {
     document.getElementById("chart-curves-overlay").innerHTML =
       '<div class="empty">Sem curvas disponíveis.</div>';
     return;
@@ -1051,7 +605,6 @@ function renderSpreadByIndexador(rows) {
       '<div class="empty">Sem dados.</div>';
     return;
   }
-  // bar chart de mediana atual
   const bar = {
     x: rows.map(r => r.label),
     y: rows.map(r => r.median_spread_pp),
@@ -1061,10 +614,7 @@ function renderSpreadByIndexador(rows) {
     textposition: "outside",
     hovertemplate: "%{x}<br>Mediana: %{y:.2f} pp<br>n=%{customdata}<extra></extra>",
     customdata: rows.map(r => r.count),
-    name: "Mediana atual",
   };
-  // Sparklines: 1 traço por indexador, escala dupla (yaxis2 oculto)
-  // Aqui simplificamos: mostramos só barras de mediana atual + texto.
   const layout = Object.assign(PLOTLY_LAYOUT(), {
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
       { title:"Mediana spread (pp)", ticksuffix:" pp" }),
@@ -1072,11 +622,6 @@ function renderSpreadByIndexador(rows) {
     margin:{ l:50, r:18, t:30, b:40 },
   });
   Plotly.newPlot("chart-spread-by-idx", [bar], layout, PLOTLY_CONFIG);
-
-  // Sparkline 21d como anotação inline em painel à parte? Por simplicidade
-  // mostramos as séries como linhas pequenas abaixo das barras se houver
-  // mais de uma série. Como hoje só temos IPCA+, a sparkline aparece como
-  // linha na própria figura na próxima versão.
 }
 
 function renderHistogram(h, displayLabel, containerId) {
@@ -1122,7 +667,7 @@ function renderHistogram(h, displayLabel, containerId) {
 function renderTopMovers(tm, displayLabel, containerId) {
   const root = document.getElementById(containerId);
   if (!tm || tm.n_com_d1 === 0) {
-    root.innerHTML = '<div class="empty">Sem snapshot anterior — Δ D-1 indisponível.</div>';
+    root.innerHTML = '<div class="empty">Sem snapshot anterior — Δ indisponível.</div>';
     return;
   }
   const row = m =>
@@ -1132,7 +677,7 @@ function renderTopMovers(tm, displayLabel, containerId) {
     `<td class="num ${m.delta_spread_bps>0?'neg':'pos'}">${fmtBps(m.delta_spread_bps)}</td></tr>`;
   const head = `<thead><tr><th>Código</th><th>Emissor</th>` +
     `<th class="num">Dur.</th><th class="num">Spread</th>` +
-    `<th class="num">Δ D-1</th></tr></thead>`;
+    `<th class="num">Δ</th></tr></thead>`;
   root.innerHTML =
     '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Abrindo (spread ↑)</div>' +
     `<table class="mini">${head}<tbody>${tm.abrindo.map(row).join("")}</tbody></table>` +
@@ -1144,75 +689,74 @@ function renderTopMovers(tm, displayLabel, containerId) {
  *  Tab 2 — Curvas Históricas
  * ============================================================ */
 let CURVES = null;
+let CURVE_FP_ATUAL = null, CURVE_FP_ANTERIOR = null;
+let CURVE_DATE_ATUAL = null, CURVE_DATE_ANTERIOR = null;
 
 async function renderCurvas() {
   CURVES = await loadJSON("data/curves_history.json");
-  setupCurvasControls();
-  renderCurvesHeatmap();
-  renderCurvesCompare("d30");
-}
-
-function setupCurvasControls() {
   const dates = CURVES.dates;
-  const last = dates[dates.length - 1];
-  const fp1 = flatpickr("#curve-date1", { dateFormat:"Y-m-d", enable: dates,
-                                          defaultDate: last });
-  const fp2 = flatpickr("#curve-date2", { dateFormat:"Y-m-d", enable: dates,
-                                          defaultDate: dates[0] });
-  document.querySelectorAll(".cmp-btn").forEach(b => {
-    b.addEventListener("click", () => {
-      document.querySelectorAll(".cmp-btn").forEach(x => x.classList.remove("active"));
-      b.classList.add("active");
-      renderCurvesCompare(b.dataset.cmp, fp1, fp2);
-    });
+  CURVE_DATE_ATUAL = dates[dates.length - 1];
+  CURVE_DATE_ANTERIOR = defaultAnteriorFor(CURVE_DATE_ATUAL, dates);
+  if (CURVE_FP_ATUAL) CURVE_FP_ATUAL.destroy();
+  if (CURVE_FP_ANTERIOR) CURVE_FP_ANTERIOR.destroy();
+  CURVE_FP_ATUAL = flatpickr("#curve-date-atual", {
+    dateFormat:"Y-m-d", enable: dates, defaultDate: CURVE_DATE_ATUAL,
+    onChange: (_, d) => { if (d) onCurveDateChange("atual", d); },
   });
+  CURVE_FP_ANTERIOR = flatpickr("#curve-date-anterior", {
+    dateFormat:"Y-m-d", enable: dates.filter(d => d < CURVE_DATE_ATUAL),
+    defaultDate: CURVE_DATE_ANTERIOR || undefined,
+    onChange: (_, d) => { if (d) onCurveDateChange("anterior", d); },
+  });
+  drawCurvesCompare();
+  drawCurvesHeatmap();
 }
 
-function _idxByDate(date) {
-  return CURVES.dates.indexOf(date);
+function onCurveDateChange(which, d) {
+  if (which === "atual") {
+    CURVE_DATE_ATUAL = d;
+    if (CURVE_DATE_ANTERIOR && CURVE_DATE_ANTERIOR >= CURVE_DATE_ATUAL) {
+      CURVE_DATE_ANTERIOR = defaultAnteriorFor(CURVE_DATE_ATUAL, CURVES.dates);
+    }
+    if (CURVE_FP_ANTERIOR) {
+      CURVE_FP_ANTERIOR.set("enable", CURVES.dates.filter(d2 => d2 < CURVE_DATE_ATUAL));
+      if (CURVE_DATE_ANTERIOR) CURVE_FP_ANTERIOR.setDate(CURVE_DATE_ANTERIOR, false);
+      else CURVE_FP_ANTERIOR.clear(false);
+    }
+  } else {
+    CURVE_DATE_ANTERIOR = d;
+  }
+  drawCurvesCompare();
 }
 
-function renderCurvesCompare(mode, fp1, fp2) {
+function drawCurvesCompare() {
   const dates = CURVES.dates;
-  const last = dates.length - 1;
-  let i1 = last, i2 = 0;
-  if (mode === "d30") i2 = Math.max(0, last - 30);
-  else if (mode === "d90") i2 = Math.max(0, last - 90);
-  else if (mode === "custom") {
-    const d1 = document.getElementById("curve-date1").value;
-    const d2 = document.getElementById("curve-date2").value;
-    i1 = _idxByDate(d1); i2 = _idxByDate(d2);
-    if (i1 < 0) i1 = last; if (i2 < 0) i2 = 0;
-  }
+  const i1 = dates.indexOf(CURVE_DATE_ATUAL);
+  const i2 = CURVE_DATE_ANTERIOR ? dates.indexOf(CURVE_DATE_ANTERIOR) : -1;
   const traces = [];
-  for (const [idx, lbl, color] of [[i1,"Hoje",cssVar("--accent")], [i2,"Comparação",cssVar("--muted")]]) {
-    if (idx == null || idx < 0) continue;
-    traces.push({
-      x: CURVES.vertices_anos, y: CURVES.matrix[idx],
-      type:"scatter", mode:"lines",
-      name: lbl + " (" + brDate(dates[idx]) + ")",
-      line:{ color, width:2 },
-    });
-  }
+  if (i1 >= 0) traces.push({
+    x: CURVES.vertices_anos, y: CURVES.matrix[i1],
+    type:"scatter", mode:"lines",
+    name: "Atual (" + brDate(dates[i1]) + ")",
+    line:{ color: cssVar("--accent"), width:2 },
+  });
+  if (i2 >= 0) traces.push({
+    x: CURVES.vertices_anos, y: CURVES.matrix[i2],
+    type:"scatter", mode:"lines",
+    name: "Anterior (" + brDate(dates[i2]) + ")",
+    line:{ color: cssVar("--muted"), width:2 },
+  });
   const layout = Object.assign(PLOTLY_LAYOUT(), {
     xaxis: Object.assign(PLOTLY_LAYOUT().xaxis,
       { title:"Vértice (anos)", type:"log" }),
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
       { title:"Taxa NTN-B (%)", ticksuffix:"%" }),
   });
-  if (traces.length < 2 && mode !== "today") {
-    Plotly.newPlot("chart-curves-compare", traces, Object.assign(layout,
-      { annotations: [{ text: "Sem snapshot na janela " + mode +
-        " — exibindo apenas data disponível.",
-        xref:"paper", yref:"paper", x:0.5, y:1.05, showarrow:false,
-        font:{ color: cssVar("--muted"), size: 11 } }] }), PLOTLY_CONFIG);
-  } else {
-    Plotly.newPlot("chart-curves-compare", traces, layout, PLOTLY_CONFIG);
-  }
+  Plotly.newPlot("chart-curves-compare", traces, layout, PLOTLY_CONFIG);
 }
 
-function renderCurvesHeatmap() {
-  const z = CURVES.matrix;  // dates x vertices
+function drawCurvesHeatmap() {
+  const z = CURVES.matrix;
   const layout = Object.assign(PLOTLY_LAYOUT(), {
     xaxis: Object.assign(PLOTLY_LAYOUT().xaxis,
       { title:"Vértice (anos)", type:"log" }),
@@ -1235,40 +779,67 @@ function renderCurvesHeatmap() {
 }
 
 /* ============================================================
- *  Tab 3 — Dispersão IPCA+
+ *  Tab 3 — Dispersão
  * ============================================================ */
 let DISP_INDEX = null;
 let DISP_DATA = null;
-let DISP_SETOR_MS = null;
+let DISP_FP_ATUAL = null, DISP_FP_ANTERIOR = null;
+let DISP_DATE_ATUAL = null, DISP_DATE_ANTERIOR = null;
+
+const SECTOR_COLORS_FALLBACK = {
+  "IPCA+":"#5a9bff", "DI+":"#3aa66c", "Prefixado":"#d2a052",
+};
 
 async function renderDispersao() {
   DISP_INDEX = await loadJSON("data/dispersion/_index.json");
-  // Garante que o índice de watchlist (lista de emissores/setores) esteja
-  // pronto, mesmo quando o usuário abre Dispersão antes de Movimentações.
-  if (!MOV_DATA) {
-    MOV_DATA = await loadJSON("data/movements.json");
-    watchlistRebuildIndex();
-  }
-  DISP_SETOR_MS = createMultiSelect({
-    host: "disp-setor",
-    options: DISP_INDEX.sectors.map(s => ({ value: s, label: s })),
-    onChange: () => onDispersionFilterChange(),
-  });
   const dates = DISP_INDEX.dates;
-  const last = dates[dates.length - 1];
-  DISP_FP_DATE = flatpickr("#disp-date", {
-    dateFormat:"Y-m-d", enable: dates, defaultDate: last,
-    onChange: (_, dstr) => loadAndRenderDispersion(dstr),
+  DISP_DATE_ATUAL = dates[dates.length - 1];
+  DISP_DATE_ANTERIOR = defaultAnteriorFor(DISP_DATE_ATUAL, dates);
+
+  // Indexador select (item 11: filtro local na própria aba)
+  const idxSel = document.getElementById("disp-idx");
+  while (idxSel.options.length > 1) idxSel.remove(1);
+  for (const g of (DISP_INDEX.indexadores || [])) {
+    const o = document.createElement("option"); o.value = g; o.textContent = g;
+    idxSel.appendChild(o);
+  }
+
+  if (DISP_FP_ATUAL) DISP_FP_ATUAL.destroy();
+  if (DISP_FP_ANTERIOR) DISP_FP_ANTERIOR.destroy();
+  DISP_FP_ATUAL = flatpickr("#disp-date-atual", {
+    dateFormat:"Y-m-d", enable: dates, defaultDate: DISP_DATE_ATUAL,
+    onChange: (_, d) => { if (d) onDispDateChange("atual", d); },
   });
-  document.getElementById("disp-cob").addEventListener("change", () =>
-    onDispersionFilterChange());
-  document.getElementById("disp-yaxis").addEventListener("change", () =>
-    onDispersionFilterChange());
-  setupTimeline(dates);
-  await loadAndRenderDispersion(last);
+  DISP_FP_ANTERIOR = flatpickr("#disp-date-anterior", {
+    dateFormat:"Y-m-d", enable: dates.filter(d => d < DISP_DATE_ATUAL),
+    defaultDate: DISP_DATE_ANTERIOR || undefined,
+    onChange: (_, d) => { if (d) onDispDateChange("anterior", d); },
+  });
+  document.getElementById("disp-yaxis").addEventListener("change", drawDispersion);
+  document.getElementById("disp-idx").addEventListener("change", drawDispersion);
+
+  setupTimeline();
+  await loadAndRenderDispersion(DISP_DATE_ATUAL);
 }
 
-let DISP_FP_DATE = null;
+function onDispDateChange(which, d) {
+  if (which === "atual") {
+    DISP_DATE_ATUAL = d;
+    if (DISP_DATE_ANTERIOR && DISP_DATE_ANTERIOR >= DISP_DATE_ATUAL) {
+      DISP_DATE_ANTERIOR = defaultAnteriorFor(DISP_DATE_ATUAL, DISP_INDEX.dates);
+    }
+    if (DISP_FP_ANTERIOR) {
+      DISP_FP_ANTERIOR.set("enable", DISP_INDEX.dates.filter(x => x < DISP_DATE_ATUAL));
+      if (DISP_DATE_ANTERIOR) DISP_FP_ANTERIOR.setDate(DISP_DATE_ANTERIOR, false);
+      else DISP_FP_ANTERIOR.clear(false);
+    }
+    timelinePause();
+    loadAndRenderDispersion(DISP_DATE_ATUAL);
+  } else {
+    DISP_DATE_ANTERIOR = d;
+    timelinePause();
+  }
+}
 
 async function loadAndRenderDispersion(date) {
   DISP_DATA = await loadJSON("data/dispersion/" + date + ".json");
@@ -1276,210 +847,78 @@ async function loadAndRenderDispersion(date) {
   drawDispersion();
 }
 
-function onDispersionFilterChange() {
-  // Filtro local muda enquanto a animação roda: recomputa range com filtros
-  // atuais para que os eixos permaneçam fixos coerentes. Quando pausado, os
-  // eixos voltam para autorange normalmente.
-  if (TL_STATE.playing) {
-    const r = _computeTimelineAxisRange();
-    TL_STATE.xRange = r ? r.xRange : null;
-    TL_STATE.yRange = r ? r.yRange : null;
-  }
-  drawDispersion();
-}
-
-const SECTOR_COLORS = {
-  "Energia Elétrica":"#5a9bff",
-  "Petróleo & Gás":"#d2a052",
-  "Saneamento":"#3aa66c",
-  "Saúde":"#dc5752",
-  "Logística & Concessões":"#a378d6",
-  "Telecom":"#4ab8b8",
-  "Mineração & Siderurgia":"#c97042",
-  "Bancos & Financeiro":"#8a96a8",
-  "Varejo":"#b85eaf",
-  "Imobiliário":"#7a8d4a",
-  "Agro & Alimentos":"#a08a3a",
-  "Industrial":"#6e7a8c",
-  "Outros":"#444b58",
-};
-
-// Paleta para colorir por empresa quando exatamente 1 setor está selecionado.
-const COMPANY_PALETTE = [
-  "#5a9bff", "#d2a052", "#3aa66c", "#dc5752", "#a378d6",
-  "#4ab8b8", "#c97042", "#b85eaf", "#7a8d4a", "#a08a3a",
-  "#6e7a8c", "#e57373", "#81c784", "#64b5f6", "#ffb74d",
-  "#ba68c8", "#4db6ac", "#f06292", "#9575cd", "#aed581",
-  "#ff8a65", "#7986cb", "#a1887f", "#90a4ae", "#dce775",
-];
-function _hashStr(s) {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-  return Math.abs(h);
-}
-function colorForCompany(emissor) {
-  return COMPANY_PALETTE[_hashStr(emissor || "") % COMPANY_PALETTE.length];
-}
-
-function getDispYAxis() {
-  const el = document.getElementById("disp-yaxis");
-  return el && el.value === "pp" ? "pp" : "sp";
-}
-
 function drawDispersion() {
   if (!DISP_DATA) return;
-  const onlyCob = document.getElementById("disp-cob").checked;
-  const setorAll = !DISP_SETOR_MS || DISP_SETOR_MS.isAll();
-  const setorSet = DISP_SETOR_MS ? DISP_SETOR_MS.getSelected() : null;
-  // Cor por empresa apenas quando exatamente 1 setor está marcado (e não é "todos").
-  const colorByCompany = !setorAll && setorSet && setorSet.size === 1;
-  const yKey = getDispYAxis();
+  const yKey = document.getElementById("disp-yaxis").value === "pp" ? "pp" : "sp";
   const yIsPP = yKey === "pp";
-  const yUnit = yIsPP ? "%" : " pp";
-  const yHoverLbl = yIsPP ? "% do PAR" : "Spread";
-  const yHoverFmt = yIsPP ? "%{y:.4f}%" : "%{y:.2f} pp";
+  const idxSel = document.getElementById("disp-idx").value;
 
   const traces = {};
   for (const p of DISP_DATA.papers) {
-    if (onlyCob && !isInWatchlist(p)) continue;
-    if (!setorAll && (!setorSet || !setorSet.has(p.s))) continue;
-    if (!paperPassesGlobalIdx(p.i)) continue;
+    if (idxSel && p.i !== idxSel) continue;
     const yVal = p[yKey];
     if (yVal == null) continue;
-    const groupKey = colorByCompany ? (p.e || "—") : p.s;
-    if (!traces[groupKey]) {
-      const color = colorByCompany
-        ? colorForCompany(p.e)
-        : (SECTOR_COLORS[p.s] || "#888");
-      traces[groupKey] = { x:[], y:[], text:[], customdata:[], type:"scatter",
-        mode:"markers", name: groupKey,
+    const grp = p.i;
+    if (!traces[grp]) {
+      const color = SECTOR_COLORS_FALLBACK[grp] || "#888";
+      // Item 3: tooltip com cor de fundo do trace e texto adaptativo por luminância YIQ.
+      const fontColor = adaptiveTextColor(color);
+      traces[grp] = {
+        x:[], y:[], customdata:[], type:"scatter", mode:"markers", name: grp,
         marker:{ color, size:6, opacity:0.85, line:{width:0} },
+        hoverlabel: {
+          bgcolor: color, bordercolor: color,
+          font: { color: fontColor },
+        },
         hovertemplate:
           "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>" +
+          "Indexador %{customdata[3]}<br>" +
           "Duration %{x:.2f}a<br>Taxa %{customdata[2]:.2f}%<br>" +
-          yHoverLbl + " " + yHoverFmt + "<extra>%{customdata[3]}</extra>",
+          (yIsPP ? "% do PAR %{y:.4f}%" : "Spread %{y:.2f} pp") +
+          "<extra></extra>",
       };
     }
-    traces[groupKey].x.push(p.d);
-    traces[groupKey].y.push(yVal);
-    traces[groupKey].customdata.push([p.c, (p.e||'').slice(0,40), p.t, p.s]);
+    traces[grp].x.push(p.d);
+    traces[grp].y.push(yVal);
+    traces[grp].customdata.push([p.c, (p.e||'').slice(0,40), p.t, p.i]);
   }
   const data = Object.values(traces);
+  let yTitle = yIsPP ? "% do PAR"
+    : (idxSel === "DI+" ? "Spread sobre CDI (pp)"
+      : idxSel === "Prefixado" ? "Spread sobre Pré (pp)"
+      : "Spread (pp)");
   const layout = Object.assign(PLOTLY_LAYOUT(), {
-    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis,
-      { title:"Duration (anos)" }),
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title:"Duration (anos)" }),
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
-      { title:"Spread sobre NTN-B (pp)", ticksuffix: yUnit }),
+      { title: yTitle, ticksuffix: yIsPP ? "%" : " pp" }),
     legend:{ font:{size:10}, orientation:"v" },
   });
-  if (!data.length) {
-    document.getElementById("chart-dispersion").innerHTML =
-      '<div class="empty">Sem papéis após filtros.</div>';
-    return;
-  }
-  const idxLbl = effectiveIdxLabel();
-  let yTitle;
-  if (yIsPP) {
-    yTitle = "% do PAR";
-  } else {
-    yTitle = idxLbl === "DI+" ? "Spread sobre CDI (pp)"
-           : idxLbl === "Prefixado" ? "Spread sobre Pré (pp)"
-           : "Spread sobre NTN-B (pp)";
-  }
-  layout.yaxis.title = yTitle;
   if (TL_STATE.playing && TL_STATE.xRange && TL_STATE.yRange) {
     layout.xaxis.range = TL_STATE.xRange.slice();
     layout.xaxis.autorange = false;
     layout.yaxis.range = TL_STATE.yRange.slice();
     layout.yaxis.autorange = false;
   }
+  if (!data.length) {
+    document.getElementById("chart-dispersion").innerHTML =
+      '<div class="empty">Sem papéis após filtros.</div>';
+    return;
+  }
   Plotly.newPlot("chart-dispersion", data, layout, PLOTLY_CONFIG);
 }
 
-/* -------- Timeline animado -------- */
+/* -------- Timeline animado (Anterior → Atual) -------- */
 let TL_STATE = {
-  start: null, end: null, current: null, speed: 1000,
-  playing: false, intervalId: null,
+  current: null, speed: 500, playing: false, intervalId: null,
   xRange: null, yRange: null,
 };
-let TL_FP_START = null, TL_FP_END = null;
 
-function _datesInRange(start, end) {
-  const all = (DISP_INDEX && DISP_INDEX.dates) || [];
-  const i0 = all.indexOf(start), i1 = all.indexOf(end);
-  if (i0 < 0 || i1 < 0 || i0 > i1) return [];
-  return all.slice(i0, i1 + 1);
-}
-
-function _computeTimelineAxisRange() {
-  // Walks all already-cached snapshots in [start, end], applies the same
-  // filters as drawDispersion, and returns padded x/y ranges. Eixos ficam
-  // estáticos durante a animação.
-  const dates = _datesInRange(TL_STATE.start, TL_STATE.end);
-  if (!dates.length) return null;
-  const onlyCob = document.getElementById("disp-cob").checked;
-  const setorAll = !DISP_SETOR_MS || DISP_SETOR_MS.isAll();
-  const setorSet = DISP_SETOR_MS ? DISP_SETOR_MS.getSelected() : null;
-  const yKey = getDispYAxis();
-  let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity, n = 0;
-  for (const d of dates) {
-    const data = cache.get("data/dispersion/" + d + ".json");
-    if (!data) continue;
-    for (const p of data.papers) {
-      if (onlyCob && !isInWatchlist(p)) continue;
-      if (!setorAll && (!setorSet || !setorSet.has(p.s))) continue;
-      if (!paperPassesGlobalIdx(p.i)) continue;
-      if (typeof p.d === "number") {
-        if (p.d < xMin) xMin = p.d;
-        if (p.d > xMax) xMax = p.d;
-      }
-      const yVal = p[yKey];
-      if (typeof yVal === "number") {
-        if (yVal < yMin) yMin = yVal;
-        if (yVal > yMax) yMax = yVal;
-      }
-      n++;
-    }
-  }
-  if (!n || !isFinite(xMin) || !isFinite(yMin)) return null;
-  const padX = Math.max((xMax - xMin) * 0.07, 0.1);
-  const padY = Math.max((yMax - yMin) * 0.07, 0.05);
-  return {
-    xRange: [xMin - padX, xMax + padX],
-    yRange: [yMin - padY, yMax + padY],
-  };
-}
-
-async function _refreshTimelineAxisRange() {
-  const dates = _datesInRange(TL_STATE.start, TL_STATE.end);
-  if (!dates.length) {
-    TL_STATE.xRange = null; TL_STATE.yRange = null;
-    return;
-  }
-  await Promise.all(dates.map(d => loadJSON("data/dispersion/" + d + ".json")));
-  const r = _computeTimelineAxisRange();
-  TL_STATE.xRange = r ? r.xRange : null;
-  TL_STATE.yRange = r ? r.yRange : null;
-}
-
-function setupTimeline(dates) {
-  if (!dates || !dates.length) return;
-  TL_STATE.start = dates[0];
-  TL_STATE.end = dates[dates.length - 1];
-  TL_STATE.speed = 1000;
-  TL_FP_START = flatpickr("#tl-start", {
-    dateFormat: "Y-m-d", enable: dates, defaultDate: dates[0],
-    onChange: (_, d) => { if (d) { TL_STATE.start = d; timelinePause(); _refreshTimelineAxisRange(); } },
-  });
-  TL_FP_END = flatpickr("#tl-end", {
-    dateFormat: "Y-m-d", enable: dates, defaultDate: dates[dates.length - 1],
-    onChange: (_, d) => { if (d) { TL_STATE.end = d; timelinePause(); _refreshTimelineAxisRange(); } },
-  });
+function setupTimeline() {
+  // Item 4: velocidade default 0.5s.
+  TL_STATE.speed = parseInt(document.getElementById("tl-speed").value, 10) || 500;
   document.getElementById("tl-speed").addEventListener("change", e => {
-    TL_STATE.speed = parseInt(e.target.value, 10) || 1000;
-    if (TL_STATE.playing) {
-      timelinePause(); timelinePlay();
-    }
+    TL_STATE.speed = parseInt(e.target.value, 10) || 500;
+    if (TL_STATE.playing) { timelinePause(); timelinePlay(); }
   });
   document.getElementById("tl-play").addEventListener("click", () => {
     if (TL_STATE.playing) timelinePause();
@@ -1487,16 +926,45 @@ function setupTimeline(dates) {
   });
 }
 
+function _datesInDispRange() {
+  const all = (DISP_INDEX && DISP_INDEX.dates) || [];
+  const start = DISP_DATE_ANTERIOR || all[0];
+  const end = DISP_DATE_ATUAL || all[all.length - 1];
+  const i0 = all.indexOf(start), i1 = all.indexOf(end);
+  if (i0 < 0 || i1 < 0 || i0 > i1) return [];
+  return all.slice(i0, i1 + 1);
+}
+
+function _computeTimelineAxisRange() {
+  const dates = _datesInDispRange();
+  if (!dates.length) return null;
+  const yKey = document.getElementById("disp-yaxis").value === "pp" ? "pp" : "sp";
+  const idxSel = document.getElementById("disp-idx").value;
+  let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity, n = 0;
+  for (const d of dates) {
+    const data = cache.get("data/dispersion/" + d + ".json");
+    if (!data) continue;
+    for (const p of data.papers) {
+      if (idxSel && p.i !== idxSel) continue;
+      if (typeof p.d === "number") { if (p.d < xMin) xMin = p.d; if (p.d > xMax) xMax = p.d; }
+      const yVal = p[yKey];
+      if (typeof yVal === "number") { if (yVal < yMin) yMin = yVal; if (yVal > yMax) yMax = yVal; }
+      n++;
+    }
+  }
+  if (!n || !isFinite(xMin) || !isFinite(yMin)) return null;
+  const padX = Math.max((xMax - xMin) * 0.07, 0.1);
+  const padY = Math.max((yMax - yMin) * 0.07, 0.05);
+  return { xRange: [xMin - padX, xMax + padX], yRange: [yMin - padY, yMax + padY] };
+}
+
 async function timelinePlay() {
-  const range = _datesInRange(TL_STATE.start, TL_STATE.end);
+  const range = _datesInDispRange();
   if (range.length === 0) return;
   const status = document.getElementById("tl-status");
   const btn = document.getElementById("tl-play");
   btn.disabled = true; status.textContent = "Carregando snapshots…";
-  // Pré-carrega tudo (em paralelo). Cache do loadJSON faz o resto.
   await Promise.all(range.map(d => loadJSON("data/dispersion/" + d + ".json")));
-  // Eixos fixos: calcula range global a partir de todos os snapshots
-  // do intervalo, respeitando filtros atuais. Reaplicado a cada Play.
   const r = _computeTimelineAxisRange();
   TL_STATE.xRange = r ? r.xRange : null;
   TL_STATE.yRange = r ? r.yRange : null;
@@ -1505,10 +973,9 @@ async function timelinePlay() {
   btn.textContent = "❚❚ Pause";
   let idx = range.indexOf(TL_STATE.current);
   if (idx < 0) idx = 0;
-  // Mostra primeira data imediatamente.
   await _timelineGoto(range[idx]);
   TL_STATE.intervalId = setInterval(async () => {
-    idx = (idx + 1) % range.length; // loop ao chegar no fim
+    idx = (idx + 1) % range.length;
     await _timelineGoto(range[idx]);
   }, TL_STATE.speed);
 }
@@ -1518,17 +985,15 @@ function timelinePause() {
     clearInterval(TL_STATE.intervalId);
     TL_STATE.intervalId = null;
   }
-  // Libera eixos: snapshot estático volta a usar autorange.
   TL_STATE.xRange = null;
   TL_STATE.yRange = null;
   const btn = document.getElementById("tl-play");
-  if (btn) btn.textContent = "▶ Play";
+  if (btn) btn.textContent = "▶ Play (Anterior → Atual)";
 }
 async function _timelineGoto(date) {
   TL_STATE.current = date;
   DISP_DATA = await loadJSON("data/dispersion/" + date + ".json");
   document.getElementById("tl-now").textContent = brDate(date);
-  if (DISP_FP_DATE) DISP_FP_DATE.setDate(date, false);
   drawDispersion();
 }
 
@@ -1537,50 +1002,39 @@ async function _timelineGoto(date) {
  * ============================================================ */
 let MOV_TABLE = null;
 let MOV_DATA = null;
-let MOV_SETOR_MS = null;
-let MOV_DATE_BASE = null;
-let MOV_DATE_REF = null;
-let MOV_FP_BASE = null;
-let MOV_FP_REF = null;
+let MOV_DATE_ATUAL = null, MOV_DATE_ANTERIOR = null;
+let MOV_FP_ATUAL = null, MOV_FP_ANTERIOR = null;
 let MOV_STATS = null;
 
 function _computeMovStats(rows) {
-  const _pct = (arr, p) => arr.length ? arr[Math.min(arr.length - 1, Math.floor((arr.length - 1) * p + 0.5))] : null;
-  const pparDist = rows.map(r => r.pct_pu_par).filter(v => v != null).map(v => Math.abs(v - 100)).sort((a,b)=>a-b);
-  const dltAbs   = rows.map(r => r.delta_bps).filter(v => v != null).map(v => Math.abs(v)).sort((a,b)=>a-b);
-  const pparDistP95 = _pct(pparDist, 0.95) ?? 0;
-  const deltaAbsP95 = _pct(dltAbs, 0.95) ?? 0;
-  return { pparDistP95, deltaAbsP95 };
+  const _pct = (arr, p) => arr.length
+    ? arr[Math.min(arr.length - 1, Math.floor((arr.length - 1) * p + 0.5))] : null;
+  const pparDist = rows.map(r => r.pct_pu_par).filter(v => v != null)
+    .map(v => Math.abs(v - 100)).sort((a,b)=>a-b);
+  const dltAbs = rows.map(r => r.delta_bps).filter(v => v != null)
+    .map(v => Math.abs(v)).sort((a,b)=>a-b);
+  return {
+    pparDistP95: _pct(pparDist, 0.95) ?? 0,
+    deltaAbsP95: _pct(dltAbs, 0.95) ?? 0,
+  };
 }
 
-// Tema dark: interpola entre suave (alpha 0.15) e saturado (alpha 0.55) conforme t.
-// Vermelho: hsla(0, 30->60%, 25->35%, 0.15->0.55). Verde: hsla(120, 25->55%, 25->30%, 0.15->0.55).
 function _hslaRedGreen(positive, t) {
   const lerp = (a, b) => a + (b - a) * t;
-  if (positive) {
-    return `hsla(0, ${lerp(30, 60).toFixed(1)}%, ${lerp(25, 35).toFixed(1)}%, ${lerp(0.15, 0.55).toFixed(3)})`;
-  }
-  return `hsla(120, ${lerp(25, 55).toFixed(1)}%, ${lerp(25, 30).toFixed(1)}%, ${lerp(0.15, 0.55).toFixed(3)})`;
+  if (positive) return `hsla(0, ${lerp(30,60).toFixed(1)}%, ${lerp(25,35).toFixed(1)}%, ${lerp(0.15,0.55).toFixed(3)})`;
+  return `hsla(120, ${lerp(25,55).toFixed(1)}%, ${lerp(25,30).toFixed(1)}%, ${lerp(0.15,0.55).toFixed(3)})`;
 }
-
-// Delta Spread: positivo -> vermelho, negativo -> verde.
-// t = clamp(|delta_bps| / max(50, P95_delta_abs), 0, 1).
 function _bgForDelta(v, p95Abs) {
   if (v == null || v === 0) return "transparent";
   const threshold = Math.max(50, p95Abs || 0);
-  const t = Math.min(Math.abs(v) / threshold, 1);
-  return _hslaRedGreen(v > 0, t);
+  return _hslaRedGreen(v > 0, Math.min(Math.abs(v) / threshold, 1));
 }
-
-// %PAR: pivot fixo em 100. v < 100 -> vermelho, v >= 100 -> verde.
-// t = clamp(|pct_pu_par - 100| / max(20, P95_dist), 0, 1).
 function _bgForPctPar(v, p95Dist) {
   if (v == null) return "transparent";
   const dist = Math.abs(v - 100);
   if (dist === 0) return "transparent";
   const threshold = Math.max(20, p95Dist || 0);
-  const t = Math.min(dist / threshold, 1);
-  return _hslaRedGreen(v < 100, t);
+  return _hslaRedGreen(v < 100, Math.min(dist / threshold, 1));
 }
 
 function _movSpreadMap(date) {
@@ -1589,36 +1043,23 @@ function _movSpreadMap(date) {
   if (!entry) return null;
   if (!entry._spread_map) {
     const m = Object.create(null);
-    for (const r of entry.rows) {
-      if (r.spread_pp != null) m[r.codigo] = r.spread_pp;
-    }
+    for (const r of entry.rows) if (r.spread_pp != null) m[r.codigo] = r.spread_pp;
     entry._spread_map = m;
   }
   return entry._spread_map;
 }
 
-function _movRefEnable(baseDate) {
-  // Data referência sempre anterior à base, para que Δ = base − ref preserve
-  // o sinal "positivo = spread abriu" da convenção original (today − D-N).
-  const dates = (MOV_DATA && MOV_DATA.dates) || [];
-  const i = dates.indexOf(baseDate);
-  return i > 0 ? dates.slice(0, i) : [];
-}
-
 function _movRowsForCurrentDates() {
-  const baseEntry = MOV_DATA.by_date[MOV_DATE_BASE];
+  const baseEntry = MOV_DATA.by_date[MOV_DATE_ATUAL];
   if (!baseEntry) return [];
-  const refMap = _movSpreadMap(MOV_DATE_REF);
+  const refMap = _movSpreadMap(MOV_DATE_ANTERIOR);
   return baseEntry.rows.map(r => {
-    let delta = null;
-    let spreadRef = null;
+    let delta = null, spreadRef = null;
     if (refMap) {
       const old = refMap[r.codigo];
       if (old != null) {
         spreadRef = old;
-        if (r.spread_pp != null) {
-          delta = Math.round((r.spread_pp - old) * 100.0 * 10) / 10;
-        }
+        if (r.spread_pp != null) delta = Math.round((r.spread_pp - old) * 100.0 * 10) / 10;
       }
     }
     return Object.assign({}, r, { delta_bps: delta, spread_ref_pp: spreadRef });
@@ -1627,76 +1068,60 @@ function _movRowsForCurrentDates() {
 
 async function renderMovimentacoes() {
   MOV_DATA = await loadJSON("data/movements.json");
-  watchlistRebuildIndex();
-  setupWatchlistModalEvents();
-  document.getElementById("mov-cob-edit").addEventListener("click", openWatchlistModal);
   const dates = MOV_DATA.dates || [];
-  MOV_DATE_BASE = MOV_DATA.latest || dates[dates.length - 1];
-  // default: data referência = data anterior à base, se houver.
-  const baseIdx = dates.indexOf(MOV_DATE_BASE);
-  MOV_DATE_REF = baseIdx > 0 ? dates[baseIdx - 1] : null;
+  MOV_DATE_ATUAL = MOV_DATA.latest || dates[dates.length - 1];
+  MOV_DATE_ANTERIOR = defaultAnteriorFor(MOV_DATE_ATUAL, dates);
 
-  // popula select de indexador (single) e multi-select de setor a partir do
-  // snapshot mais recente disponível no payload (cobre todos os papéis).
   const idxSel = document.getElementById("mov-idx");
-  // limpa antes para evitar duplicações em re-renders (ex.: troca de indexador global)
   while (idxSel.options.length > 1) idxSel.remove(1);
-  const idxs = new Set(), setores = new Set();
-  for (const date of dates) {
-    for (const r of MOV_DATA.by_date[date].rows) {
+  const idxs = new Set();
+  for (const date of dates)
+    for (const r of MOV_DATA.by_date[date].rows)
       if (r.indexador) idxs.add(r.indexador);
-      if (r.setor) setores.add(r.setor);
-    }
-  }
   for (const s of [...idxs].sort()) {
     const o = document.createElement("option"); o.value=s; o.textContent=s;
     idxSel.appendChild(o);
   }
-  MOV_SETOR_MS = createMultiSelect({
-    host: "mov-setor",
-    options: [...setores].sort().map(s => ({ value: s, label: s })),
-    onChange: () => applyMovFilter(),
-  });
 
-  if (MOV_FP_BASE) MOV_FP_BASE.destroy();
-  if (MOV_FP_REF) MOV_FP_REF.destroy();
-  MOV_FP_BASE = flatpickr("#mov-date-base", {
-    dateFormat: "Y-m-d", enable: dates, defaultDate: MOV_DATE_BASE,
-    onChange: (_, dstr) => onMovDateChange("base", dstr),
+  if (MOV_FP_ATUAL) MOV_FP_ATUAL.destroy();
+  if (MOV_FP_ANTERIOR) MOV_FP_ANTERIOR.destroy();
+  MOV_FP_ATUAL = flatpickr("#mov-date-atual", {
+    dateFormat: "Y-m-d", enable: dates, defaultDate: MOV_DATE_ATUAL,
+    onChange: (_, dstr) => onMovDateChange("atual", dstr),
   });
-  MOV_FP_REF = flatpickr("#mov-date-ref", {
-    dateFormat: "Y-m-d", enable: _movRefEnable(MOV_DATE_BASE),
-    defaultDate: MOV_DATE_REF || undefined,
-    onChange: (_, dstr) => onMovDateChange("ref", dstr),
+  MOV_FP_ANTERIOR = flatpickr("#mov-date-anterior", {
+    dateFormat: "Y-m-d", enable: _movRefEnable(MOV_DATE_ATUAL),
+    defaultDate: MOV_DATE_ANTERIOR || undefined,
+    onChange: (_, dstr) => onMovDateChange("anterior", dstr),
   });
 
   buildMovTable();
   document.getElementById("mov-q").addEventListener("input", applyMovFilter);
   document.getElementById("mov-idx").addEventListener("change", applyMovFilter);
-  document.getElementById("mov-cob").addEventListener("change", applyMovFilter);
   document.getElementById("mov-hide-iliq").addEventListener("change", applyMovFilter);
   applyMovFilter();
 }
 
+function _movRefEnable(baseDate) {
+  const dates = (MOV_DATA && MOV_DATA.dates) || [];
+  const i = dates.indexOf(baseDate);
+  return i > 0 ? dates.slice(0, i) : [];
+}
+
 function onMovDateChange(which, dstr) {
-  if (which === "base") {
-    if (!dstr) return; // base é obrigatória
-    if (dstr === MOV_DATE_BASE) return;
-    MOV_DATE_BASE = dstr;
-    // Se a referência atual deixou de ser estritamente anterior à base, invalida-a.
-    if (MOV_DATE_REF != null && MOV_DATE_REF >= MOV_DATE_BASE) {
-      MOV_DATE_REF = null;
+  if (which === "atual") {
+    if (!dstr || dstr === MOV_DATE_ATUAL) return;
+    MOV_DATE_ATUAL = dstr;
+    if (MOV_DATE_ANTERIOR != null && MOV_DATE_ANTERIOR >= MOV_DATE_ATUAL) {
+      MOV_DATE_ANTERIOR = null;
     }
-    if (MOV_FP_REF) {
-      MOV_FP_REF.set("enable", _movRefEnable(MOV_DATE_BASE));
-      if (MOV_DATE_REF == null) {
-        MOV_FP_REF.clear(false); // não dispara onChange
-      } else {
-        MOV_FP_REF.setDate(MOV_DATE_REF, false);
-      }
+    if (MOV_FP_ANTERIOR) {
+      MOV_FP_ANTERIOR.set("enable", _movRefEnable(MOV_DATE_ATUAL));
+      if (MOV_DATE_ANTERIOR == null) MOV_FP_ANTERIOR.clear(false);
+      else MOV_FP_ANTERIOR.setDate(MOV_DATE_ANTERIOR, false);
     }
-  } else { // ref
-    MOV_DATE_REF = dstr || null;
+  } else {
+    MOV_DATE_ANTERIOR = dstr || null;
   }
   refreshMovData();
 }
@@ -1714,7 +1139,6 @@ function buildMovTable() {
     const v = c.getValue();
     return v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + " pp";
   };
-  // Delta Spread: convencao credit analysis — positivo (abrindo) = vermelho/ruim, negativo (fechando) = verde/bom.
   const fmtDelta = c => {
     const v = c.getValue();
     const el = c.getElement();
@@ -1726,7 +1150,6 @@ function buildMovTable() {
     el.style.backgroundColor = _bgForDelta(v, MOV_STATS && MOV_STATS.deltaAbsP95);
     return (v >= 0 ? "+" : "") + v.toFixed(0);
   };
-  // %PAR: cor de texto como hoje (verde >100, vermelho <100); fundo gradiente em torno de 100.
   const fmtPctPar = c => {
     const v = c.getValue();
     const el = c.getElement();
@@ -1751,12 +1174,10 @@ function buildMovTable() {
         formatter: c => {
           const r = c.getRow().getData();
           let s = c.getValue();
-          if (isInWatchlist(r)) s += `<span class="badge cob">cob</span>`;
           if (r.estagnado) s += '<span class="badge warn">estag</span>';
           return s;
         } },
       { title:"Emissor", field:"emissor", minWidth:200 },
-      { title:"Setor", field:"setor", width:170 },
       { title:"Index", field:"indexador", width:80 },
       { title:"Taxa", field:"taxa", width:78, hozAlign:"right",
         formatter: c => fmtPct(c.getValue()) },
@@ -1765,17 +1186,14 @@ function buildMovTable() {
       { title:"Duration", field:"duration_anos", width:90, hozAlign:"right",
         formatter: c => fmtAnos(c.getValue()) },
       { title:"Vencimento", field:"vencimento", width:105 },
-      { title:"NTNB Ref", field:"benchmark_vencimento", width:105,
-        formatter: c => {
-          const r = c.getRow().getData();
-          if (r.indexador !== "IPCA+") return "-";
-          return c.getValue() || "-";
-        } },
+      { title:"Ref Venc", field:"benchmark_vencimento", width:105,
+        formatter: c => c.getValue() || "-" },
       { title:"Spread Anterior", field:"spread_ref_pp", width:130, hozAlign:"right",
         formatter: fmtSpread },
       { title:"Spread Atual", field:"spread_pp", width:120, hozAlign:"right",
         formatter: fmtSpread },
-      { title:"Delta Spread", field:"delta_bps", width:120, hozAlign:"right", formatter: fmtDelta },
+      { title:"Delta Spread", field:"delta_bps", width:120, hozAlign:"right",
+        formatter: fmtDelta },
     ],
   });
 }
@@ -1783,17 +1201,10 @@ function buildMovTable() {
 function applyMovFilter() {
   const q = document.getElementById("mov-q").value.toLowerCase();
   const idx = document.getElementById("mov-idx").value;
-  const onlyCob = document.getElementById("mov-cob").checked;
   const hideIliq = document.getElementById("mov-hide-iliq").checked;
-  const setorAll = !MOV_SETOR_MS || MOV_SETOR_MS.isAll();
-  const setorSet = MOV_SETOR_MS ? MOV_SETOR_MS.getSelected() : null;
   MOV_TABLE.setFilter(d => {
     if (hideIliq && d.iliquido) return false;
-    // Seletor global tem prioridade sobre o filtro local quando há seleção parcial.
-    if (!paperPassesGlobalIdx(d.indexador)) return false;
     if (idx && d.indexador !== idx) return false;
-    if (!setorAll && (!setorSet || !setorSet.has(d.setor))) return false;
-    if (onlyCob && !isInWatchlist(d)) return false;
     if (q && !((d.codigo||'').toLowerCase().includes(q)
             || (d.emissor||'').toLowerCase().includes(q))) return false;
     return true;
@@ -1801,13 +1212,29 @@ function applyMovFilter() {
 }
 
 /* ============================================================
- *  Tab 5 — Heatmap setor x duration
+ *  Tab 5 — Heatmap Indexador × Duration
  * ============================================================ */
 let HEAT = null;
 let HEAT_MODE = "current";
+let HM_DATE_ATUAL = null, HM_DATE_ANTERIOR = null;
+let HM_FP_ATUAL = null, HM_FP_ANTERIOR = null;
 
 async function renderHeatmap() {
   HEAT = await loadJSON("data/heatmap_history.json");
+  const dates = HEAT.dates || [];
+  HM_DATE_ATUAL = dates[dates.length - 1];
+  HM_DATE_ANTERIOR = defaultAnteriorFor(HM_DATE_ATUAL, dates);
+  if (HM_FP_ATUAL) HM_FP_ATUAL.destroy();
+  if (HM_FP_ANTERIOR) HM_FP_ANTERIOR.destroy();
+  HM_FP_ATUAL = flatpickr("#hm-date-atual", {
+    dateFormat:"Y-m-d", enable: dates, defaultDate: HM_DATE_ATUAL,
+    onChange: (_, d) => { if (d) onHmDateChange("atual", d); },
+  });
+  HM_FP_ANTERIOR = flatpickr("#hm-date-anterior", {
+    dateFormat:"Y-m-d", enable: dates.filter(d => d < HM_DATE_ATUAL),
+    defaultDate: HM_DATE_ANTERIOR || undefined,
+    onChange: (_, d) => { if (d) onHmDateChange("anterior", d); },
+  });
   document.querySelectorAll(".hm-btn").forEach(b => {
     b.addEventListener("click", () => {
       document.querySelectorAll(".hm-btn").forEach(x => x.classList.remove("active"));
@@ -1819,119 +1246,50 @@ async function renderHeatmap() {
   drawHeatmap();
 }
 
+function onHmDateChange(which, d) {
+  if (which === "atual") {
+    HM_DATE_ATUAL = d;
+    if (HM_DATE_ANTERIOR && HM_DATE_ANTERIOR >= HM_DATE_ATUAL) {
+      HM_DATE_ANTERIOR = defaultAnteriorFor(HM_DATE_ATUAL, HEAT.dates);
+    }
+    if (HM_FP_ANTERIOR) {
+      HM_FP_ANTERIOR.set("enable", HEAT.dates.filter(x => x < HM_DATE_ATUAL));
+      if (HM_DATE_ANTERIOR) HM_FP_ANTERIOR.setDate(HM_DATE_ANTERIOR, false);
+      else HM_FP_ANTERIOR.clear(false);
+    }
+  } else {
+    HM_DATE_ANTERIOR = d;
+  }
+  drawHeatmap();
+}
+
 function drawHeatmap() {
   const root = document.getElementById("chart-heatmap");
-  // Apenas IPCA+ e DI+ contam para o heatmap. %DI / Prefixado / IGP-M+ ignorados.
-  const SUPPORTED = ["IPCA+", "DI+"];
-  const available = (HEAT.indexadores || []).filter(g => SUPPORTED.includes(g));
-  if (!available.length) {
-    root.innerHTML = '<div class="empty">Sem indexadores com spread no snapshot.</div>';
+  const cur = HEAT.by_date[HM_DATE_ATUAL];
+  if (!cur) {
+    root.innerHTML = '<div class="empty">Sem snapshot na Data Atual.</div>';
     return;
   }
-  // Respeita o seletor global de Indexador, restrito ao conjunto suportado:
-  // - "Todos" no seletor global → IPCA+ e DI+ ambos selecionados.
-  // - Seleção parcial → apenas os marcados que estiverem em SUPPORTED.
-  // - Quando ambos selecionados → agregação ponderada por nº de papéis.
-  // - Quando nenhum (ex.: usuário marcou só %DI/Pré/IGP-M+) → indisponível.
-  const selAll = isGlobalIdxAll();
-  const selSet = getGlobalIdxSet();
-  const selectedIPCA = available.includes("IPCA+") && (selAll || selSet.has("IPCA+"));
-  const selectedDI   = available.includes("DI+")   && (selAll || selSet.has("DI+"));
-  if (!selectedIPCA && !selectedDI) {
-    root.innerHTML = '<div class="empty">Heatmap não disponível — selecione IPCA+ ou DI+ no Indexador.</div>';
-    return;
-  }
-  const groups = [];
-  if (selectedIPCA) groups.push("IPCA+");
-  if (selectedDI)   groups.push("DI+");
-
-  // Extrai (vals, counts) por grupo conforme o modo. Counts vêm sempre de
-  // current_count (nº de papéis no snapshot atual, único disponível) e
-  // funcionam como peso tanto para spread atual quanto para Δ7d/Δ30d.
-  function sliceFor(grp) {
-    const s = HEAT.by_indexador[grp];
-    if (HEAT_MODE === "current") return { vals: s.current_pp,    counts: s.current_count };
-    if (HEAT_MODE === "d7")      return { vals: s.delta_7d_bps,  counts: s.current_count };
-    return                              { vals: s.delta_30d_bps, counts: s.current_count };
-  }
-  const slices = groups.map(g => ({ grp: g, ...sliceFor(g) }));
-  if (!slices.some(s => s.vals)) {
-    if (HEAT_MODE === "d7")  { root.innerHTML = '<div class="empty">Sem snapshot T-7. Aguardando 7d de rotina.</div>';  return; }
-    if (HEAT_MODE === "d30") { root.innerHTML = '<div class="empty">Sem snapshot T-30. Aguardando 30d de rotina.</div>'; return; }
-  }
-
-  const allSectors = HEAT.sectors || [];
-  const buckets    = HEAT.buckets || [];
-  const nRows = allSectors.length, nCols = buckets.length;
-
-  // Agregação ponderada (com peso = nº de papéis do grupo na célula).
-  // Mantém matriz `cMat` paralela a `z` com o peso efetivo por célula —
-  // usada depois para agregar a linha "Todos" sobre todos os setores.
-  let z = [];
-  let cMat = [];
-  for (let i = 0; i < nRows; i++) {
-    const rowZ = [], rowC = [];
-    for (let j = 0; j < nCols; j++) {
-      let num = 0, den = 0;
-      for (const s of slices) {
-        if (!s.vals || !s.counts) continue;
-        const v = s.vals[i]   ? s.vals[i][j]   : null;
-        const c = s.counts[i] ? s.counts[i][j] : null;
-        if (v != null && c != null && c > 0) { num += v * c; den += c; }
-      }
-      rowZ.push(den > 0 ? num / den : null);
-      rowC.push(den > 0 ? den : null);
-    }
-    z.push(rowZ);
-    cMat.push(rowC);
-  }
-
-  // Linha "Todos" — agregada sobre todos os setores, ponderada por nº de papéis
-  // por bucket. Calculada SOBRE a matriz final (já agregada por indexador).
-  const totalRow = [];
-  for (let j = 0; j < nCols; j++) {
-    let num = 0, den = 0;
-    for (let i = 0; i < nRows; i++) {
-      const v = z[i][j];
-      const c = cMat[i][j];
-      if (v != null && c != null && c > 0) { num += v * c; den += c; }
-    }
-    totalRow.push(den > 0 ? num / den : null);
-  }
-
-  // Legend / colorbar.
-  const isMulti = groups.length > 1;
-  const labelGroups = isMulti ? "[" + groups.join(", ") + "]" : groups[0];
-  let title, suffix;
+  const indexadores = HEAT.indexadores || [];
+  const buckets = HEAT.buckets || [];
+  let z, suffix, title;
   if (HEAT_MODE === "current") {
-    if (isMulti) {
-      title = `${labelGroups} · spread médio (pp) ponderado por nº de papéis`;
-    } else {
-      const benchLabel = groups[0] === "IPCA+" ? "NTN-B" : "CDI";
-      title = `${groups[0]} · spread médio sobre ${benchLabel} (pp)`;
-    }
+    z = cur.spread_pp;
     suffix = " pp";
-  } else if (HEAT_MODE === "d7") {
-    title = isMulti
-      ? `${labelGroups} · Δ spread médio vs T-7 (bps) ponderado por nº de papéis`
-      : `${groups[0]} · Δ spread médio vs T-7 (bps)`;
-    suffix = " bps";
+    title = "Spread médio (pp) — " + brDate(HM_DATE_ATUAL);
   } else {
-    title = isMulti
-      ? `${labelGroups} · Δ spread médio vs T-30 (bps) ponderado por nº de papéis`
-      : `${groups[0]} · Δ spread médio vs T-30 (bps)`;
+    const old = HM_DATE_ANTERIOR ? HEAT.by_date[HM_DATE_ANTERIOR] : null;
+    if (!old) {
+      root.innerHTML = '<div class="empty">Selecione Data Anterior para Δ.</div>';
+      return;
+    }
+    z = cur.spread_pp.map((row, i) => row.map((v, j) => {
+      const b = old.spread_pp[i][j];
+      return v == null || b == null ? null : Math.round((v - b) * 100.0 * 10) / 10;
+    }));
     suffix = " bps";
+    title = "Δ spread (bps) — " + brDate(HM_DATE_ATUAL) + " vs " + brDate(HM_DATE_ANTERIOR);
   }
-
-  // Linha "Todos" como ÚLTIMA linha do heatmap, com gap visual antes dela
-  // (linha-espaçador de nulls). Label em <b> para destacar do resto.
-  const SPACER = " ";
-  const TOTAL_LABEL = "<b>Todos</b>";
-  const spacerRow = new Array(nCols).fill(null);
-  let visibleSectors = [...allSectors, SPACER, TOTAL_LABEL];
-  z = [...z, spacerRow, totalRow];
-  // Plotly heatmap: y = sectors, x = buckets. Quando current, escala viridis;
-  // quando delta, divergente vermelho/verde com 0 no centro.
   const flat = z.flat().filter(v => v != null);
   const colorscale = HEAT_MODE === "current"
     ? [[0,"#1c2230"],[0.4,"#3a4d6b"],[0.7,"#7facff"],[1,"#dadfea"]]
@@ -1944,14 +1302,6 @@ function drawHeatmap() {
     const m = flat.length ? Math.max(...flat.map(Math.abs)) : 1;
     zmin = -m; zmax = m;
   }
-  // Cor do texto adaptativa por célula: escolhe claro/escuro conforme a
-  // luminância do fundo interpolado na colorscale, garantindo contraste
-  // tanto em células escuras (centro do divergente, base do viridis) quanto
-  // em células claras (topo do viridis, extremos do divergente).
-  const _hex2rgb = h => {
-    const s = h.replace("#","");
-    return [parseInt(s.slice(0,2),16), parseInt(s.slice(2,4),16), parseInt(s.slice(4,6),16)];
-  };
   const _interp = (scale, t) => {
     if (t <= scale[0][0]) return _hex2rgb(scale[0][1]);
     for (let i = 1; i < scale.length; i++) {
@@ -1973,9 +1323,8 @@ function drawHeatmap() {
     return L < 140 ? "#e6e9ef" : "#0e1116";
   };
   const textColors = z.map(row => row.map(_textColor));
-
   const trace = {
-    z, x: HEAT.buckets, y: visibleSectors, type:"heatmap",
+    z, x: buckets, y: indexadores, type:"heatmap",
     colorscale, zmin, zmax,
     text: z.map(row => row.map(v => v == null ? "" : v.toFixed(HEAT_MODE==="current"?2:0))),
     texttemplate: "%{text}",
@@ -1984,7 +1333,7 @@ function drawHeatmap() {
     hovertemplate: "%{y} · %{x}<br>%{z:.2f}" + suffix + "<extra></extra>",
   };
   const layout = Object.assign(PLOTLY_LAYOUT(), {
-    margin: { l:170, r:18, t:30, b:40 },
+    margin: { l:120, r:18, t:30, b:40 },
     xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title:"Duration" }),
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { autorange:"reversed" }),
   });
