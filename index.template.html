@@ -148,7 +148,7 @@
   .ms-toggle:hover { border-color:var(--accent); }
   .ms-caret { color:var(--muted); font-size:10px; }
   .ms-dropdown {
-    position:absolute; top:calc(100% + 4px); left:54px; z-index:50;
+    position:absolute; top:calc(100% + 4px); left:54px; z-index:200;
     background:var(--surface2); border:1px solid var(--border-strong);
     border-radius:4px; padding:6px 0; min-width:240px;
     max-height:320px; overflow-y:auto;
@@ -606,21 +606,25 @@ function renderKpis(kpisMap) {
   const all = kpisMap.Todos || {};
   const cdi = kpisMap["DI+"] || {};
   const ipca = kpisMap["IPCA+"] || {};
+  // Cor do termômetro: + delta = papel desvalorizou (vermelho/neg);
+  // − delta = apreciou (verde/pos); 0 ou null = neutro.
+  const _termCls = v => v == null ? "" : (v > 0 ? "neg" : v < 0 ? "pos" : "");
   const tCdi = cdi.termometro_med_bps;
-  const tCdiCls = tCdi == null ? "" : (tCdi > 0 ? "neg" : tCdi < 0 ? "pos" : "");
+  const tIpcaDelta = ipca.termometro_med_bps;
   const sIpca = ipca.mean_spread_abs_pp;
   const cards = [
     { label: "Papéis (IPCA+, CDI+, Pré)", val: all.n_total,
       hint: `${all.n_liquidos} com taxa · ${all.n_com_spread} com spread oficial` },
     { label: "Ilíquidos no dia", val: all.n_iliquidos,
       hint: (all.pct_iliquidos ?? 0) + "% do total" },
-    { label: "Termômetro CDI+ · média Δspread",
-      val: tCdi == null ? "—" : (tCdi >= 0 ? "+" : "") + tCdi.toFixed(1) + " bps",
-      cls: tCdiCls,
-      hint: (cdi.n_com_d1 ?? 0) + " papéis CDI+ com Δ vs " + brDate(all.data_anterior) },
     { label: "Termômetro IPCA+ · spread médio",
       val: sIpca == null ? "—" : sIpca.toFixed(2) + " pp",
+      cls: _termCls(tIpcaDelta),
       hint: (ipca.n_spread_abs ?? 0) + " papéis IPCA+ com spread" },
+    { label: "Termômetro CDI+ · média Δspread",
+      val: tCdi == null ? "—" : (tCdi >= 0 ? "+" : "") + tCdi.toFixed(1) + " bps",
+      cls: _termCls(tCdi),
+      hint: (cdi.n_com_d1 ?? 0) + " papéis CDI+ com Δ vs " + brDate(all.data_anterior) },
   ];
   document.getElementById("kpi-row").innerHTML = cards.map(c =>
     `<div class="kpi"><div class="label">${c.label}</div>` +
@@ -732,11 +736,15 @@ function renderTopMovers(tm, displayLabel, containerId) {
     root.innerHTML = '<div class="empty">Sem snapshot anterior — Δ indisponível.</div>';
     return;
   }
-  const row = m =>
-    `<tr><td>${m.codigo}</td><td>${(m.emissor||'').slice(0,32)}</td>` +
-    `<td class="num">${fmtAnos(m.duration_anos)}</td>` +
-    `<td class="num">${fmtPp(m.spread_pp)}</td>` +
-    `<td class="num ${m.delta_spread_bps>0?'neg':'pos'}">${fmtBps(m.delta_spread_bps)}</td></tr>`;
+  const row = m => {
+    const dCls = m.delta_spread_bps == null ? ""
+      : (m.delta_spread_bps > 0 ? "neg"
+        : m.delta_spread_bps < 0 ? "pos" : "");
+    return `<tr><td>${m.codigo}</td><td>${(m.emissor||'').slice(0,32)}</td>` +
+      `<td class="num">${fmtAnos(m.duration_anos)}</td>` +
+      `<td class="num">${fmtPp(m.spread_pp)}</td>` +
+      `<td class="num ${dCls}">${fmtBps(m.delta_spread_bps)}</td></tr>`;
+  };
   const head = `<thead><tr><th>Código</th><th>Emissor</th>` +
     `<th class="num">Dur.</th><th class="num">Spread</th>` +
     `<th class="num">Δ</th></tr></thead>`;
@@ -848,9 +856,15 @@ let DISP_DATA = null;
 let DISP_FP_ATUAL = null, DISP_FP_ANTERIOR = null;
 let DISP_DATE_ATUAL = null, DISP_DATE_ANTERIOR = null;
 
-const SECTOR_COLORS_FALLBACK = {
-  "IPCA+":"#5a9bff", "DI+":"#3aa66c", "Prefixado":"#d2a052",
-};
+// Paleta qualitativa (Tableau-ish) usada para colorir traces de setor/emissor.
+// 20 cores; ciclo automático se exceder.
+const PALETTE_QUAL = [
+  "#5a9bff", "#3aa66c", "#d2a052", "#dc5752", "#a979ff",
+  "#e177c0", "#7fc97f", "#bf6f3f", "#54b0d6", "#fdc086",
+  "#beaed4", "#386cb0", "#f0027f", "#bf5b17", "#a6cee3",
+  "#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e",
+];
+const _colorFor = (key, idx) => PALETTE_QUAL[idx % PALETTE_QUAL.length];
 
 async function renderDispersao() {
   DISP_INDEX = await loadJSON("data/dispersion/_index.json");
@@ -885,6 +899,7 @@ async function renderDispersao() {
 
   setupTimeline();
   await loadAndRenderDispersion(DISP_DATE_ATUAL);
+  _updatePlayRangeIndicator();
 }
 
 function onDispDateChange(which, d) {
@@ -904,6 +919,19 @@ function onDispDateChange(which, d) {
     DISP_DATE_ANTERIOR = d;
     timelinePause();
   }
+  _updatePlayRangeIndicator();
+}
+
+function _updatePlayRangeIndicator() {
+  const el = document.getElementById("tl-status");
+  if (!el) return;
+  if (DISP_DATE_ANTERIOR && DISP_DATE_ATUAL) {
+    el.textContent = `Animar de ${brDate(DISP_DATE_ANTERIOR)} até ${brDate(DISP_DATE_ATUAL)}`;
+  } else if (DISP_DATE_ATUAL) {
+    el.textContent = `Sem Data Anterior — apenas ${brDate(DISP_DATE_ATUAL)}`;
+  } else {
+    el.textContent = "";
+  }
 }
 
 async function loadAndRenderDispersion(date) {
@@ -919,16 +947,31 @@ function drawDispersion() {
   const idxSel = document.getElementById("disp-idx").value;
   const setoresSel = _getSetoresSelected();
 
-  const traces = {};
+  // Filtra papéis aplicáveis e descobre quantos setores únicos restam — se
+  // for ≤1, agrupa por emissor; senão, agrupa por setor.
+  const filtered = [];
+  const setoresVisiveis = new Set();
   for (const p of DISP_DATA.papers) {
     if (idxSel && p.i !== idxSel) continue;
     if (setoresSel && !setoresSel.has(p.s)) continue;
     const yVal = p[yKey];
     if (yVal == null) continue;
-    const grp = p.i;
+    filtered.push(p);
+    if (p.s) setoresVisiveis.add(p.s);
+  }
+  const groupByEmissor = setoresVisiveis.size <= 1;
+
+  // Atribui cor estável por chave (1ª aparição → 1ª cor da paleta).
+  const colorByKey = {};
+  let nextColor = 0;
+  const _keyFor = p => groupByEmissor ? (p.e || "—") : (p.s || "Outros");
+
+  const traces = {};
+  for (const p of filtered) {
+    const grp = _keyFor(p);
     if (!traces[grp]) {
-      const color = SECTOR_COLORS_FALLBACK[grp] || "#888";
-      // Item 3: tooltip com cor de fundo do trace e texto adaptativo por luminância YIQ.
+      if (!(grp in colorByKey)) colorByKey[grp] = _colorFor(grp, nextColor++);
+      const color = colorByKey[grp];
       const fontColor = adaptiveTextColor(color);
       traces[grp] = {
         x:[], y:[], customdata:[], type:"scatter", mode:"markers", name: grp,
@@ -950,7 +993,38 @@ function drawDispersion() {
     traces[grp].y.push(yVal);
     traces[grp].customdata.push([p.c, (p.e||'').slice(0,40), p.t, p.i, p.s || '—']);
   }
-  const data = Object.values(traces);
+  // Sort traces by count desc — legenda fica com os maiores em cima.
+  const data = Object.values(traces).sort((a,b) => b.x.length - a.x.length);
+  // Quando agrupado por emissor com muitos itens, colapsar a cauda em "Outros".
+  // Limite: 18 traces. Acima disso, do 19º em diante vira "Outros (n=…)".
+  const MAX_LEGEND_ITEMS = 18;
+  if (groupByEmissor && data.length > MAX_LEGEND_ITEMS) {
+    const head = data.slice(0, MAX_LEGEND_ITEMS - 1);
+    const tail = data.slice(MAX_LEGEND_ITEMS - 1);
+    let totalTail = 0;
+    const merged = {
+      x:[], y:[], customdata:[], type:"scatter", mode:"markers",
+      name: "", marker:{ color: "#666", size:6, opacity:0.85, line:{width:0} },
+      hoverlabel: { bgcolor: "#666", bordercolor: "#666", font: { color: "#e6e9ef" } },
+      hovertemplate:
+        "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>" +
+        "Setor %{customdata[4]}<br>" +
+        "Indexador %{customdata[3]}<br>" +
+        "Duration %{x:.2f}a<br>Taxa %{customdata[2]:.2f}%<br>" +
+        (yIsPP ? "% do PAR %{y:.4f}%" : "Spread %{y:.2f} pp") +
+        "<extra></extra>",
+    };
+    for (const t of tail) {
+      merged.x.push(...t.x);
+      merged.y.push(...t.y);
+      merged.customdata.push(...t.customdata);
+      totalTail += t.x.length;
+    }
+    merged.name = `Outros (n=${totalTail})`;
+    head.push(merged);
+    data.length = 0;
+    data.push(...head);
+  }
   let yTitle = yIsPP ? "% do PAR"
     : (idxSel === "DI+" ? "Spread sobre CDI (pp)"
       : idxSel === "Prefixado" ? "Spread sobre Pré (pp)"
@@ -1097,7 +1171,8 @@ async function timelinePlay() {
   const r = _computeTimelineAxisRange();
   TL_STATE.xRange = r ? r.xRange : null;
   TL_STATE.yRange = r ? r.yRange : null;
-  btn.disabled = false; status.textContent = "";
+  btn.disabled = false;
+  _updatePlayRangeIndicator();
   TL_STATE.playing = true;
   btn.textContent = "❚❚ Pause";
   let idx = range.indexOf(TL_STATE.current);
