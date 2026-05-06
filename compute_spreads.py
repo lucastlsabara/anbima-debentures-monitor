@@ -10,8 +10,14 @@ Metodologia:
   DI+ (=CDI+)→ a taxa indicativa publicada pela ANBIMA já é o spread aditivo
                sobre o DI/CDI. spread_pp = taxa_indicativa, benchmark = "CDI",
                spread_metodo = "indexador_aditivo".
-  Prefixado  → ANBIMA não publica referência LTN/NTN-F na coluna do db.txt para
-               prefixados. spread = null (spread_metodo = "sem_referencia").
+  Prefixado  → lookup do vencimento do papel em titulos_publicos["NTN-F"] /
+               ["LTN"] (preferindo NTN-F para vencimentos longos). Se não
+               houver casamento exato, fallback para interpolação por spline
+               em `ettj_pre` no `duration_dias` do papel. Mesma fórmula
+               composta do IPCA+, trocando a curva de referência.
+               spread_metodo = "referencia" quando casa exato em LTN/NTN-F,
+               "ettj_pre_interp" quando vem da curva interpolada,
+               "sem_referencia" se nada disponível.
   %DI        → spread multiplicativo (não em pp); spread_pp = null
                (spread_metodo = "nao_aplicavel").
   IGP-M+     → sem fonte oficial de benchmark; nao_aplicavel.
@@ -142,9 +148,21 @@ def main() -> int:
 
     titpub: dict[str, dict[str, float]] = raw.get("titulos_publicos") or {}
     ntnb_by_venc = titpub.get("NTN-B", {})
+    ntnf_by_venc = titpub.get("NTN-F", {})
+    ltn_by_venc = titpub.get("LTN", {})
 
     # Spline IPCA legado: usado APENAS como diagnóstico para reporte da migração.
     legacy_curve = build_spline(raw.get("ettj_ipca") or [], "taxa_ipca")
+
+    # Curva ETTJ Pré para spread de prefixados (fallback quando não há LTN/NTN-F
+    # com casamento exato de vencimento). Prioriza tabela "ETTJ Pre" dedicada
+    # se foi parseada; caso contrário, deriva de `taxa_pref` da tabela IPCA.
+    ettj_pre_rows = raw.get("ettj_pre") or [
+        {"vertice_du": r["vertice_du"], "taxa_pre": r.get("taxa_pref")}
+        for r in (raw.get("ettj_ipca") or [])
+        if r.get("taxa_pref") is not None
+    ]
+    pre_curve = build_spline(ettj_pre_rows, "taxa_pre")
 
     prev = previous_snapshot(today)
     prev_by_code: dict[str, dict] = {}
@@ -218,9 +236,43 @@ def main() -> int:
                 sem_ref_by_grp[grupo] = sem_ref_by_grp.get(grupo, 0) + 1
 
         elif grupo == "Prefixado":
-            # ANBIMA não publica referência LTN/NTN-F no db.txt para prefixados.
-            spread_metodo = "sem_referencia"
-            sem_ref_by_grp[grupo] = sem_ref_by_grp.get(grupo, 0) + 1
+            # 1) Lookup exato de vencimento em NTN-F (preferido p/ longos)
+            #    e em LTN. ANBIMA não popula `referencia_ntnb` para prefixados,
+            #    então usamos o vencimento do próprio papel como chave.
+            venc = d.get("vencimento")
+            ref_taxa = None
+            ref_titulo = None
+            if venc:
+                if venc in ntnf_by_venc:
+                    ref_taxa = ntnf_by_venc[venc]
+                    ref_titulo = "NTN-F"
+                elif venc in ltn_by_venc:
+                    ref_taxa = ltn_by_venc[venc]
+                    ref_titulo = "LTN"
+            if ref_taxa is not None and not flag_iliquido and taxa is not None:
+                spread_pp = (
+                    (1 + taxa / 100.0) / (1 + ref_taxa / 100.0) - 1
+                ) * 100.0
+                bench_titulo = ref_titulo
+                bench_venc = venc
+                taxa_benchmark = ref_taxa
+                spread_metodo = "referencia"
+                com_ref_by_grp[grupo] = com_ref_by_grp.get(grupo, 0) + 1
+            elif (pre_curve is not None and not flag_iliquido
+                  and taxa is not None and dur_dias is not None):
+                # 2) Fallback: ETTJ Pré interpolada no duration do papel.
+                #    Usado quando ANBIMA não publica LTN/NTN-F p/ esse venc.
+                ref_pre = float(pre_curve(dur_dias))
+                spread_pp = (
+                    (1 + taxa / 100.0) / (1 + ref_pre / 100.0) - 1
+                ) * 100.0
+                bench_titulo = "ETTJ Pré"
+                taxa_benchmark = round(ref_pre, 4)
+                spread_metodo = "ettj_pre_interp"
+                com_ref_by_grp[grupo] = com_ref_by_grp.get(grupo, 0) + 1
+            else:
+                spread_metodo = "sem_referencia"
+                sem_ref_by_grp[grupo] = sem_ref_by_grp.get(grupo, 0) + 1
         # %DI, IGP-M+, Outros → spread_metodo = "nao_aplicavel" (default)
 
         prev_d = prev_by_code.get(codigo, {})
@@ -296,6 +348,27 @@ def main() -> int:
                 "taxa_pref": r["taxa_pref"],
             })
 
+    # ETTJ Pré dedicada (item 12). Se fetch_anbima.parse_ettj_pre encontrou a
+    # tabela "ETTJ Pre" no CSV ANBIMA, prioriza-a; caso contrário, deriva da
+    # coluna taxa_pref da tabela IPCA Implícita (mesmo conteúdo na prática).
+    ettj_pre_out: list[dict] = []
+    pre_source = raw.get("ettj_pre")
+    if pre_source:
+        for r in sorted(pre_source, key=lambda x: x["vertice_du"]):
+            anos = round(r["vertice_du"] / DU_POR_ANO, 3)
+            ettj_pre_out.append({
+                "vertice_du": r["vertice_du"],
+                "vertice_anos": anos,
+                "taxa_pre": r["taxa_pre"],
+            })
+    else:
+        for r in ettj_pref_out:
+            ettj_pre_out.append({
+                "vertice_du": r["vertice_du"],
+                "vertice_anos": r["vertice_anos"],
+                "taxa_pre": r["taxa_pref"],
+            })
+
     diag: dict[str, dict] = {}
     for grp, n in counts_by_grp.items():
         diag[grp] = {
@@ -318,6 +391,7 @@ def main() -> int:
         "ettj_data_publicada": raw.get("ettj_data_publicada"),
         "ettj_ipca": ettj_out,
         "ettj_pref": ettj_pref_out,
+        "ettj_pre": ettj_pre_out,
         "diagnostico_metodo": diag,
         "debentures": out_debs,
     }

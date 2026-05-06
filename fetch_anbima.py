@@ -163,6 +163,43 @@ def parse_db(text: str) -> list[dict]:
     return rows
 
 
+def parse_ettj_pre(text: str) -> list[dict] | None:
+    """Extrai a tabela 'ETTJ Pre' (LTN/NTN-F) da resposta CZ-down.
+
+    A ANBIMA emite no MESMO CSV duas tabelas distintas para Pré:
+    "ETTJ Pre" (taxa nominal pré, vértices DU × taxa) e
+    "ETTJ Inflação Implícita (IPCA)" (que repete `taxa_pref` numa coluna).
+    Esta função procura especificamente o cabeçalho "ETTJ Pre" / "ETTJ Pré";
+    se não achar, retorna None — o caller faz fallback para a coluna pref da
+    tabela de inflação implícita.
+
+    Retorna [{vertice_du: int, taxa_pre: float}, ...].
+    """
+    lines = [ln.rstrip("\r") for ln in text.splitlines()]
+    start = None
+    for i, ln in enumerate(lines):
+        head = ln.strip().upper()
+        # Casa "ETTJ PRE", "ETTJ PRÉ", "ETTJ PREFIXADA", mas nunca "ETTJ INFLA".
+        if head.startswith("ETTJ PRE") and "INFLA" not in head:
+            start = i
+            break
+    if start is None:
+        return None
+    rows: list[dict] = []
+    for ln in lines[start + 2:]:
+        if not ln.strip():
+            break
+        cells = [c.strip() for c in ln.split(";")]
+        if len(cells) < 2:
+            continue
+        v = _br_int(cells[0])
+        taxa = _br_float(cells[1])
+        if v is None or taxa is None:
+            continue
+        rows.append({"vertice_du": v, "taxa_pre": taxa})
+    return rows or None
+
+
 def parse_ettj(text: str) -> tuple[str, list[dict]]:
     """Extrai a tabela 'ETTJ Inflação Implicita (IPCA)' da resposta CZ-down.
 
@@ -257,6 +294,17 @@ def main() -> int:
     ettj_date, ettj_rows = parse_ettj(ettj_text)
     print(f"[fetch]   -> {len(ettj_rows)} vértices (data publicada: {ettj_date})", file=sys.stderr)
 
+    # ETTJ Pré dedicada (item 12). Graceful fallback: se ANBIMA não emitiu a
+    # tabela "ETTJ Pre" no CSV, prefixados ficarão sem referência exclusiva e
+    # cairão no método "ettj_pre_interp" via taxa_pref da tabela IPCA.
+    ettj_pre_rows = parse_ettj_pre(ettj_text)
+    if ettj_pre_rows is None:
+        print("[warn ] tabela 'ETTJ Pre' não encontrada no CSV ANBIMA; "
+              "spreads de prefixados usarão a coluna taxa_pref da tabela "
+              "Inflação Implícita.", file=sys.stderr)
+    else:
+        print(f"[fetch]   -> ETTJ Pre: {len(ettj_pre_rows)} vértices", file=sys.stderr)
+
     if ettj_date and ettj_date != target.isoformat():
         print(
             f"[warn ] ETTJ retornou data {ettj_date} (esperado {target.isoformat()})",
@@ -279,6 +327,7 @@ def main() -> int:
         "ettj_data_publicada": ettj_date,
         "debentures": debentures,
         "ettj_ipca": ettj_rows,
+        "ettj_pre": ettj_pre_rows,
         "titulos_publicos": titpub,
     }
     Path(args.out).write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
