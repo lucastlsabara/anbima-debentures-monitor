@@ -1,22 +1,25 @@
 """Pré-agrega snapshots em ``history/`` e gera dashboard estático.
 
 Saídas (todas em ``data/`` para fetch lazy do frontend):
-  - manifest.json            : datas disponíveis + indexadores permitidos
+  - manifest.json            : datas disponíveis + indexadores permitidos +
+                                lista de setores
   - overview.json            : por-data (KPIs, top movers, histograma) + curva
                                 ETTJ por data + spread mediano por indexador
   - curves_history.json      : matriz dates x vértices_du da ETTJ NTN-B
                                 + matriz da ETTJ Pré (quando disponível)
-  - heatmap_history.json     : por-data, grid indexador × bucket-duration
+  - heatmap_history.json     : por-data, grid setor × bucket-duration
   - movements.json           : tabela completa por data, frontend computa Δ
   - dispersion/_index.json   : datas com snapshot de dispersão disponível
-  - dispersion/<date>.json   : papéis (codigo, emissor, dur, taxa, spread)
+  - dispersion/<date>.json   : papéis (codigo, emissor, setor, dur, taxa, spread)
 
 Também emite ``index.html`` (single file, hash routing, 5 tabs, Plotly +
 Tabulator + Flatpickr via CDN).
 
 Filtro global de indexadores: apenas IPCA+, DI+ e Prefixado são exibidos.
-Os snapshots em ``history/`` permanecem com TODOS os indexadores; a remoção
-é apenas em tempo de exibição (basta editar ALLOWED_INDEXADORES p/ reverter).
+A aba Dispersão é restrita ainda mais (apenas IPCA+ e DI+ via
+``DISPERSION_INDEXADORES``). Os snapshots em ``history/`` permanecem com
+TODOS os indexadores; a remoção é apenas em tempo de exibição (basta editar
+as listas para reverter).
 
 REGRA: nunca inventa dados. Tudo vem de ``history/<YYYY-MM-DD>.json`` real.
 """
@@ -32,6 +35,7 @@ from pathlib import Path
 
 from compute_spreads import indexador_group as _indexador_group
 from compute_spreads import build_spline as _build_spline
+from sectors import SECTORS, classify as _classify_setor
 
 DU_POR_ANO = 252.0
 
@@ -43,6 +47,9 @@ DATA_DIR = ROOT / "data"
 # IGP-M+ no futuro, basta acrescentá-los aqui — os snapshots em history/
 # preservam todos os papéis.
 ALLOWED_INDEXADORES = ["IPCA+", "DI+", "Prefixado"]
+
+# Subset usado APENAS na aba Dispersão (Prefixado fica de fora dessa aba).
+DISPERSION_INDEXADORES = ["IPCA+", "DI+"]
 
 
 # ----------------------------------------------------------------------------
@@ -158,12 +165,14 @@ def _clean_emissor(name: str | None) -> str:
 
 
 def _enrich(papers: list[dict]) -> list[dict]:
-    """Anota cada papel com emissor normalizado + grupo de indexador."""
+    """Anota cada papel com emissor normalizado + grupo de indexador + setor."""
     out = []
     for p in papers:
         e = dict(p)
-        e["emissor_clean"] = _clean_emissor(p.get("emissor"))
+        emissor_clean = _clean_emissor(p.get("emissor"))
+        e["emissor_clean"] = emissor_clean
         e["indexador_grupo"] = _indexador_group(p.get("indice"))
+        e["setor"] = _classify_setor(p.get("codigo"), p.get("emissor"))
         out.append(e)
     return out
 
@@ -191,6 +200,7 @@ def build_manifest(snaps: list[dict]) -> dict:
         "n_snapshots": len(snaps),
         "indexadores": ALLOWED_INDEXADORES,
         "indexadores_presentes": indexadores_presentes,
+        "setores": SECTORS,
         "diagnostico_metodo": (snaps[-1].get("diagnostico_metodo") if snaps else None),
         "buckets_duration": [
             {"label": "0–2a", "min": 0.0, "max": 2.0},
@@ -287,6 +297,7 @@ def _top_movers(papers: list[dict],
         rows.append({
             "codigo": p["codigo"],
             "emissor": p.get("emissor_clean"),
+            "setor": p.get("setor"),
             "duration_anos": p.get("duration_anos"),
             "spread_pp": sp,
             "taxa": p.get("taxa_indicativa"),
@@ -467,7 +478,7 @@ def build_curves_history(snaps: list[dict]) -> dict:
 
 
 # ----------------------------------------------------------------------------
-# heatmap indexador x bucket duration — agora por data (item 9)
+# heatmap setor x bucket duration — agora por data (item 9)
 # ----------------------------------------------------------------------------
 
 _BUCKETS: list[tuple[str, float, float]] = [
@@ -478,18 +489,16 @@ _BUCKETS: list[tuple[str, float, float]] = [
 ]
 
 
-def _heatmap_grid_by_indexador(papers: list[dict]
-                              ) -> tuple[list[list[float | None]], list[list[int]]]:
-    """Linhas = ALLOWED_INDEXADORES, colunas = buckets. Médias e contagens."""
+def _heatmap_grid_by_setor(papers: list[dict]
+                           ) -> tuple[list[list[float | None]], list[list[int]]]:
+    """Linhas = SECTORS, colunas = buckets. Médias e contagens."""
     by_cell: dict[tuple[str, str], list[float]] = defaultdict(list)
     for p in papers:
         sp = p.get("spread_pp")
         dur = p.get("duration_anos")
         if sp is None or dur is None:
             continue
-        grp = _indexador_group(p.get("indice"))
-        if grp not in ALLOWED_INDEXADORES:
-            continue
+        setor = p.get("setor") or "Outros"
         bucket = None
         for label, lo, hi in _BUCKETS:
             if lo <= dur < hi:
@@ -497,14 +506,14 @@ def _heatmap_grid_by_indexador(papers: list[dict]
                 break
         if bucket is None:
             continue
-        by_cell[(grp, bucket)].append(sp)
+        by_cell[(setor, bucket)].append(sp)
     means: list[list[float | None]] = []
     counts: list[list[int]] = []
-    for grp in ALLOWED_INDEXADORES:
+    for setor in SECTORS:
         row_m = []
         row_c = []
         for label, _, _ in _BUCKETS:
-            vs = by_cell.get((grp, label), [])
+            vs = by_cell.get((setor, label), [])
             row_m.append(round(_mean(vs), 4) if vs else None)
             row_c.append(len(vs))
         means.append(row_m)
@@ -513,18 +522,19 @@ def _heatmap_grid_by_indexador(papers: list[dict]
 
 
 def build_heatmap_history(snaps: list[dict]) -> dict:
-    """Emite o grid (indexador × bucket) para CADA data — frontend faz Δ."""
+    """Emite o grid (setor × bucket) para CADA data — frontend faz Δ."""
     by_date: dict[str, dict] = {}
     for s in snaps:
-        liq = [d for d in s["debentures"]
+        enr = _enrich(_filter_allowed(s["debentures"]))
+        liq = [d for d in enr
                if not d.get("flag_iliquido") and d.get("spread_pp") is not None]
-        means, counts = _heatmap_grid_by_indexador(liq)
+        means, counts = _heatmap_grid_by_setor(liq)
         by_date[s["data_referencia"]] = {
             "spread_pp": means,
             "counts": counts,
         }
     return {
-        "indexadores": ALLOWED_INDEXADORES,
+        "setores": SECTORS,
         "buckets": [b[0] for b in _BUCKETS],
         "dates": [s["data_referencia"] for s in snaps],
         "by_date": by_date,
@@ -542,6 +552,7 @@ def build_movements(snaps: list[dict]) -> dict:
             out.append({
                 "codigo": p["codigo"],
                 "emissor": p.get("emissor_clean"),
+                "setor": p.get("setor"),
                 "indexador": p.get("indexador_grupo"),
                 "vencimento": p.get("vencimento"),
                 "duration_anos": p.get("duration_anos"),
@@ -579,12 +590,17 @@ def build_movements(snaps: list[dict]) -> dict:
 def build_dispersion(snaps: list[dict], dispersion_dir: Path) -> dict:
     dates = []
     indexadores_set: set[str] = set()
+    setores_set: set[str] = set()
     for s in snaps:
         date = s["data_referencia"]
         dates.append(date)
         enr = _enrich(_filter_allowed(s["debentures"]))
         papers = []
         for p in enr:
+            grp = p.get("indexador_grupo")
+            # Aba Dispersão: somente IPCA+ e DI+ (Prefixado fica fora).
+            if grp not in DISPERSION_INDEXADORES:
+                continue
             sp = p.get("spread_pp")
             dur = p.get("duration_anos")
             taxa = p.get("taxa_indicativa")
@@ -594,20 +610,24 @@ def build_dispersion(snaps: list[dict], dispersion_dir: Path) -> dict:
             papers.append({
                 "c": p["codigo"],
                 "e": p.get("emissor_clean"),
-                "i": p.get("indexador_grupo"),
+                "i": grp,
+                "s": p.get("setor"),
                 "d": dur,
                 "t": taxa,
                 "sp": round(sp, 4),
                 "pp": round(pp, 4) if pp is not None else None,
             })
-            indexadores_set.add(p.get("indexador_grupo"))
+            indexadores_set.add(grp)
+            if p.get("setor"):
+                setores_set.add(p["setor"])
         _write_json(
             dispersion_dir / f"{date}.json",
             {"date": date, "papers": papers},
         )
     return {
         "dates": dates,
-        "indexadores": [g for g in ALLOWED_INDEXADORES if g in indexadores_set],
+        "indexadores": [g for g in DISPERSION_INDEXADORES if g in indexadores_set],
+        "setores": [s for s in SECTORS if s in setores_set],
     }
 
 
