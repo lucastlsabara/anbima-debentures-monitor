@@ -1274,7 +1274,7 @@ function _buildSetorMultiSelect(setores) {
     const wrap = document.createElement("div");
     wrap.className = "ms-item";
     wrap.innerHTML =
-      `<label><input type="checkbox" class="disp-setor-cb" value="${s}" checked> ${s}</label>`;
+      `<label><input type="checkbox" class="disp-setor-cb" value="${escapeAttr(s)}" checked> ${escapeHtml(s)}</label>`;
     list.appendChild(wrap);
   }
   // "Todos" sincroniza com checkboxes individuais.
@@ -1861,7 +1861,7 @@ function _initHeatExcludeUI() {
       return;
     }
     sugBox.innerHTML = list.map(emiss =>
-      `<div class="ex-sug" data-emiss="${emiss}"><span>${emiss}</span></div>`
+      `<div class="ex-sug" data-emiss="${escapeAttr(emiss)}"><span>${escapeHtml(emiss)}</span></div>`
     ).join("");
     sugBox.classList.remove("hide");
   };
@@ -1928,8 +1928,8 @@ function _renderHeatChips() {
     return;
   }
   chips.innerHTML = [...HEAT_EXCLUDE].map(k =>
-    `<span class="ex-chip">${k}` +
-    `<button type="button" data-remove="${k}" title="Remover">×</button></span>`
+    `<span class="ex-chip">${escapeHtml(k)}` +
+    `<button type="button" data-remove="${escapeAttr(k)}" aria-label="Remover ${escapeAttr(k)}" title="Remover">×</button></span>`
   ).join("");
 }
 
