@@ -142,6 +142,21 @@
   @media (max-width: 900px) {
     .curves-grid { grid-template-columns: 1fr; }
   }
+  /* Titulos Publicos: 4 tabelas (LFT, NTN-B, LTN, NTN-F) em grid 2x2.
+     Cada tabela ocupa 50% e ajusta altura ao conteudo (height fixo via JS). */
+  .tp-tables-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 14px; margin-bottom: 14px;
+  }
+  .tp-tables-grid > .tp-table-panel { margin-bottom: 0; }
+  @media (max-width: 900px) {
+    .tp-tables-grid { grid-template-columns: 1fr; }
+  }
+  /* Header por tipo de titulo, espelha cor do badge .badge.tp-*. */
+  .tp-th.tp-th-LFT  { color:#a8b2c2; }
+  .tp-th.tp-th-LTN  { color:#f0a060; }
+  .tp-th.tp-th-NTNB { color:#7ab2f0; }
+  .tp-th.tp-th-NTNF { color:#7fc89a; }
   /* Dispersão timeline play button */
   .play-btn {
     background:var(--accent); color:#0e1116; border:none;
@@ -387,14 +402,25 @@
       <label>Data Final:
         <input type="text" id="tp-date-atual" placeholder="YYYY-MM-DD">
       </label>
-      <label>Tipo de Título:
-        <select id="tp-tipo"><option value="">Todos</option></select>
-      </label>
     </div>
   </div>
-  <div class="panel" id="tp-table-panel">
-    <h2>Mercado secundário — todos os papéis</h2>
-    <div id="tp-table"></div>
+  <div class="tp-tables-grid" id="tp-tables-panel">
+    <div class="panel tp-table-panel">
+      <h2 class="tp-th tp-th-LFT">LFT — Mercado secundário</h2>
+      <div id="tp-table-lft"></div>
+    </div>
+    <div class="panel tp-table-panel">
+      <h2 class="tp-th tp-th-NTNB">NTN-B — Mercado secundário</h2>
+      <div id="tp-table-ntnb"></div>
+    </div>
+    <div class="panel tp-table-panel">
+      <h2 class="tp-th tp-th-LTN">LTN — Mercado secundário</h2>
+      <div id="tp-table-ltn"></div>
+    </div>
+    <div class="panel tp-table-panel">
+      <h2 class="tp-th tp-th-NTNF">NTN-F — Mercado secundário</h2>
+      <div id="tp-table-ntnf"></div>
+    </div>
   </div>
   <div class="panel hide" id="tp-empty-panel">
     <div class="empty-tp" id="tp-empty-msg">—</div>
@@ -408,14 +434,6 @@
       <h2>Curva ETTJ Pré — últimos dias úteis</h2>
       <div id="chart-curves-pre-compare" class="chart"></div>
     </div>
-  </div>
-  <div class="panel">
-    <h2>Heatmap temporal — taxa NTN-B (datas × vértices)</h2>
-    <div id="chart-curves-heatmap" class="chart-tall"></div>
-  </div>
-  <div class="panel">
-    <h2>Heatmap temporal — taxa Pré (datas × vértices)</h2>
-    <div id="chart-curves-pre-heatmap" class="chart-tall"></div>
   </div>
 </section>
 
@@ -912,7 +930,6 @@ function _curveSeries(kind) {
       matrix: CURVES.matrix_pre || [],
       yTitle: "Taxa Pré (%)",
       containerCompare: "chart-curves-pre-compare",
-      containerHeatmap: "chart-curves-pre-heatmap",
     };
   }
   return {
@@ -920,7 +937,6 @@ function _curveSeries(kind) {
     matrix: CURVES.matrix_ipca || CURVES.matrix,
     yTitle: "Taxa NTN-B (%)",
     containerCompare: "chart-curves-compare",
-    containerHeatmap: "chart-curves-heatmap",
   };
 }
 
@@ -987,35 +1003,6 @@ function drawCurvasMulti(kind) {
   Plotly.newPlot(cfg.containerCompare, traces, layout, PLOTLY_CONFIG);
 }
 
-function drawCurvasHeatmapTab(kind) {
-  const cfg = _curveSeries(kind);
-  const root = document.getElementById(cfg.containerHeatmap);
-  if (!cfg.matrix.length || CURVES.dates.length < 2) {
-    root.innerHTML = '<div class="empty">Heatmap requer ≥2 datas. Aguardando rotina diária.</div>';
-    return;
-  }
-  const range = _curveDateRange();
-  const idxs = range.map(d => CURVES.dates.indexOf(d)).filter(i => i >= 0);
-  if (idxs.length < 2) {
-    root.innerHTML = '<div class="empty">Selecione um intervalo com ≥2 datas.</div>';
-    return;
-  }
-  const z = idxs.map(i => cfg.matrix[i]);
-  const y = idxs.map(i => CURVES.dates[i]);
-  const layout = Object.assign(PLOTLY_LAYOUT(), {
-    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title:"Vértice (anos)", type:"log" }),
-    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title:"Data" }),
-    margin: { l:90, r:18, t:28, b:40 },
-  });
-  const trace = {
-    z, x: cfg.vertAnos, y,
-    type: "heatmap",
-    colorscale: [[0,"#3a4d6b"],[0.5,"#7d92b3"],[1,"#dadfea"]],
-    colorbar: { title:"Taxa (%)", thickness: 12, len: 0.8 },
-    hovertemplate: "Data %{y}<br>Vértice %{x}a<br>Taxa %{z:.2f}%<extra></extra>",
-  };
-  Plotly.newPlot(cfg.containerHeatmap, [trace], layout, PLOTLY_CONFIG);
-}
 
 /* ============================================================
  *  Tab 3 — Dispersão
@@ -2035,26 +2022,21 @@ function drawHeatmap() {
  *  ms<YYMMDD>.txt agregado por build_titpub_history.
  * ============================================================ */
 let TITPUB = null;
-let TP_TABLE = null;
 let TP_FP_ATUAL = null, TP_FP_ANTERIOR = null;
 let TP_DATE_ATUAL = null, TP_DATE_ANTERIOR = null;
 let TP_DATES_ENABLED = [];
 
-// Cor por tipo (alinhada ao CSS .badge.tp-*).
-const TITPUB_TIPO_COLOR = {
-  "LTN":   "#f0a060",
-  "LFT":   "#a8b2c2",
-  "NTN-B": "#7ab2f0",
-  "NTN-F": "#7fc89a",
-  "NTN-C": "#b78cd6",
+// Tipos exibidos em grid 2x2. NTN-C tem 1 papel só no histórico ANBIMA, então
+// fica de fora — não vale o slot. Ordem do array casa com a ordem visual
+// (linha 1: LFT|NTN-B, linha 2: LTN|NTN-F).
+const TP_TIPOS = ["LFT", "NTN-B", "LTN", "NTN-F"];
+const TP_CONTAINER_BY_TIPO = {
+  "LFT":   "tp-table-lft",
+  "NTN-B": "tp-table-ntnb",
+  "LTN":   "tp-table-ltn",
+  "NTN-F": "tp-table-ntnf",
 };
-function _tpBadgeClass(tipo) {
-  if (!tipo) return "tp";
-  return "tp tp-" + String(tipo).replace("-", "");
-}
-function _tpBadgeHTML(tipo) {
-  return `<span class="badge ${_tpBadgeClass(tipo)}">${tipo || "—"}</span>`;
-}
+const TP_TABLES = {};  // tipo -> Tabulator instance
 
 async function renderTitulosPublicos() {
   [TITPUB, CURVES] = await Promise.all([
@@ -2064,17 +2046,17 @@ async function renderTitulosPublicos() {
   const datas = TITPUB.datas || [];
   const emptyPanel = document.getElementById("tp-empty-panel");
   const emptyMsg = document.getElementById("tp-empty-msg");
-  const tablePanel = document.getElementById("tp-table-panel");
+  const tablesPanel = document.getElementById("tp-tables-panel");
 
   if (!datas.length) {
-    tablePanel.classList.add("hide");
+    tablesPanel.classList.add("hide");
     emptyPanel.classList.remove("hide");
     emptyMsg.textContent =
       "Títulos Públicos indisponíveis. Snapshots ainda não contêm o campo titpub_rows.";
     return;
   }
 
-  tablePanel.classList.remove("hide");
+  tablesPanel.classList.remove("hide");
   emptyPanel.classList.add("hide");
 
   // Datas habilitadas = interseção de Títulos Públicos com Curvas Históricas.
@@ -2083,7 +2065,7 @@ async function renderTitulosPublicos() {
   const titpubSet = new Set(datas);
   TP_DATES_ENABLED = curvesDates.filter(d => titpubSet.has(d));
   if (!TP_DATES_ENABLED.length) {
-    tablePanel.classList.add("hide");
+    tablesPanel.classList.add("hide");
     emptyPanel.classList.remove("hide");
     emptyMsg.textContent =
       "Sem datas com Títulos Públicos e curvas ETTJ disponíveis simultaneamente.";
@@ -2096,15 +2078,6 @@ async function renderTitulosPublicos() {
   const idxInicial = Math.max(0, idxFinal - (CURVE_WINDOW_DEFAULT - 1));
   TP_DATE_ANTERIOR = idxInicial < idxFinal
     ? TP_DATES_ENABLED[idxInicial] : null;
-
-  // Filtro Tipo
-  const tipoSel = document.getElementById("tp-tipo");
-  while (tipoSel.options.length > 1) tipoSel.remove(1);
-  for (const t of (TITPUB.tipos_disponiveis || [])) {
-    const o = document.createElement("option");
-    o.value = t; o.textContent = t;
-    tipoSel.appendChild(o);
-  }
 
   if (TP_FP_ATUAL) TP_FP_ATUAL.destroy();
   if (TP_FP_ANTERIOR) TP_FP_ANTERIOR.destroy();
@@ -2119,9 +2092,7 @@ async function renderTitulosPublicos() {
     onChange: (_, dstr) => onTpDateChange("atual", dstr),
   });
 
-  buildTpTable();
-  document.getElementById("tp-tipo")
-    .addEventListener("change", refreshTpView);
+  buildTpTables();
   refreshTpView();
   drawTpCurves();
 }
@@ -2176,9 +2147,7 @@ function onTpDateChange(which, dstr) {
 function drawTpCurves() {
   if (!CURVES) return;
   drawCurvasMulti("ipca");
-  drawCurvasHeatmapTab("ipca");
   drawCurvasMulti("pre");
-  drawCurvasHeatmapTab("pre");
 }
 
 function _tpRowsForView() {
@@ -2232,13 +2201,8 @@ function _tpRowsForView() {
   return out;
 }
 
-function buildTpTable() {
+function _buildTpTable(containerId, rows) {
   const fmtPctCol = c => fmtPct(c.getValue());
-  const fmtBpsCol = c => {
-    const v = c.getValue();
-    if (v == null) return "—";
-    return v.toFixed(0);
-  };
   const fmtDeltaCol = c => {
     const v = c.getValue();
     const el = c.getElement();
@@ -2257,60 +2221,46 @@ function buildTpTable() {
       { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
   const fmtVenc = c => brDate(c.getValue());
-  const fmtTipo = c => _tpBadgeHTML(c.getValue());
 
-  TP_TABLE = new Tabulator("#tp-table", {
-    data: _tpRowsForView(),
-    layout: "fitData",
-    resizableColumns: true,
-    height: "65vh",
-    // Sort multi-coluna não é definido aqui (initialSort tem ordem reversa
-    // no primeiro render do Tabulator). Aplicado em refreshTpView após cada
-    // replaceData para garantir Vencimento → Tipo.
+  return new Tabulator("#" + containerId, {
+    data: rows,
+    layout: "fitColumns",
+    resizableColumns: false,
+    height: "400px",
+    initialSort: [{ column: "vencimento", dir: "asc" }],
     columns: [
-      { title: "Tipo", field: "tipo", width: 90, formatter: fmtTipo },
-      { title: "Duration (anos)", field: "duration_anos", width: 130,
+      { title: "Duration", field: "duration_anos", width: 80,
         hozAlign: "right",
         formatter: c => fmtAnos(c.getValue()) },
-      { title: "Vencimento", field: "vencimento", width: 120,
+      { title: "Vencimento", field: "vencimento", width: 100,
         formatter: fmtVenc },
-      { title: "PU (R$)", field: "pu", width: 130, hozAlign: "right",
+      { title: "PU (R$)", field: "pu", hozAlign: "right",
         formatter: fmtPu },
-      { title: "Taxa Anterior", field: "taxa_indicativa_d1", width: 120,
+      { title: "Taxa Anterior", field: "taxa_indicativa_d1",
         hozAlign: "right", formatter: fmtPctCol },
-      { title: "Taxa Atual", field: "taxa_indicativa", width: 110,
+      { title: "Taxa Atual", field: "taxa_indicativa",
         hozAlign: "right", formatter: fmtPctCol },
-      { title: "Δ Taxa (bps)", field: "delta_bps", width: 120,
+      { title: "Δ Taxa (bps)", field: "delta_bps", width: 95,
         hozAlign: "right", formatter: fmtDeltaCol },
     ],
   });
 }
 
-// NOTA: Tabulator aplica sorters em ordem reversa (último do array = primário).
-// Para ordenar PRIMÁRIO por vencimento e SECUNDÁRIO por tipo, passar [{tipo}, {vencimento}].
-const TP_SORT = [
-  { column: "tipo", dir: "asc" },
-  { column: "vencimento", dir: "asc" },
-];
-
-function refreshTpView() {
-  if (!TP_TABLE) return;
-  // replaceData retorna Promise; aplicar setSort APÓS dados entrarem garante
-  // que o sort multi-coluna (Vencimento → Tipo) seja respeitado mesmo no
-  // primeiro render — initialSort do Tabulator tem ordem reversa nesse caso.
-  Promise.resolve(TP_TABLE.replaceData(_tpRowsForView())).then(() => {
-    TP_TABLE.setSort(TP_SORT);
-    applyTpFilter();
-  });
+function buildTpTables() {
+  const all = _tpRowsForView();
+  for (const tipo of TP_TIPOS) {
+    const rows = all.filter(r => r.tipo === tipo);
+    TP_TABLES[tipo] = _buildTpTable(TP_CONTAINER_BY_TIPO[tipo], rows);
+  }
 }
 
-function applyTpFilter() {
-  if (!TP_TABLE) return;
-  const tipo = document.getElementById("tp-tipo").value;
-  TP_TABLE.setFilter(d => {
-    if (tipo && d.tipo !== tipo) return false;
-    return true;
-  });
+function refreshTpView() {
+  if (!TP_TABLES[TP_TIPOS[0]]) return;
+  const all = _tpRowsForView();
+  for (const tipo of TP_TIPOS) {
+    const rows = all.filter(r => r.tipo === tipo);
+    TP_TABLES[tipo].replaceData(rows);
+  }
 }
 
 init().catch(err => {
