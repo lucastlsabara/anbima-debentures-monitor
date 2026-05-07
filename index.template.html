@@ -7,9 +7,9 @@
 <link href="https://unpkg.com/tabulator-tables@6.2.5/dist/css/tabulator_midnight.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/dark.css" rel="stylesheet">
-<script src="https://unpkg.com/tabulator-tables@6.2.5/dist/js/tabulator.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
+<script defer src="https://unpkg.com/tabulator-tables@6.2.5/dist/js/tabulator.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
 <style>
   :root {
     --bg:#0e1116; --surface:#161b22; --surface2:#1c2230;
@@ -2275,10 +2275,22 @@ function refreshTpView() {
   }
 }
 
-init().catch(err => {
-  console.error(err);
-  document.getElementById("hdr-sub").textContent = "Falha ao carregar dados: " + err.message;
-});
+// DOMContentLoaded garante que os scripts <head defer> (Tabulator, Plotly,
+// flatpickr) já executaram. Sem isso, defer + script inline no final do
+// body podia chamar Plotly/Tabulator antes do load — defer só executa
+// após o parsing, mas antes do DOMContentLoaded.
+function _bootstrap() {
+  init().catch(err => {
+    console.error(err);
+    document.getElementById("hdr-sub").textContent =
+      "Falha ao carregar dados: " + err.message;
+  });
+}
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", _bootstrap);
+} else {
+  _bootstrap();
+}
 </script>
 </body>
 </html>
