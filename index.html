@@ -2229,11 +2229,11 @@ function _buildTpTable(containerId, rows) {
     height: "400px",
     initialSort: [{ column: "vencimento", dir: "asc" }],
     columns: [
+      { title: "Vencimento", field: "vencimento", width: 100,
+        formatter: fmtVenc },
       { title: "Duration", field: "duration_anos", width: 80,
         hozAlign: "right",
         formatter: c => fmtAnos(c.getValue()) },
-      { title: "Vencimento", field: "vencimento", width: 100,
-        formatter: fmtVenc },
       { title: "PU (R$)", field: "pu", hozAlign: "right",
         formatter: fmtPu },
       { title: "Taxa Anterior", field: "taxa_indicativa_d1",
