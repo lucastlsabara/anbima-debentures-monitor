@@ -394,6 +394,11 @@ def main() -> int:
         "ettj_pre": ettj_pre_out,
         "diagnostico_metodo": diag,
         "debentures": out_debs,
+        # Mercado secundário de títulos públicos (LTN/LFT/NTN-B/NTN-F/NTN-C):
+        # passado adiante para a aba "Títulos Públicos" do dashboard. Snapshots
+        # antigos (anteriores a este campo) ficam sem o dado — frontend trata
+        # graceful (mensagem "indisponível para esta data").
+        "titpub_rows": raw.get("titpub_rows") or [],
     }
 
     Path(args.out).write_text(

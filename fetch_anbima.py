@@ -126,6 +126,66 @@ def parse_titulos_publicos(text: str) -> dict[str, dict[str, float]]:
     return out
 
 
+def _yyyymmdd_to_iso(s: str) -> str | None:
+    s = (s or "").strip()
+    if len(s) != 8 or not s.isdigit():
+        return None
+    return f"{s[0:4]}-{s[4:6]}-{s[6:8]}"
+
+
+def parse_titpub_rows(text: str, data_referencia: date) -> list[dict]:
+    """Parser detalhado do arquivo ANBIMA ms<YYMMDD>.txt (mercado secundário
+    de títulos públicos federais), com schema alinhado ao do dashboard.
+
+    Cabeçalho real (separador '@'), conforme arquivo emitido pela ANBIMA:
+        Titulo @ Data Referencia @ Codigo SELIC @ Data Base/Emissao @
+        Data Vencimento @ Tx. Compra @ Tx. Venda @ Tx. Indicativas @ PU @
+        Desvio padrao @ Interv. Ind. Inf. (D0) @ Interv. Ind. Sup. (D0) @
+        Interv. Ind. Inf. (D+1) @ Interv. Ind. Sup. (D+1) @ Criterio
+
+    Datas vêm em YYYYMMDD; números em formato BR (vírgula decimal). Campos
+    vazios viram None. Ignora cabeçalho ('ANBIMA…', linha vazia, 'Titulo…').
+
+    Duration: distância simples (dias corridos) entre data_referencia e
+    vencimento. É APROXIMAÇÃO — para NTN-B/NTN-F com cupom semestral a
+    duration de Macaulay seria menor; usar somente como eixo no scatter da
+    aba 'Títulos Públicos', não para cálculo de risco.
+    """
+    rows: list[dict] = []
+    for ln in text.splitlines():
+        if not ln or "@" not in ln:
+            continue
+        parts = [p.strip() for p in ln.split("@")]
+        tipo = parts[0]
+        if tipo in ("Titulo", "") or tipo.startswith("ANBIMA"):
+            continue
+        if len(parts) < 12:
+            continue
+        venc_iso = _yyyymmdd_to_iso(parts[4])
+        if not venc_iso:
+            continue
+        try:
+            venc_date = datetime.strptime(venc_iso, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        dur_dias = (venc_date - data_referencia).days
+        rows.append({
+            "tipo": tipo,
+            "vencimento": venc_iso,
+            "cod_selic": parts[2],
+            "taxa_compra": _br_float(parts[5]),
+            "taxa_venda": _br_float(parts[6]),
+            "taxa_indicativa": _br_float(parts[7]),
+            "pu": _br_float(parts[8]),
+            "desvio_padrao": _br_float(parts[9]),
+            "intervalo_min": _br_float(parts[10]),
+            "intervalo_max": _br_float(parts[11]),
+            "duration_dias": dur_dias,
+            "duration_anos": round(dur_dias / 365.25, 3),
+        })
+    return rows
+
+
 def parse_db(text: str) -> list[dict]:
     rows = []
     for line in text.splitlines():
@@ -313,11 +373,14 @@ def main() -> int:
 
     print(f"[fetch] títulos públicos de {target.isoformat()}", file=sys.stderr)
     titpub: dict[str, dict[str, float]] = {}
+    titpub_rows: list[dict] = []
     try:
         tp_text = fetch_titulos_publicos(target)
         titpub = parse_titulos_publicos(tp_text)
+        titpub_rows = parse_titpub_rows(tp_text, target)
         sizes = ", ".join(f"{k}={len(v)}" for k, v in sorted(titpub.items()))
-        print(f"[fetch]   -> {sizes}", file=sys.stderr)
+        print(f"[fetch]   -> {sizes} | titpub_rows={len(titpub_rows)}",
+              file=sys.stderr)
     except requests.HTTPError as e:
         print(f"[warn ] títulos públicos indisponível ({e}); spreads ficarão sem referência",
               file=sys.stderr)
@@ -329,6 +392,7 @@ def main() -> int:
         "ettj_ipca": ettj_rows,
         "ettj_pre": ettj_pre_rows,
         "titulos_publicos": titpub,
+        "titpub_rows": titpub_rows,
     }
     Path(args.out).write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[fetch] -> {args.out}", file=sys.stderr)

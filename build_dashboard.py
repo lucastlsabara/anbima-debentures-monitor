@@ -579,6 +579,68 @@ def build_dispersion(snaps: list[dict], dispersion_dir: Path) -> dict:
 
 
 # ----------------------------------------------------------------------------
+# titulos públicos history (Tab 6: Títulos Públicos)
+# ----------------------------------------------------------------------------
+
+# Ordem de exibição preferencial dos tipos. Tipos não listados aqui aparecem
+# depois, em ordem alfabética.
+_TITPUB_TIPOS_ORDEM = ["LTN", "NTN-F", "NTN-B", "NTN-C", "LFT"]
+
+
+def build_titpub_history(snaps: list[dict]) -> dict:
+    """Agrega rows de mercado secundário de títulos públicos por data.
+
+    Saída:
+      {
+        'datas': [...],                  # apenas datas com titpub_rows não-vazio
+        'tipos_disponiveis': [...],      # união ao longo de todas as datas
+        'rows_by_date': {date: [rows...]}
+      }
+
+    Snapshots gerados antes deste campo simplesmente não aparecem em 'datas';
+    o frontend exibe mensagem 'indisponível' para essas datas (no flatpickr,
+    apenas datas em 'datas' ficam habilitadas).
+    """
+    datas: list[str] = []
+    rows_by_date: dict[str, list[dict]] = {}
+    tipos_set: set[str] = set()
+    for s in snaps:
+        rows_raw = s.get("titpub_rows") or []
+        if not rows_raw:
+            continue
+        date = s["data_referencia"]
+        clean: list[dict] = []
+        for r in rows_raw:
+            tipo = r.get("tipo")
+            if not tipo:
+                continue
+            tipos_set.add(tipo)
+            clean.append({
+                "tipo": tipo,
+                "vencimento": r.get("vencimento"),
+                "cod_selic": r.get("cod_selic"),
+                "taxa_compra": r.get("taxa_compra"),
+                "taxa_venda": r.get("taxa_venda"),
+                "taxa_indicativa": r.get("taxa_indicativa"),
+                "pu": r.get("pu"),
+                "desvio_padrao": r.get("desvio_padrao"),
+                "intervalo_min": r.get("intervalo_min"),
+                "intervalo_max": r.get("intervalo_max"),
+                "duration_dias": r.get("duration_dias"),
+                "duration_anos": r.get("duration_anos"),
+            })
+        datas.append(date)
+        rows_by_date[date] = clean
+    tipos = [t for t in _TITPUB_TIPOS_ORDEM if t in tipos_set]
+    tipos += sorted(t for t in tipos_set if t not in _TITPUB_TIPOS_ORDEM)
+    return {
+        "datas": datas,
+        "tipos_disponiveis": tipos,
+        "rows_by_date": rows_by_date,
+    }
+
+
+# ----------------------------------------------------------------------------
 # HTML
 # ----------------------------------------------------------------------------
 
@@ -621,6 +683,8 @@ def main() -> int:
         _write_json(DATA_DIR / "heatmap_history.json", build_heatmap_history(snaps))))
     sizes.append(("movements.json",
         _write_json(DATA_DIR / "movements.json", build_movements(snaps))))
+    sizes.append(("titpub_history.json",
+        _write_json(DATA_DIR / "titpub_history.json", build_titpub_history(snaps))))
 
     disp_index = build_dispersion(snaps, disp_dir)
     sizes.append(("dispersion/_index.json",
