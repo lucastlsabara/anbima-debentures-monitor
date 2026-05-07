@@ -2285,6 +2285,15 @@ function buildTpTable() {
         hozAlign: "right", formatter: fmtDeltaCol },
     ],
   });
+  // Tabulator (versão atual) aplica initialSort multi-coluna fora de ordem no
+  // primeiro render — força reaplicação após tableBuilt para garantir
+  // Vencimento primário, Tipo secundário.
+  TP_TABLE.on("tableBuilt", () => {
+    TP_TABLE.setSort([
+      { column: "vencimento", dir: "asc" },
+      { column: "tipo", dir: "asc" },
+    ]);
+  });
 }
 
 function refreshTpView() {
