@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -34,6 +35,59 @@ ETTJ_URL = "https://www.anbima.com.br/informacoes/est-termo/CZ-down.asp?Dt_Ref={
 # Mercado secundário de títulos públicos: tabela por título + vencimento exato
 # (fonte oficial das taxas de NTN-B/LTN/NTN-F usadas como benchmark de debêntures).
 TITPUB_URL = "https://www.anbima.com.br/informacoes/merc-sec/arqs/ms{yymmdd}.txt"
+
+# User-Agent identificável: ANBIMA pode bloquear requests genéricos do
+# python-requests. Mantemos o contato para cumprir polidez de scraper.
+USER_AGENT = (
+    "anbima-debentures-monitor/1.0 "
+    "(+https://github.com/lucastlsabara/anbima-debentures-monitor)"
+)
+HTTP_TIMEOUT = 30
+# Retry exponencial só para falhas transitórias de rede (timeout, conexão,
+# 5xx). 404 nunca repete — é resposta legítima da ANBIMA quando o arquivo
+# do dia ainda não foi publicado, e o caller já trata como warn-and-skip.
+HTTP_RETRY_ATTEMPTS = 4
+HTTP_RETRY_BACKOFF_SEC = (2, 4, 8, 16)
+
+
+def _http_get(url: str) -> requests.Response:
+    """GET com retry exponencial em falhas transitórias e User-Agent custom.
+
+    Erros que disparam retry: requests.ConnectionError, requests.Timeout,
+    HTTPError com status 5xx ou 429. HTTPError 4xx (exceto 429) é repassado
+    direto — caller decide (404 = warn-and-skip, demais = raise).
+    """
+    last_exc: Exception | None = None
+    for attempt in range(HTTP_RETRY_ATTEMPTS):
+        try:
+            r = requests.get(
+                url,
+                timeout=HTTP_TIMEOUT,
+                headers={"User-Agent": USER_AGENT},
+            )
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last_exc = e
+        else:
+            if r.status_code < 400 or r.status_code in (404,):
+                # Sucesso ou 404 (resposta legítima a propagar para o caller).
+                r.raise_for_status() if r.status_code >= 400 else None
+                return r
+            if r.status_code in (429,) or r.status_code >= 500:
+                last_exc = requests.HTTPError(
+                    f"HTTP {r.status_code} em {url}", response=r,
+                )
+            else:
+                # Outros 4xx (401, 403, etc.) — não tem o que tentar de novo.
+                r.raise_for_status()
+        if attempt < HTTP_RETRY_ATTEMPTS - 1:
+            wait = HTTP_RETRY_BACKOFF_SEC[attempt]
+            print(
+                f"[fetch] {url}: {type(last_exc).__name__}; "
+                f"retry em {wait}s (tentativa {attempt + 2}/{HTTP_RETRY_ATTEMPTS})",
+                file=sys.stderr,
+            )
+            time.sleep(wait)
+    raise last_exc if last_exc else RuntimeError(f"falha inesperada em {url}")
 
 DB_HEADER = [
     "codigo", "nome", "vencimento", "indice", "taxa_compra", "taxa_venda",
@@ -80,8 +134,7 @@ def _br_date(s: str) -> str | None:
 def fetch_db(target: date) -> str:
     yymmdd = target.strftime("%y%m%d")
     url = DB_URL.format(yymmdd=yymmdd)
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
+    r = _http_get(url)
     text = r.content.decode("latin-1")
     out = RAW_DIR / f"db{yymmdd}.txt"
     out.write_text(text, encoding="utf-8")
@@ -90,8 +143,7 @@ def fetch_db(target: date) -> str:
 
 def fetch_ettj(target: date) -> str:
     url = ETTJ_URL.format(dd=f"{target.day:02d}", mm=f"{target.month:02d}", yyyy=target.year)
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
+    r = _http_get(url)
     text = r.content.decode("latin-1")
     out = RAW_DIR / f"ettj_{_iso(target)}.csv"
     out.write_text(text, encoding="utf-8")
@@ -101,8 +153,7 @@ def fetch_ettj(target: date) -> str:
 def fetch_titulos_publicos(target: date) -> str:
     yymmdd = target.strftime("%y%m%d")
     url = TITPUB_URL.format(yymmdd=yymmdd)
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
+    r = _http_get(url)
     text = r.content.decode("latin-1")
     out = RAW_DIR / f"ms{yymmdd}.txt"
     out.write_text(text, encoding="utf-8")
@@ -192,6 +243,11 @@ def parse_titpub_rows(
         except ValueError:
             continue
         dur_dias = (venc_date - data_referencia).days
+        # Títulos já vencidos eventualmente aparecem no arquivo da ANBIMA
+        # (linhas residuais de dias após o vencimento). Duration negativa
+        # quebra o eixo dos gráficos e gera linhas inúteis nas tabelas.
+        if dur_dias < 0:
+            continue
         rows.append({
             "tipo": rec["tipo"],
             "vencimento": venc_iso,

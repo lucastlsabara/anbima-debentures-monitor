@@ -27,6 +27,7 @@ REGRA: nunca inventa dados. Tudo vem de ``history/<YYYY-MM-DD>.json`` real.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -344,36 +345,54 @@ def build_overview(snaps: list[dict]) -> dict:
         }
 
     dates = [s["data_referencia"] for s in snaps]
-    # Pré-computa, para cada par (atual, anterior), o snapshot de KPIs +
-    # top movers + histograma. Custo: O(N²) onde N=len(snaps). Como N≤~250
-    # de um ano, ainda é factível; payloads são esparsos.
+    # Pré-computa, para cada par (atual, anterior), KPIs + top movers
+    # cobrindo TODAS as combinações possíveis (não só o anterior imediato).
+    # Histograma depende só de `atual`, então fica fora do dicionário de
+    # pares para evitar duplicação. Custo: O(N²) pares mas cada par é leve
+    # (4 KPIs + 20 top movers); evita o frontend baixar movements.json
+    # (~4 MB) só para recalcular um par diferente do default.
     pairs: dict[str, dict] = {}
     for i, atual in enumerate(dates):
-        anterior = dates[i - 1] if i > 0 else None
         enr = enriched_by_date[atual]
-        prev_map = spread_maps_by_date.get(anterior) if anterior else None
-        kpis_all = _kpis_for(enr, atual, anterior, prev_map)
-        kpis_by_idx = {"Todos": kpis_all}
-        hist_by_idx: dict[str, dict] = {}
-        top_by_idx = {"Todos": _top_movers(enr, prev_map)}
+        # Histograma e by_grp só dependem de `atual`.
         by_grp: dict[str, list[dict]] = defaultdict(list)
         for p in enr:
             by_grp[p["indexador_grupo"]].append(p)
+        hist_by_idx: dict[str, dict] = {}
         for grp in ALLOWED_INDEXADORES:
             ps = by_grp.get(grp, [])
-            if not ps:
-                continue
-            kpis_by_idx[grp] = _kpis_for(ps, atual, anterior, prev_map)
-            top_by_idx[grp] = _top_movers(ps, prev_map)
             sp = [p["spread_pp"] for p in ps
                   if p.get("spread_pp") is not None and not p.get("flag_iliquido")]
             if sp:
                 hist_by_idx[grp] = _histogram_for(sp)
+        # by_anterior[anterior] = {kpis, top_movements} para cada anterior
+        # estritamente menor que `atual`, mais a chave None (sem anterior).
+        by_anterior: dict[str | None, dict] = {}
+        anteriores: list[str | None] = [None] + [d for d in dates if d < atual]
+        for anterior in anteriores:
+            prev_map = spread_maps_by_date.get(anterior) if anterior else None
+            kpis_by_idx = {"Todos": _kpis_for(enr, atual, anterior, prev_map)}
+            top_by_idx = {"Todos": _top_movers(enr, prev_map)}
+            for grp in ALLOWED_INDEXADORES:
+                ps = by_grp.get(grp, [])
+                if not ps:
+                    continue
+                kpis_by_idx[grp] = _kpis_for(ps, atual, anterior, prev_map)
+                top_by_idx[grp] = _top_movers(ps, prev_map)
+            # Chave do dict precisa ser string para serializar em JSON.
+            key = anterior if anterior is not None else ""
+            by_anterior[key] = {"kpis": kpis_by_idx, "top_movements": top_by_idx}
+        anterior_default = dates[i - 1] if i > 0 else None
         pairs[atual] = {
-            "anterior": anterior,
-            "kpis": kpis_by_idx,
+            "anterior": anterior_default,
+            "anterior_default": anterior_default,
             "histogram": hist_by_idx,
-            "top_movements": top_by_idx,
+            "by_anterior": by_anterior,
+            # Back-compat: o frontend velho lê pair.kpis / pair.top_movements
+            # do par default. Mantido até trocarmos a leitura no JS.
+            "kpis": by_anterior[anterior_default if anterior_default else ""]["kpis"],
+            "top_movements":
+                by_anterior[anterior_default if anterior_default else ""]["top_movements"],
         }
 
     today = dates[-1] if dates else None
@@ -646,8 +665,35 @@ def build_titpub_history(snaps: list[dict]) -> dict:
 # HTML
 # ----------------------------------------------------------------------------
 
-def write_html(out_path: Path) -> int:
+def _build_version(data_dir: Path) -> str:
+    """Hash curto do conteúdo dos JSONs gerados em data/.
+
+    Usado como query string ?v= em todos os fetch() do dashboard para
+    invalidar o cache do GitHub Pages quando os dados mudam. Se o build
+    rodar com o mesmo input (mesmos snapshots em history/), o hash é
+    idêntico — preserva idempotência. Quando snapshots novos chegam, o
+    hash muda e os browsers re-baixam os JSONs.
+    """
+    h = hashlib.sha256()
+    for p in sorted(data_dir.rglob("*.json")):
+        h.update(p.relative_to(data_dir).as_posix().encode("utf-8"))
+        h.update(b"\0")
+        h.update(p.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()[:12]
+
+
+def write_html(out_path: Path, build_version: str) -> int:
     html = (ROOT / "index.template.html").read_text(encoding="utf-8")
+    # Substitui placeholder; se o template já estiver com a versão expandida
+    # (artefato do último build), normaliza primeiro para o placeholder.
+    import re
+    html = re.sub(
+        r'const BUILD_VERSION = "[^"]*";',
+        f'const BUILD_VERSION = "{build_version}";',
+        html,
+        count=1,
+    )
     out_path.write_text(html, encoding="utf-8")
     return len(html.encode("utf-8"))
 
@@ -696,8 +742,10 @@ def main() -> int:
         path = disp_dir / f"{date}.json"
         sizes.append((f"dispersion/{date}.json", path.stat().st_size))
 
-    html_size = write_html(Path(args.out_html))
+    build_version = _build_version(DATA_DIR)
+    html_size = write_html(Path(args.out_html), build_version)
     sizes.append((args.out_html, html_size))
+    print(f"[build] BUILD_VERSION={build_version}", file=sys.stderr)
 
     max_bytes = 0
     print("\n[build] arquivos gerados:", file=sys.stderr)

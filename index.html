@@ -4,12 +4,24 @@
 <meta charset="utf-8">
 <title>ANBIMA Debêntures — Monitor</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link href="https://unpkg.com/tabulator-tables@6.2.5/dist/css/tabulator_midnight.min.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/dark.css" rel="stylesheet">
-<script src="https://unpkg.com/tabulator-tables@6.2.5/dist/js/tabulator.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
+<link href="https://unpkg.com/tabulator-tables@6.2.5/dist/css/tabulator_midnight.min.css" rel="stylesheet"
+      integrity="sha384-vBqRsRIPXb03PYCog2z5jjcEBrrvg3yilshFbdVOmFtVX27t9rYeO7lXit0xIcou"
+      crossorigin="anonymous" referrerpolicy="no-referrer">
+<link href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css" rel="stylesheet"
+      integrity="sha384-RkASv+6KfBMW9eknReJIJ6b3UnjKOKC5bOUaNgIY778NFbQ8MtWq9Lr/khUgqtTt"
+      crossorigin="anonymous" referrerpolicy="no-referrer">
+<link href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/dark.css" rel="stylesheet"
+      integrity="sha384-heUUtXw0Djj2DElfLOVPlASSWFKNL3JDY6s3FEqQD03GYyWOeophY5DsfEG40sYX"
+      crossorigin="anonymous" referrerpolicy="no-referrer">
+<script defer src="https://unpkg.com/tabulator-tables@6.2.5/dist/js/tabulator.min.js"
+        integrity="sha384-D0fErOaZUOl6YD0uVXOV4adRMn/r+0AsYsVGYsxpPXC6BoVCP72nief3UntQBR9X"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"
+        integrity="sha384-cCVCZkAjYNxaYKbM8lsArLznDF/SvMFr1jcZrvOpSTCa0W40ZAdLzHCEulnUa5i7"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"
+        integrity="sha384-5JqMv4L/Xa0hfvtF06qboNdhvuYXUku9ZrhZh3bSk8VXF0A/RuSLHpLsSV9Zqhl6"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   :root {
     --bg:#0e1116; --surface:#161b22; --surface2:#1c2230;
@@ -267,7 +279,7 @@
 <nav class="tabs" id="tabs">
   <a href="#/visao" data-tab="visao">Visão Geral</a>
   <a href="#/movimentacoes" data-tab="movimentacoes">Debêntures: Papéis</a>
-  <a href="#/heatmap" data-tab="heatmap">Debêntures: Spread × Prazo</a>
+  <a href="#/heatmap" data-tab="heatmap">Debêntures: Setor × Prazo</a>
   <a href="#/dispersao" data-tab="dispersao">Debêntures: Gráfico</a>
   <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
 </nav>
@@ -488,6 +500,13 @@ const fmtBps = v => v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(0) + " b
 const fmtAnos = v => v == null ? "—" : v.toFixed(2) + "a";
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
+// Escape para conteúdo de tags (innerHTML). Usado quando inserimos strings
+// vindas de dados ANBIMA (setores como "Petróleo & Gás", emissores) em
+// template literals. Sem isso, "&" gera HTML inválido e potenciais bugs.
+const _ESC_HTML = { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" };
+const escapeHtml = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => _ESC_HTML[c]);
+const escapeAttr = escapeHtml;  // mesma tabela cobre ambos os contextos.
+
 const PLOTLY_LAYOUT = () => ({
   paper_bgcolor: cssVar("--surface"),
   plot_bgcolor: cssVar("--surface"),
@@ -505,10 +524,16 @@ const PLOTLY_LAYOUT = () => ({
 const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
   modeBarButtonsToRemove: ["lasso2d","select2d","autoScale2d"] };
 
+// Substituído pelo build com hash dos JSONs em data/. Em dev (template puro)
+// fica vazio e o cache do browser dita a frescor. Em produção, ?v=<hash>
+// invalida o cache do GitHub Pages quando snapshots novos chegam.
+const BUILD_VERSION = "e5798c7e3653";
+
 const cache = new Map();
 async function loadJSON(path) {
   if (cache.has(path)) return cache.get(path);
-  const r = await fetch(path);
+  const url = BUILD_VERSION ? path + "?v=" + BUILD_VERSION : path;
+  const r = await fetch(url);
   if (!r.ok) throw new Error(path + " " + r.status);
   const j = await r.json();
   cache.set(path, j);
@@ -663,17 +688,13 @@ function onVisDateChange(which, d) {
 function drawVisao() {
   const pair = OVERVIEW.by_pair[VIS_DATE_ATUAL];
   if (!pair) return;
-  // Sobrescreve o snapshot "anterior" do par pré-computado se o usuário
-  // escolheu uma data diferente.
-  let kpis = pair.kpis;
-  let topm = pair.top_movements;
-  if (VIS_DATE_ANTERIOR && VIS_DATE_ANTERIOR !== pair.anterior) {
-    const recomputed = _recomputeVisPair(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
-    if (recomputed) {
-      kpis = recomputed.kpis;
-      topm = recomputed.top_movements;
-    }
-  }
+  // Lookup direto no dicionário pré-computado: by_anterior cobre TODAS as
+  // combinações de Data Anterior estritamente menor que VIS_DATE_ATUAL,
+  // mais a chave "" (sem anterior — KPIs/top movers sem deltas).
+  const key = VIS_DATE_ANTERIOR || "";
+  const slot = (pair.by_anterior && pair.by_anterior[key]) || null;
+  const kpis = slot ? slot.kpis : pair.kpis;
+  const topm = slot ? slot.top_movements : pair.top_movements;
   renderKpis(kpis);
   renderHistogram(pair.histogram["IPCA+"] || null, "IPCA+", "chart-histogram-ipca");
   renderHistogram(pair.histogram["DI+"]   || null, "CDI+",  "chart-histogram-cdi");
@@ -681,78 +702,6 @@ function drawVisao() {
   renderTopMovers(topm["DI+"]   || null, "CDI+",  "top-movers-cdi");
   renderCurvesOverlay(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
   renderCurvesPre(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
-}
-
-function _recomputeVisPair(atual, anterior) {
-  // Busca movements.json — fonte autoritativa por papel — para recomputar o
-  // par escolhido pelo usuário quando difere do par default em by_pair.
-  if (!MOV_DATA) {
-    // dispara load assíncrono e força redraw quando estiver pronto
-    loadJSON("data/movements.json").then(d => { MOV_DATA = d; drawVisao(); });
-    return null;
-  }
-  const cur = MOV_DATA.by_date[atual];
-  const ref = MOV_DATA.by_date[anterior];
-  if (!cur || !ref) return null;
-  const refSp = {};
-  for (const r of ref.rows) if (r.spread_pp != null) refSp[r.codigo] = r.spread_pp;
-  const groups = { Todos: [] };
-  for (const r of cur.rows) {
-    const sp = r.spread_pp; const old = refSp[r.codigo];
-    if (sp == null || old == null) continue;
-    const delta = (sp - old) * 100.0;
-    const m = {
-      codigo: r.codigo, emissor: r.emissor,
-      duration_anos: r.duration_anos, spread_pp: sp,
-      taxa: r.taxa, delta_spread_bps: delta,
-      indexador: r.indexador,
-    };
-    groups.Todos.push(m);
-    (groups[r.indexador] = groups[r.indexador] || []).push(m);
-  }
-  const kpis = { Todos: _kpisFromMovs(cur.rows, refSp, atual, anterior) };
-  for (const k of Object.keys(groups)) {
-    if (k === "Todos") continue;
-    const groupRows = cur.rows.filter(r => r.indexador === k);
-    kpis[k] = _kpisFromMovs(groupRows, refSp, atual, anterior);
-  }
-  const topm = {};
-  for (const k of Object.keys(groups)) {
-    const arr = groups[k].slice().sort((a,b) => b.delta_spread_bps - a.delta_spread_bps);
-    topm[k] = { abrindo: arr.slice(0,10), fechando: arr.slice(-10).reverse(), n_com_d1: arr.length };
-  }
-  return { kpis, top_movements: topm };
-}
-
-function _kpisFromMovs(rows, refSp, atual, anterior) {
-  let nT=rows.length, nL=0, nI=0, nE=0, nSp=0;
-  const deltas = [];
-  const absSpreads = [];
-  for (const r of rows) {
-    if (r.iliquido) nI++; else nL++;
-    if (r.estagnado) nE++;
-    if (r.spread_pp != null) nSp++;
-    if (!r.iliquido && r.spread_pp != null) absSpreads.push(r.spread_pp);
-    if (!r.iliquido && r.spread_pp != null && refSp[r.codigo] != null) {
-      deltas.push((r.spread_pp - refSp[r.codigo]) * 100.0);
-    }
-  }
-  const med = deltas.length ? deltas.reduce((a,b)=>a+b,0)/deltas.length : null;
-  const meanAbs = absSpreads.length
-    ? absSpreads.reduce((a,b)=>a+b,0)/absSpreads.length : null;
-  return {
-    data_referencia: atual,
-    data_anterior: anterior,
-    n_total: nT, n_liquidos: nL, n_iliquidos: nI,
-    pct_iliquidos: nT ? Math.round(100.0*nI/nT*100)/100 : null,
-    n_estagnados: nE,
-    pct_estagnados: nT ? Math.round(100.0*nE/nT*100)/100 : null,
-    n_com_spread: nSp,
-    termometro_med_bps: med != null ? Math.round(med*10)/10 : null,
-    n_com_d1: deltas.length,
-    mean_spread_abs_pp: meanAbs != null ? Math.round(meanAbs*10000)/10000 : null,
-    n_spread_abs: absSpreads.length,
-  };
 }
 
 function renderKpis(kpisMap) {
@@ -771,11 +720,15 @@ function renderKpis(kpisMap) {
       hint: `${all.n_liquidos} com taxa · ${all.n_com_spread} com spread oficial` },
     { label: "Ilíquidos no dia", val: all.n_iliquidos,
       hint: (all.pct_iliquidos ?? 0) + "% do total" },
-    { label: "Termômetro IPCA+ · spread médio",
+    // Cards de mercado: o IPCA+ mostra o nível absoluto do spread médio
+    // (em pp) — métrica de carrego. O CDI+ mostra a variação média do
+    // spread vs Data Anterior (em bps) — métrica de movimento. Nomes
+    // distintos para evitar a ambiguidade do termo "Termômetro".
+    { label: "Spread médio IPCA+ (nível)",
       val: sIpca == null ? "—" : sIpca.toFixed(2) + " pp",
       cls: _termCls(tIpcaDelta),
       hint: (ipca.n_spread_abs ?? 0) + " papéis IPCA+ com spread" },
-    { label: "Termômetro CDI+ · média Δspread",
+    { label: "Δ Spread médio CDI+ (movimento)",
       val: tCdi == null ? "—" : (tCdi >= 0 ? "+" : "") + tCdi.toFixed(1) + " bps",
       cls: _termCls(tCdi),
       hint: (cdi.n_com_d1 ?? 0) + " papéis CDI+ com Δ vs " + brDate(all.data_anterior) },
@@ -900,7 +853,8 @@ function renderTopMovers(tm, displayLabel, containerId) {
     const dCls = m.delta_spread_bps == null ? ""
       : (m.delta_spread_bps > 0 ? "neg"
         : m.delta_spread_bps < 0 ? "pos" : "");
-    return `<tr><td>${m.codigo}</td><td>${(m.emissor||'').slice(0,32)}</td>` +
+    const emissor = m.emissor || '';
+    return `<tr><td>${m.codigo}</td><td title="${escapeAttr(emissor)}">${escapeHtml(emissor)}</td>` +
       `<td class="num">${fmtAnos(m.duration_anos)}</td>` +
       `<td class="num">${fmtPp(m.spread_pp)}</td>` +
       `<td class="num ${dCls}">${fmtBps(m.delta_spread_bps)}</td></tr>`;
@@ -1262,7 +1216,7 @@ function _buildSetorMultiSelect(setores) {
     const wrap = document.createElement("div");
     wrap.className = "ms-item";
     wrap.innerHTML =
-      `<label><input type="checkbox" class="disp-setor-cb" value="${s}" checked> ${s}</label>`;
+      `<label><input type="checkbox" class="disp-setor-cb" value="${escapeAttr(s)}" checked> ${escapeHtml(s)}</label>`;
     list.appendChild(wrap);
   }
   // "Todos" sincroniza com checkboxes individuais.
@@ -1849,7 +1803,7 @@ function _initHeatExcludeUI() {
       return;
     }
     sugBox.innerHTML = list.map(emiss =>
-      `<div class="ex-sug" data-emiss="${emiss}"><span>${emiss}</span></div>`
+      `<div class="ex-sug" data-emiss="${escapeAttr(emiss)}"><span>${escapeHtml(emiss)}</span></div>`
     ).join("");
     sugBox.classList.remove("hide");
   };
@@ -1916,8 +1870,8 @@ function _renderHeatChips() {
     return;
   }
   chips.innerHTML = [...HEAT_EXCLUDE].map(k =>
-    `<span class="ex-chip">${k}` +
-    `<button type="button" data-remove="${k}" title="Remover">×</button></span>`
+    `<span class="ex-chip">${escapeHtml(k)}` +
+    `<button type="button" data-remove="${escapeAttr(k)}" aria-label="Remover ${escapeAttr(k)}" title="Remover">×</button></span>`
   ).join("");
 }
 
@@ -2263,10 +2217,22 @@ function refreshTpView() {
   }
 }
 
-init().catch(err => {
-  console.error(err);
-  document.getElementById("hdr-sub").textContent = "Falha ao carregar dados: " + err.message;
-});
+// DOMContentLoaded garante que os scripts <head defer> (Tabulator, Plotly,
+// flatpickr) já executaram. Sem isso, defer + script inline no final do
+// body podia chamar Plotly/Tabulator antes do load — defer só executa
+// após o parsing, mas antes do DOMContentLoaded.
+function _bootstrap() {
+  init().catch(err => {
+    console.error(err);
+    document.getElementById("hdr-sub").textContent =
+      "Falha ao carregar dados: " + err.message;
+  });
+}
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", _bootstrap);
+} else {
+  _bootstrap();
+}
 </script>
 </body>
 </html>
