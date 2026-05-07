@@ -251,10 +251,9 @@
 
 <nav class="tabs" id="tabs">
   <a href="#/visao" data-tab="visao">Visão Geral</a>
-  <a href="#/curvas" data-tab="curvas">Curvas Históricas</a>
-  <a href="#/dispersao" data-tab="dispersao">Debêntures: Gráfico</a>
   <a href="#/movimentacoes" data-tab="movimentacoes">Debêntures: Papéis</a>
-  <a href="#/heatmap" data-tab="heatmap">Heatmap Setor × Duration</a>
+  <a href="#/heatmap" data-tab="heatmap">Debêntures: Spread × Prazo</a>
+  <a href="#/dispersao" data-tab="dispersao">Debêntures: Gráfico</a>
   <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
 </nav>
 
@@ -303,34 +302,6 @@
       <h2>Curva Pré — Data Atual vs Data Anterior</h2>
       <div id="chart-curves-pre" class="chart"></div>
     </div>
-  </div>
-</section>
-
-<!-- ===================== Tab: Curvas Históricas ===================== -->
-<section id="tab-curvas" class="tab hide">
-  <div class="panel">
-    <div class="controls">
-      <label>Data Inicial: <input type="text" id="curve-date-anterior" placeholder="YYYY-MM-DD"></label>
-      <label>Data Final: <input type="text" id="curve-date-atual" placeholder="YYYY-MM-DD"></label>
-    </div>
-  </div>
-  <div class="curves-grid">
-    <div class="panel">
-      <h2>Curva ETTJ NTN-B — últimos dias úteis</h2>
-      <div id="chart-curves-compare" class="chart"></div>
-    </div>
-    <div class="panel">
-      <h2>Curva ETTJ Pré — últimos dias úteis</h2>
-      <div id="chart-curves-pre-compare" class="chart"></div>
-    </div>
-  </div>
-  <div class="panel">
-    <h2>Heatmap temporal — taxa NTN-B (datas × vértices)</h2>
-    <div id="chart-curves-heatmap" class="chart-tall"></div>
-  </div>
-  <div class="panel">
-    <h2>Heatmap temporal — taxa Pré (datas × vértices)</h2>
-    <div id="chart-curves-pre-heatmap" class="chart-tall"></div>
   </div>
 </section>
 
@@ -410,10 +381,10 @@
 <section id="tab-titulos-publicos" class="tab hide">
   <div class="panel">
     <div class="controls filter-row">
-      <label>Data Anterior:
+      <label>Data Inicial:
         <input type="text" id="tp-date-anterior" placeholder="YYYY-MM-DD">
       </label>
-      <label>Data Atual:
+      <label>Data Final:
         <input type="text" id="tp-date-atual" placeholder="YYYY-MM-DD">
       </label>
       <label>Tipo de Título:
@@ -427,6 +398,24 @@
   </div>
   <div class="panel hide" id="tp-empty-panel">
     <div class="empty-tp" id="tp-empty-msg">—</div>
+  </div>
+  <div class="curves-grid">
+    <div class="panel">
+      <h2>Curva ETTJ NTN-B — últimos dias úteis</h2>
+      <div id="chart-curves-compare" class="chart"></div>
+    </div>
+    <div class="panel">
+      <h2>Curva ETTJ Pré — últimos dias úteis</h2>
+      <div id="chart-curves-pre-compare" class="chart"></div>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Heatmap temporal — taxa NTN-B (datas × vértices)</h2>
+    <div id="chart-curves-heatmap" class="chart-tall"></div>
+  </div>
+  <div class="panel">
+    <h2>Heatmap temporal — taxa Pré (datas × vértices)</h2>
+    <div id="chart-curves-pre-heatmap" class="chart-tall"></div>
   </div>
 </section>
 
@@ -455,7 +444,7 @@
       <label for="heat-exclude-search">Excluir do cálculo:</label>
       <div class="exclusion-input-wrap">
         <input type="text" id="heat-exclude-search"
-               placeholder="Pesquise emissor ou ticker..." autocomplete="off" />
+               placeholder="Pesquise emissor..." autocomplete="off" />
         <div class="exclusion-suggestions hide" id="heat-exclude-suggestions"></div>
       </div>
       <div class="exclusion-chips" id="heat-exclude-chips"></div>
@@ -546,11 +535,23 @@ function adaptiveTextColor(bgHex) {
 /* ============================================================
  *  hash routing
  * ============================================================ */
-const TABS = ["visao","curvas","dispersao","movimentacoes","heatmap","titulos-publicos"];
+const TABS = ["visao","dispersao","movimentacoes","heatmap","titulos-publicos"];
 const loaded = new Set();
 
+// Aba "Curvas Históricas" foi consolidada em "Títulos Públicos" — redireciona
+// rota antiga para evitar bookmarks quebrados.
+function _resolveTab(name) {
+  if (name === "curvas") return "titulos-publicos";
+  return TABS.includes(name) ? name : "visao";
+}
+
 function activateTab(name) {
-  if (!TABS.includes(name)) name = "visao";
+  const resolved = _resolveTab(name);
+  if (resolved !== name) {
+    location.replace("#/" + resolved);
+    return;
+  }
+  name = resolved;
   document.querySelectorAll("#tabs a").forEach(a =>
     a.classList.toggle("active", a.dataset.tab === name));
   document.querySelectorAll("section.tab").forEach(s =>
@@ -586,7 +587,6 @@ async function init() {
 
 async function renderTab(name) {
   if (name === "visao") return renderVisao();
-  if (name === "curvas") return renderCurvas();
   if (name === "dispersao") return renderDispersao();
   if (name === "movimentacoes") return renderMovimentacoes();
   if (name === "heatmap") return renderHeatmap();
@@ -898,61 +898,11 @@ function renderTopMovers(tm, displayLabel, containerId) {
 }
 
 /* ============================================================
- *  Tab 2 — Curvas Históricas
+ *  Curvas Históricas — helpers (renderizados dentro de Títulos Públicos)
  * ============================================================ */
 let CURVES = null;
-let CURVE_FP_ATUAL = null, CURVE_FP_ANTERIOR = null;
-let CURVE_DATE_ATUAL = null, CURVE_DATE_ANTERIOR = null;
 
 const CURVE_WINDOW_DEFAULT = 5;  // últimos N dias úteis
-
-async function renderCurvas() {
-  CURVES = await loadJSON("data/curves_history.json");
-  const dates = CURVES.dates;
-  CURVE_DATE_ATUAL = dates[dates.length - 1];
-  // Default: 5º dia útil para trás (4 índices atrás na lista de snapshots).
-  const idxFinal = dates.length - 1;
-  const idxInicial = Math.max(0, idxFinal - (CURVE_WINDOW_DEFAULT - 1));
-  CURVE_DATE_ANTERIOR = dates[idxInicial] || dates[0];
-  if (CURVE_FP_ATUAL) CURVE_FP_ATUAL.destroy();
-  if (CURVE_FP_ANTERIOR) CURVE_FP_ANTERIOR.destroy();
-  CURVE_FP_ATUAL = flatpickr("#curve-date-atual", {
-    dateFormat:"Y-m-d", enable: dates, defaultDate: CURVE_DATE_ATUAL,
-    onChange: (_, d) => { if (d) onCurveDateChange("atual", d); },
-  });
-  CURVE_FP_ANTERIOR = flatpickr("#curve-date-anterior", {
-    dateFormat:"Y-m-d", enable: dates.filter(d => d <= CURVE_DATE_ATUAL),
-    defaultDate: CURVE_DATE_ANTERIOR || undefined,
-    onChange: (_, d) => { if (d) onCurveDateChange("anterior", d); },
-  });
-  drawCurvasMulti("ipca");
-  drawCurvasHeatmapTab("ipca");
-  drawCurvasMulti("pre");
-  drawCurvasHeatmapTab("pre");
-}
-
-function onCurveDateChange(which, d) {
-  if (which === "atual") {
-    CURVE_DATE_ATUAL = d;
-    if (CURVE_DATE_ANTERIOR && CURVE_DATE_ANTERIOR > CURVE_DATE_ATUAL) {
-      const dates = CURVES.dates;
-      const idxFinal = dates.indexOf(CURVE_DATE_ATUAL);
-      const idxInicial = Math.max(0, idxFinal - (CURVE_WINDOW_DEFAULT - 1));
-      CURVE_DATE_ANTERIOR = dates[idxInicial];
-    }
-    if (CURVE_FP_ANTERIOR) {
-      CURVE_FP_ANTERIOR.set("enable", CURVES.dates.filter(d2 => d2 <= CURVE_DATE_ATUAL));
-      if (CURVE_DATE_ANTERIOR) CURVE_FP_ANTERIOR.setDate(CURVE_DATE_ANTERIOR, false);
-      else CURVE_FP_ANTERIOR.clear(false);
-    }
-  } else {
-    CURVE_DATE_ANTERIOR = d;
-  }
-  drawCurvasMulti("ipca");
-  drawCurvasHeatmapTab("ipca");
-  drawCurvasMulti("pre");
-  drawCurvasHeatmapTab("pre");
-}
 
 function _curveSeries(kind) {
   // kind: "ipca" | "pre"
@@ -990,9 +940,10 @@ function _curvePaletteN(n) {
 }
 
 function _curveDateRange() {
+  // Usa o intervalo unificado da aba Títulos Públicos.
   const dates = CURVES.dates;
-  const iEnd = dates.indexOf(CURVE_DATE_ATUAL);
-  const iStart = CURVE_DATE_ANTERIOR != null ? dates.indexOf(CURVE_DATE_ANTERIOR) : -1;
+  const iEnd = dates.indexOf(TP_DATE_ATUAL);
+  const iStart = TP_DATE_ANTERIOR != null ? dates.indexOf(TP_DATE_ANTERIOR) : -1;
   if (iEnd < 0) return [];
   const lo = iStart >= 0 ? Math.min(iStart, iEnd) : Math.max(0, iEnd - (CURVE_WINDOW_DEFAULT - 1));
   return dates.slice(lo, iEnd + 1);
@@ -1043,13 +994,21 @@ function drawCurvasHeatmapTab(kind) {
     root.innerHTML = '<div class="empty">Heatmap requer ≥2 datas. Aguardando rotina diária.</div>';
     return;
   }
+  const range = _curveDateRange();
+  const idxs = range.map(d => CURVES.dates.indexOf(d)).filter(i => i >= 0);
+  if (idxs.length < 2) {
+    root.innerHTML = '<div class="empty">Selecione um intervalo com ≥2 datas.</div>';
+    return;
+  }
+  const z = idxs.map(i => cfg.matrix[i]);
+  const y = idxs.map(i => CURVES.dates[i]);
   const layout = Object.assign(PLOTLY_LAYOUT(), {
     xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title:"Vértice (anos)", type:"log" }),
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title:"Data" }),
     margin: { l:90, r:18, t:28, b:40 },
   });
   const trace = {
-    z: cfg.matrix, x: cfg.vertAnos, y: CURVES.dates,
+    z, x: cfg.vertAnos, y,
     type: "heatmap",
     colorscale: [[0,"#3a4d6b"],[0.5,"#7d92b3"],[1,"#dadfea"]],
     colorbar: { title:"Taxa (%)", thickness: 12, len: 0.8 },
@@ -1790,7 +1749,7 @@ function _heatGridFor(papers) {
   const total = {};    // j -> array
   for (const p of papers) {
     if (HEAT_IDX !== "ambos" && p.i !== HEAT_IDX) continue;
-    if (HEAT_EXCLUDE.size && (HEAT_EXCLUDE.has(p.c) || HEAT_EXCLUDE.has(p.e))) continue;
+    if (HEAT_EXCLUDE.size && HEAT_EXCLUDE.has(p.e)) continue;
     let bi = -1;
     for (let i = 0; i < buckets.length; i++) {
       const [, lo, hi] = buckets[i];
@@ -1857,20 +1816,17 @@ async function renderHeatmap() {
 }
 
 function _heatPaperIndex() {
-  // Constrói um índice unificado (codigo + emissor) varrendo TODAS as datas
-  // disponíveis no heatmap, para que a busca encontre papéis mesmo que não
-  // estejam na data atual selecionada.
-  const codes = new Map();    // codigo -> emissor
+  // Lista única de emissores presentes em qualquer snapshot do heatmap.
+  // Exclusão é só por emissor — não indexamos códigos individualmente.
   const emissores = new Set();
   for (const date of (HEAT.dates || [])) {
     const snap = HEAT.by_date[date];
     if (!snap || !snap.papers) continue;
     for (const p of snap.papers) {
-      if (p.c) codes.set(p.c, p.e || "");
       if (p.e) emissores.add(p.e);
     }
   }
-  return { codes, emissores };
+  return { emissores: [...emissores].sort((a, b) => a.localeCompare(b, "pt-BR")) };
 }
 
 function _initHeatExcludeUI() {
@@ -1889,16 +1845,10 @@ function _initHeatExcludeUI() {
     const q = term.trim().toLowerCase();
     if (q.length < 2) return [];
     const out = [];
-    const seen = new Set();
-    for (const [code, emiss] of idx.codes) {
-      if (HEAT_EXCLUDE.has(code) || HEAT_EXCLUDE.has(emiss)) continue;
-      const codeMatch = code.toLowerCase().includes(q);
-      const emissMatch = emiss && emiss.toLowerCase().includes(q);
-      if (codeMatch || emissMatch) {
-        const key = code + "|" + emiss;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push({ codigo: code, emissor: emiss });
+    for (const emiss of idx.emissores) {
+      if (HEAT_EXCLUDE.has(emiss)) continue;
+      if (emiss.toLowerCase().includes(q)) {
+        out.push(emiss);
         if (out.length >= 8) break;
       }
     }
@@ -1911,10 +1861,8 @@ function _initHeatExcludeUI() {
       sugBox.innerHTML = "";
       return;
     }
-    sugBox.innerHTML = list.map(r =>
-      `<div class="ex-sug" data-code="${r.codigo}" data-emiss="${r.emissor || ""}">` +
-      `<span class="ex-sug-code">${r.codigo || "—"}</span>` +
-      `<span>${r.emissor || ""}</span></div>`
+    sugBox.innerHTML = list.map(emiss =>
+      `<div class="ex-sug" data-emiss="${emiss}"><span>${emiss}</span></div>`
     ).join("");
     sugBox.classList.remove("hide");
   };
@@ -1935,12 +1883,7 @@ function _initHeatExcludeUI() {
     const term = input.value.trim();
     if (!term) return;
     const t = term.toLowerCase();
-    let pick = null;
-    for (const [code, emiss] of idx.codes) {
-      if (code.toLowerCase() === t || (emiss && emiss.toLowerCase() === t)) {
-        pick = { codigo: code, emissor: emiss }; break;
-      }
-    }
+    let pick = idx.emissores.find(e2 => e2.toLowerCase() === t);
     if (!pick) {
       const list = computeSuggestions(term);
       pick = list[0];
@@ -1954,10 +1897,7 @@ function _initHeatExcludeUI() {
     const row = e.target.closest(".ex-sug");
     if (!row) return;
     e.preventDefault();
-    _heatAddExclusion({
-      codigo: row.dataset.code,
-      emissor: row.dataset.emiss,
-    });
+    _heatAddExclusion(row.dataset.emiss);
     input.value = "";
     sugBox.classList.add("hide");
     input.focus();
@@ -1974,24 +1914,9 @@ function _initHeatExcludeUI() {
   _renderHeatChips();
 }
 
-function _heatAddExclusion({ codigo, emissor }) {
-  // Estratégia: se o usuário escolhe pela busca de emissor (sem código
-  // específico em mente, ele clicou num item que casa pelo nome), excluimos
-  // pelo emissor para pegar todos os papéis do grupo. Caso contrário, pelo
-  // código. A heurística usada aqui: se o termo digitado bate exato com o
-  // código, exclui pelo código; senão, exclui pelo emissor.
-  const input = document.getElementById("heat-exclude-search");
-  const term = (input ? input.value.trim() : "").toLowerCase();
-  let key;
-  if (codigo && term && codigo.toLowerCase() === term) {
-    key = codigo;
-  } else if (emissor) {
-    key = emissor;
-  } else {
-    key = codigo;
-  }
-  if (!key) return;
-  HEAT_EXCLUDE.add(key);
+function _heatAddExclusion(emissor) {
+  if (!emissor) return;
+  HEAT_EXCLUDE.add(emissor);
   _renderHeatChips();
   drawHeatmap();
 }
@@ -2113,6 +2038,7 @@ let TITPUB = null;
 let TP_TABLE = null;
 let TP_FP_ATUAL = null, TP_FP_ANTERIOR = null;
 let TP_DATE_ATUAL = null, TP_DATE_ANTERIOR = null;
+let TP_DATES_ENABLED = [];
 
 // Cor por tipo (alinhada ao CSS .badge.tp-*).
 const TITPUB_TIPO_COLOR = {
@@ -2131,7 +2057,10 @@ function _tpBadgeHTML(tipo) {
 }
 
 async function renderTitulosPublicos() {
-  TITPUB = await loadJSON("data/titpub_history.json");
+  [TITPUB, CURVES] = await Promise.all([
+    loadJSON("data/titpub_history.json"),
+    loadJSON("data/curves_history.json"),
+  ]);
   const datas = TITPUB.datas || [];
   const emptyPanel = document.getElementById("tp-empty-panel");
   const emptyMsg = document.getElementById("tp-empty-msg");
@@ -2148,8 +2077,25 @@ async function renderTitulosPublicos() {
   tablePanel.classList.remove("hide");
   emptyPanel.classList.add("hide");
 
-  TP_DATE_ATUAL = datas[datas.length - 1];
-  TP_DATE_ANTERIOR = defaultAnteriorFor(TP_DATE_ATUAL, datas);
+  // Datas habilitadas = interseção de Títulos Públicos com Curvas Históricas.
+  // Garante que cada data selecionável tenha tanto papéis quanto vértices ETTJ.
+  const curvesDates = (CURVES && CURVES.dates) || [];
+  const titpubSet = new Set(datas);
+  TP_DATES_ENABLED = curvesDates.filter(d => titpubSet.has(d));
+  if (!TP_DATES_ENABLED.length) {
+    tablePanel.classList.add("hide");
+    emptyPanel.classList.remove("hide");
+    emptyMsg.textContent =
+      "Sem datas com Títulos Públicos e curvas ETTJ disponíveis simultaneamente.";
+    return;
+  }
+
+  TP_DATE_ATUAL = TP_DATES_ENABLED[TP_DATES_ENABLED.length - 1];
+  // Default: 5 dias úteis (último + 4 anteriores).
+  const idxFinal = TP_DATES_ENABLED.length - 1;
+  const idxInicial = Math.max(0, idxFinal - (CURVE_WINDOW_DEFAULT - 1));
+  TP_DATE_ANTERIOR = idxInicial < idxFinal
+    ? TP_DATES_ENABLED[idxInicial] : null;
 
   // Filtro Tipo
   const tipoSel = document.getElementById("tp-tipo");
@@ -2162,44 +2108,77 @@ async function renderTitulosPublicos() {
 
   if (TP_FP_ATUAL) TP_FP_ATUAL.destroy();
   if (TP_FP_ANTERIOR) TP_FP_ANTERIOR.destroy();
-  TP_FP_ATUAL = flatpickr("#tp-date-atual", {
-    dateFormat: "Y-m-d", enable: datas, defaultDate: TP_DATE_ATUAL,
-    onChange: (_, dstr) => onTpDateChange("atual", dstr),
-  });
   TP_FP_ANTERIOR = flatpickr("#tp-date-anterior", {
     dateFormat: "Y-m-d", enable: _tpAnteriorEnable(TP_DATE_ATUAL),
     defaultDate: TP_DATE_ANTERIOR || undefined,
     onChange: (_, dstr) => onTpDateChange("anterior", dstr),
+  });
+  TP_FP_ATUAL = flatpickr("#tp-date-atual", {
+    dateFormat: "Y-m-d", enable: _tpAtualEnable(TP_DATE_ANTERIOR),
+    defaultDate: TP_DATE_ATUAL,
+    onChange: (_, dstr) => onTpDateChange("atual", dstr),
   });
 
   buildTpTable();
   document.getElementById("tp-tipo")
     .addEventListener("change", refreshTpView);
   refreshTpView();
+  drawTpCurves();
 }
 
-function _tpAnteriorEnable(baseDate) {
-  const datas = (TITPUB && TITPUB.datas) || [];
-  const i = datas.indexOf(baseDate);
-  return i > 0 ? datas.slice(0, i) : [];
+function _tpAnteriorEnable(finalDate) {
+  // Inicial < Final (estritamente).
+  if (!finalDate) return TP_DATES_ENABLED.slice();
+  return TP_DATES_ENABLED.filter(d => d < finalDate);
+}
+
+function _tpAtualEnable(inicialDate) {
+  // Final > Inicial (estritamente).
+  if (!inicialDate) return TP_DATES_ENABLED.slice();
+  return TP_DATES_ENABLED.filter(d => d > inicialDate);
 }
 
 function onTpDateChange(which, dstr) {
   if (which === "atual") {
-    if (!dstr || dstr === TP_DATE_ATUAL) return;
-    TP_DATE_ATUAL = dstr;
-    if (TP_DATE_ANTERIOR != null && TP_DATE_ANTERIOR >= TP_DATE_ATUAL) {
-      TP_DATE_ANTERIOR = null;
+    if (!dstr) return;
+    if (TP_DATE_ANTERIOR != null && dstr <= TP_DATE_ANTERIOR) {
+      // Validação: Final > Inicial. Reverte selecionando a Final anterior.
+      if (TP_FP_ATUAL) TP_FP_ATUAL.setDate(TP_DATE_ATUAL, false);
+      return;
     }
+    TP_DATE_ATUAL = dstr;
     if (TP_FP_ANTERIOR) {
       TP_FP_ANTERIOR.set("enable", _tpAnteriorEnable(TP_DATE_ATUAL));
       if (TP_DATE_ANTERIOR == null) TP_FP_ANTERIOR.clear(false);
       else TP_FP_ANTERIOR.setDate(TP_DATE_ANTERIOR, false);
     }
   } else {
-    TP_DATE_ANTERIOR = dstr || null;
+    if (!dstr) { TP_DATE_ANTERIOR = null; }
+    else {
+      if (TP_DATE_ATUAL != null && dstr >= TP_DATE_ATUAL) {
+        if (TP_FP_ANTERIOR) {
+          if (TP_DATE_ANTERIOR) TP_FP_ANTERIOR.setDate(TP_DATE_ANTERIOR, false);
+          else TP_FP_ANTERIOR.clear(false);
+        }
+        return;
+      }
+      TP_DATE_ANTERIOR = dstr;
+    }
+    if (TP_FP_ATUAL) {
+      TP_FP_ATUAL.set("enable", _tpAtualEnable(TP_DATE_ANTERIOR));
+      TP_FP_ATUAL.setDate(TP_DATE_ATUAL, false);
+    }
   }
   refreshTpView();
+  drawTpCurves();
+}
+
+function drawTpCurves() {
+  if (!CURVES) return;
+  drawCurvasMulti("ipca");
+  drawCurvasHeatmapTab("ipca");
+  drawCurvasMulti("pre");
+  drawCurvasHeatmapTab("pre");
 }
 
 function _tpRowsForView() {
@@ -2286,8 +2265,8 @@ function buildTpTable() {
     resizableColumns: true,
     height: "65vh",
     initialSort: [
-      { column: "tipo", dir: "asc" },
       { column: "vencimento", dir: "asc" },
+      { column: "tipo", dir: "asc" },
     ],
     columns: [
       { title: "Tipo", field: "tipo", width: 90, formatter: fmtTipo },
