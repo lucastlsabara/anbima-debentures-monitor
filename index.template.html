@@ -114,6 +114,18 @@
     margin-left:6px; vertical-align:1px;
   }
   .badge.warn { background:#3d2f1f; color:var(--warn); }
+  /* Aba Títulos Públicos: badge colorido por tipo de título.
+     Cores escolhidas pra contraste no fundo escuro do dashboard. */
+  .badge.tp-LTN   { background:#3a2718; color:#f0a060; }
+  .badge.tp-LFT   { background:#2a2f3a; color:#a8b2c2; }
+  .badge.tp-NTNB  { background:#1a2c40; color:#7ab2f0; }
+  .badge.tp-NTNF  { background:#1f3526; color:#7fc89a; }
+  .badge.tp-NTNC  { background:#2e1f3a; color:#b78cd6; }
+  .badge.tp { font-size:10.5px; padding:2px 8px; margin-left:0; }
+  .empty-tp {
+    color:var(--muted); font-style:italic; font-size:13px;
+    padding:36px 20px; text-align:center;
+  }
   footer {
     color:var(--muted); font-size:10.5px; text-align:center;
     padding:20px 24px 28px; border-top:1px solid var(--border);
@@ -196,6 +208,7 @@
   <a href="#/dispersao" data-tab="dispersao">Dispersão</a>
   <a href="#/movimentacoes" data-tab="movimentacoes">Movimentações</a>
   <a href="#/heatmap" data-tab="heatmap">Heatmap Setor × Duration</a>
+  <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
 </nav>
 
 <main>
@@ -344,6 +357,39 @@
   </div>
 </section>
 
+<!-- ===================== Tab: Títulos Públicos ===================== -->
+<!-- Mercado secundário ANBIMA: LTN / LFT / NTN-B / NTN-F / NTN-C.
+     Fonte: arquivo ms<YYMMDD>.txt (campo titpub_rows nos snapshots). -->
+<section id="tab-titulos-publicos" class="tab hide">
+  <div class="panel">
+    <div class="controls filter-row">
+      <label>Data Atual:
+        <input type="text" id="tp-date-atual" placeholder="YYYY-MM-DD">
+      </label>
+      <label>Data Anterior:
+        <input type="text" id="tp-date-anterior" placeholder="YYYY-MM-DD">
+      </label>
+    </div>
+    <div class="controls filter-row">
+      <label>Tipo de Título:
+        <select id="tp-tipo"><option value="">Todos</option></select>
+      </label>
+      <input type="text" id="tp-search-selic" placeholder="Buscar Cód. SELIC..." style="min-width:200px;">
+    </div>
+  </div>
+  <div class="panel" id="tp-chart-panel">
+    <h2>Curva — Taxa Indicativa por Vencimento</h2>
+    <div id="tp-chart-curve" class="chart"></div>
+  </div>
+  <div class="panel" id="tp-table-panel">
+    <h2>Mercado secundário — todos os papéis</h2>
+    <div id="tp-table"></div>
+  </div>
+  <div class="panel hide" id="tp-empty-panel">
+    <div class="empty-tp" id="tp-empty-msg">—</div>
+  </div>
+</section>
+
 <!-- ===================== Tab: Heatmap Setor × Duration ===================== -->
 <section id="tab-heatmap" class="tab hide">
   <div class="panel">
@@ -451,7 +497,7 @@ function adaptiveTextColor(bgHex) {
 /* ============================================================
  *  hash routing
  * ============================================================ */
-const TABS = ["visao","curvas","dispersao","movimentacoes","heatmap"];
+const TABS = ["visao","curvas","dispersao","movimentacoes","heatmap","titulos-publicos"];
 const loaded = new Set();
 
 function activateTab(name) {
@@ -495,6 +541,7 @@ async function renderTab(name) {
   if (name === "dispersao") return renderDispersao();
   if (name === "movimentacoes") return renderMovimentacoes();
   if (name === "heatmap") return renderHeatmap();
+  if (name === "titulos-publicos") return renderTitulosPublicos();
 }
 
 /* ============================================================
@@ -1841,6 +1888,285 @@ function drawHeatmap() {
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { autorange:"reversed" }),
   });
   Plotly.newPlot("chart-heatmap", [trace], layout, PLOTLY_CONFIG);
+}
+
+/* ============================================================
+ *  Tab 6 — Títulos Públicos (mercado secundário ANBIMA)
+ *  ms<YYMMDD>.txt agregado por build_titpub_history.
+ * ============================================================ */
+let TITPUB = null;
+let TP_TABLE = null;
+let TP_FP_ATUAL = null, TP_FP_ANTERIOR = null;
+let TP_DATE_ATUAL = null, TP_DATE_ANTERIOR = null;
+
+// Cor por tipo (alinhada ao CSS .badge.tp-*).
+const TITPUB_TIPO_COLOR = {
+  "LTN":   "#f0a060",
+  "LFT":   "#a8b2c2",
+  "NTN-B": "#7ab2f0",
+  "NTN-F": "#7fc89a",
+  "NTN-C": "#b78cd6",
+};
+function _tpBadgeClass(tipo) {
+  if (!tipo) return "tp";
+  return "tp tp-" + String(tipo).replace("-", "");
+}
+function _tpBadgeHTML(tipo) {
+  return `<span class="badge ${_tpBadgeClass(tipo)}">${tipo || "—"}</span>`;
+}
+
+async function renderTitulosPublicos() {
+  TITPUB = await loadJSON("data/titpub_history.json");
+  const datas = TITPUB.datas || [];
+  const emptyPanel = document.getElementById("tp-empty-panel");
+  const emptyMsg = document.getElementById("tp-empty-msg");
+  const chartPanel = document.getElementById("tp-chart-panel");
+  const tablePanel = document.getElementById("tp-table-panel");
+
+  if (!datas.length) {
+    chartPanel.classList.add("hide");
+    tablePanel.classList.add("hide");
+    emptyPanel.classList.remove("hide");
+    emptyMsg.textContent =
+      "Títulos Públicos indisponíveis. Snapshots ainda não contêm o campo titpub_rows.";
+    return;
+  }
+
+  chartPanel.classList.remove("hide");
+  tablePanel.classList.remove("hide");
+  emptyPanel.classList.add("hide");
+
+  TP_DATE_ATUAL = datas[datas.length - 1];
+  TP_DATE_ANTERIOR = defaultAnteriorFor(TP_DATE_ATUAL, datas);
+
+  // Filtro Tipo
+  const tipoSel = document.getElementById("tp-tipo");
+  while (tipoSel.options.length > 1) tipoSel.remove(1);
+  for (const t of (TITPUB.tipos_disponiveis || [])) {
+    const o = document.createElement("option");
+    o.value = t; o.textContent = t;
+    tipoSel.appendChild(o);
+  }
+
+  if (TP_FP_ATUAL) TP_FP_ATUAL.destroy();
+  if (TP_FP_ANTERIOR) TP_FP_ANTERIOR.destroy();
+  TP_FP_ATUAL = flatpickr("#tp-date-atual", {
+    dateFormat: "Y-m-d", enable: datas, defaultDate: TP_DATE_ATUAL,
+    onChange: (_, dstr) => onTpDateChange("atual", dstr),
+  });
+  TP_FP_ANTERIOR = flatpickr("#tp-date-anterior", {
+    dateFormat: "Y-m-d", enable: _tpAnteriorEnable(TP_DATE_ATUAL),
+    defaultDate: TP_DATE_ANTERIOR || undefined,
+    onChange: (_, dstr) => onTpDateChange("anterior", dstr),
+  });
+
+  buildTpTable();
+  document.getElementById("tp-tipo")
+    .addEventListener("change", refreshTpView);
+  document.getElementById("tp-search-selic")
+    .addEventListener("input", applyTpFilter);
+  refreshTpView();
+}
+
+function _tpAnteriorEnable(baseDate) {
+  const datas = (TITPUB && TITPUB.datas) || [];
+  const i = datas.indexOf(baseDate);
+  return i > 0 ? datas.slice(0, i) : [];
+}
+
+function onTpDateChange(which, dstr) {
+  if (which === "atual") {
+    if (!dstr || dstr === TP_DATE_ATUAL) return;
+    TP_DATE_ATUAL = dstr;
+    if (TP_DATE_ANTERIOR != null && TP_DATE_ANTERIOR >= TP_DATE_ATUAL) {
+      TP_DATE_ANTERIOR = null;
+    }
+    if (TP_FP_ANTERIOR) {
+      TP_FP_ANTERIOR.set("enable", _tpAnteriorEnable(TP_DATE_ATUAL));
+      if (TP_DATE_ANTERIOR == null) TP_FP_ANTERIOR.clear(false);
+      else TP_FP_ANTERIOR.setDate(TP_DATE_ANTERIOR, false);
+    }
+  } else {
+    TP_DATE_ANTERIOR = dstr || null;
+  }
+  refreshTpView();
+}
+
+function _tpRowsForView() {
+  // Junta linhas da Data Atual com taxa_indicativa da Data Anterior por
+  // chave (tipo, vencimento). Snapshot anterior pode estar ausente — nesse
+  // caso delta_taxa_bps fica null.
+  const cur = (TITPUB.rows_by_date[TP_DATE_ATUAL] || []);
+  const ref = TP_DATE_ANTERIOR
+    ? (TITPUB.rows_by_date[TP_DATE_ANTERIOR] || []) : [];
+  const refMap = new Map();
+  for (const r of ref) {
+    refMap.set(r.tipo + "|" + r.vencimento, r.taxa_indicativa);
+  }
+  const out = [];
+  for (const r of cur) {
+    const taxa_d1 = refMap.has(r.tipo + "|" + r.vencimento)
+      ? refMap.get(r.tipo + "|" + r.vencimento) : null;
+    let delta_bps = null;
+    if (r.taxa_indicativa != null && taxa_d1 != null) {
+      delta_bps = (r.taxa_indicativa - taxa_d1) * 100.0;
+    }
+    let bid_ask_bps = null;
+    if (r.taxa_compra != null && r.taxa_venda != null) {
+      // ANBIMA: Tx. Compra > Tx. Venda no arquivo (taxas decrescentes em PU).
+      // Reportamos |compra - venda| em bps para evitar sinal negativo
+      // contraintuitivo na coluna.
+      bid_ask_bps = Math.abs(r.taxa_venda - r.taxa_compra) * 100.0;
+    }
+    let dp_bps = null;
+    if (r.desvio_padrao != null) dp_bps = r.desvio_padrao * 100.0;
+    let range_bps = null;
+    if (r.intervalo_max != null && r.intervalo_min != null) {
+      range_bps = (r.intervalo_max - r.intervalo_min) * 100.0;
+    }
+    out.push({
+      tipo: r.tipo,
+      vencimento: r.vencimento,
+      cod_selic: r.cod_selic,
+      taxa_indicativa: r.taxa_indicativa,
+      taxa_indicativa_d1: taxa_d1,
+      delta_bps,
+      taxa_compra: r.taxa_compra,
+      taxa_venda: r.taxa_venda,
+      bid_ask_bps,
+      desvio_padrao_bps: dp_bps,
+      range_bps,
+      duration_anos: r.duration_anos,
+      pu: r.pu,
+    });
+  }
+  return out;
+}
+
+function buildTpTable() {
+  const fmtPctCol = c => fmtPct(c.getValue());
+  const fmtBpsCol = c => {
+    const v = c.getValue();
+    if (v == null) return "—";
+    return v.toFixed(0);
+  };
+  const fmtDeltaCol = c => {
+    const v = c.getValue();
+    const el = c.getElement();
+    el.classList.remove("neg", "pos");
+    if (v == null) return "—";
+    // Convenção do dashboard: queda de taxa é positiva (verde),
+    // alta de taxa é negativa (vermelho) — vale para benchmark de juros.
+    if (v < 0) el.classList.add("pos");
+    else if (v > 0) el.classList.add("neg");
+    return (v >= 0 ? "+" : "") + v.toFixed(0);
+  };
+  const fmtPu = c => {
+    const v = c.getValue();
+    if (v == null) return "—";
+    return v.toLocaleString("pt-BR",
+      { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  const fmtVenc = c => brDate(c.getValue());
+  const fmtTipo = c => _tpBadgeHTML(c.getValue());
+
+  TP_TABLE = new Tabulator("#tp-table", {
+    data: _tpRowsForView(),
+    layout: "fitData",
+    resizableColumns: true,
+    height: "65vh",
+    initialSort: [
+      { column: "tipo", dir: "asc" },
+      { column: "vencimento", dir: "asc" },
+    ],
+    columns: [
+      { title: "Tipo", field: "tipo", width: 90, formatter: fmtTipo },
+      { title: "Vencimento", field: "vencimento", width: 120,
+        formatter: fmtVenc },
+      { title: "Cód. SELIC", field: "cod_selic", width: 110 },
+      { title: "Taxa Atual", field: "taxa_indicativa", width: 110,
+        hozAlign: "right", formatter: fmtPctCol },
+      { title: "Taxa Anterior", field: "taxa_indicativa_d1", width: 120,
+        hozAlign: "right", formatter: fmtPctCol },
+      { title: "Δ Taxa (bps)", field: "delta_bps", width: 120,
+        hozAlign: "right", formatter: fmtDeltaCol },
+      { title: "Tx. Compra", field: "taxa_compra", width: 110,
+        hozAlign: "right", formatter: fmtPctCol },
+      { title: "Tx. Venda", field: "taxa_venda", width: 110,
+        hozAlign: "right", formatter: fmtPctCol },
+      { title: "Bid-Ask (bps)", field: "bid_ask_bps", width: 120,
+        hozAlign: "right", formatter: fmtBpsCol },
+      { title: "Desvio Padrão (bps)", field: "desvio_padrao_bps", width: 150,
+        hozAlign: "right", formatter: fmtBpsCol },
+      { title: "Range Hoje (bps)", field: "range_bps", width: 140,
+        hozAlign: "right", formatter: fmtBpsCol },
+      { title: "Duration (anos)", field: "duration_anos", width: 130,
+        hozAlign: "right",
+        formatter: c => fmtAnos(c.getValue()) },
+      { title: "PU (R$)", field: "pu", width: 130, hozAlign: "right",
+        formatter: fmtPu },
+    ],
+  });
+}
+
+function refreshTpView() {
+  if (!TP_TABLE) return;
+  TP_TABLE.replaceData(_tpRowsForView());
+  applyTpFilter();
+  drawTpCurve();
+}
+
+function applyTpFilter() {
+  if (!TP_TABLE) return;
+  const tipo = document.getElementById("tp-tipo").value;
+  const selic = document.getElementById("tp-search-selic").value.trim();
+  TP_TABLE.setFilter(d => {
+    if (tipo && d.tipo !== tipo) return false;
+    if (selic && !(d.cod_selic || "").toLowerCase().includes(selic.toLowerCase()))
+      return false;
+    return true;
+  });
+  drawTpCurve();
+}
+
+function drawTpCurve() {
+  const tipoFiltro = document.getElementById("tp-tipo").value;
+  const rows = _tpRowsForView();
+  // Agrupa por tipo (1 linha por tipo presente no filtro). Ordena por
+  // duration crescente para que o traço da curva seja monotônico no eixo X.
+  const byTipo = {};
+  for (const r of rows) {
+    if (tipoFiltro && r.tipo !== tipoFiltro) continue;
+    if (r.duration_anos == null || r.taxa_indicativa == null) continue;
+    if (!byTipo[r.tipo]) byTipo[r.tipo] = [];
+    byTipo[r.tipo].push(r);
+  }
+  const tipos = (TITPUB.tipos_disponiveis || []).filter(t => byTipo[t]);
+  const traces = tipos.map(tipo => {
+    const pts = byTipo[tipo].slice().sort((a, b) => a.duration_anos - b.duration_anos);
+    return {
+      type: "scatter", mode: "lines+markers", name: tipo,
+      x: pts.map(p => p.duration_anos),
+      y: pts.map(p => p.taxa_indicativa),
+      line: { color: TITPUB_TIPO_COLOR[tipo] || cssVar("--accent"), width: 2 },
+      marker: { color: TITPUB_TIPO_COLOR[tipo] || cssVar("--accent"), size: 8 },
+      customdata: pts.map(p => [p.vencimento, p.cod_selic]),
+      hovertemplate:
+        "<b>" + tipo + "</b><br>" +
+        "Vencimento: %{customdata[0]}<br>" +
+        "Cód. SELIC: %{customdata[1]}<br>" +
+        "Duration: %{x:.2f} anos<br>" +
+        "Taxa: %{y:.4f}%<extra></extra>",
+    };
+  });
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis,
+      { title: "Anos até vencimento" }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
+      { title: "Taxa Indicativa (%)" }),
+    showlegend: true,
+  });
+  Plotly.newPlot("tp-chart-curve", traces, layout, PLOTLY_CONFIG);
 }
 
 init().catch(err => {
