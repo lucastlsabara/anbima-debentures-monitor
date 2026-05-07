@@ -41,6 +41,16 @@ DB_HEADER = [
     "pu", "pct_pu_par", "duration_dias", "pct_reune", "referencia_ntnb",
 ]
 
+# Layout do ms<YYMMDD>.txt (mercado secundário de títulos públicos federais),
+# separador '@'. Mantido como constante (paralelo a DB_HEADER) para tornar a
+# extração resiliente a mudanças de posição de colunas.
+MS_HEADER = [
+    "tipo", "data_referencia", "cod_selic", "data_base_emissao",
+    "data_vencimento", "taxa_compra", "taxa_venda", "taxa_indicativa", "pu",
+    "desvio_padrao", "intervalo_inf_d0", "intervalo_sup_d0",
+    "intervalo_inf_d1", "intervalo_sup_d1", "criterio",
+]
+
 
 def _br_float(s: str) -> float | None:
     s = (s or "").strip()
@@ -99,6 +109,24 @@ def fetch_titulos_publicos(target: date) -> str:
     return text
 
 
+def _ms_records(text: str):
+    """Itera linhas válidas do ms.txt como dict alinhado a MS_HEADER.
+
+    Linhas curtas recebem padding com '' (mesma estratégia de parse_db),
+    para não descartar registros com campos opcionais vazios.
+    """
+    for ln in text.splitlines():
+        if not ln or "@" not in ln:
+            continue
+        parts = [p.strip() for p in ln.split("@")]
+        tipo = parts[0]
+        if tipo in ("Titulo", "") or tipo.startswith("ANBIMA"):
+            continue
+        if len(parts) < len(MS_HEADER):
+            parts = parts + [""] * (len(MS_HEADER) - len(parts))
+        yield dict(zip(MS_HEADER, parts))
+
+
 def parse_titulos_publicos(text: str) -> dict[str, dict[str, float]]:
     """Tabela {Titulo: {vencimento_iso: taxa_indicativa}}.
 
@@ -106,23 +134,14 @@ def parse_titulos_publicos(text: str) -> dict[str, dict[str, float]]:
     com o nome do título (LTN/NTN-B/NTN-F/NTN-C/LFT). Datas em YYYYMMDD.
     """
     out: dict[str, dict[str, float]] = {}
-    for ln in text.splitlines():
-        if not ln or "@" not in ln:
+    for rec in _ms_records(text):
+        venc_iso = _yyyymmdd_to_iso(rec["data_vencimento"])
+        if not venc_iso:
             continue
-        parts = ln.split("@")
-        titulo = parts[0].strip()
-        if titulo in ("Titulo", "") or titulo.startswith("ANBIMA"):
-            continue
-        if len(parts) < 8:
-            continue
-        venc_raw = parts[4].strip()
-        if len(venc_raw) != 8 or not venc_raw.isdigit():
-            continue
-        venc_iso = f"{venc_raw[0:4]}-{venc_raw[4:6]}-{venc_raw[6:8]}"
-        taxa = _br_float(parts[7])
+        taxa = _br_float(rec["taxa_indicativa"])
         if taxa is None:
             continue
-        out.setdefault(titulo, {})[venc_iso] = taxa
+        out.setdefault(rec["tipo"], {})[venc_iso] = taxa
     return out
 
 
@@ -133,7 +152,9 @@ def _yyyymmdd_to_iso(s: str) -> str | None:
     return f"{s[0:4]}-{s[4:6]}-{s[6:8]}"
 
 
-def parse_titpub_rows(text: str, data_referencia: date) -> list[dict]:
+def parse_titpub_rows(
+    text: str, data_referencia: date,
+) -> tuple[list[dict], str | None]:
     """Parser detalhado do arquivo ANBIMA ms<YYMMDD>.txt (mercado secundário
     de títulos públicos federais), com schema alinhado ao do dashboard.
 
@@ -150,18 +171,20 @@ def parse_titpub_rows(text: str, data_referencia: date) -> list[dict]:
     vencimento. É APROXIMAÇÃO — para NTN-B/NTN-F com cupom semestral a
     duration de Macaulay seria menor; usar somente como eixo no scatter da
     aba 'Títulos Públicos', não para cálculo de risco.
+
+    Retorna (rows, internal_data_iso) — internal_data_iso é a Data Referencia
+    extraída do próprio arquivo (parts[1]). Caller compara com a target para
+    detectar divergência (ANBIMA reservindo arquivo de outra data no mesmo URL).
+    None se nenhuma linha tiver data válida ou se houver mais de uma data
+    distinta no arquivo (caso anômalo).
     """
     rows: list[dict] = []
-    for ln in text.splitlines():
-        if not ln or "@" not in ln:
-            continue
-        parts = [p.strip() for p in ln.split("@")]
-        tipo = parts[0]
-        if tipo in ("Titulo", "") or tipo.startswith("ANBIMA"):
-            continue
-        if len(parts) < 12:
-            continue
-        venc_iso = _yyyymmdd_to_iso(parts[4])
+    internal_dates: set[str] = set()
+    for rec in _ms_records(text):
+        d_ref_iso = _yyyymmdd_to_iso(rec["data_referencia"])
+        if d_ref_iso:
+            internal_dates.add(d_ref_iso)
+        venc_iso = _yyyymmdd_to_iso(rec["data_vencimento"])
         if not venc_iso:
             continue
         try:
@@ -170,20 +193,21 @@ def parse_titpub_rows(text: str, data_referencia: date) -> list[dict]:
             continue
         dur_dias = (venc_date - data_referencia).days
         rows.append({
-            "tipo": tipo,
+            "tipo": rec["tipo"],
             "vencimento": venc_iso,
-            "cod_selic": parts[2],
-            "taxa_compra": _br_float(parts[5]),
-            "taxa_venda": _br_float(parts[6]),
-            "taxa_indicativa": _br_float(parts[7]),
-            "pu": _br_float(parts[8]),
-            "desvio_padrao": _br_float(parts[9]),
-            "intervalo_min": _br_float(parts[10]),
-            "intervalo_max": _br_float(parts[11]),
+            "cod_selic": rec["cod_selic"],
+            "taxa_compra": _br_float(rec["taxa_compra"]),
+            "taxa_venda": _br_float(rec["taxa_venda"]),
+            "taxa_indicativa": _br_float(rec["taxa_indicativa"]),
+            "pu": _br_float(rec["pu"]),
+            "desvio_padrao": _br_float(rec["desvio_padrao"]),
+            "intervalo_min": _br_float(rec["intervalo_inf_d0"]),
+            "intervalo_max": _br_float(rec["intervalo_sup_d0"]),
             "duration_dias": dur_dias,
             "duration_anos": round(dur_dias / 365.25, 3),
         })
-    return rows
+    internal_iso = next(iter(internal_dates)) if len(internal_dates) == 1 else None
+    return rows, internal_iso
 
 
 def parse_db(text: str) -> list[dict]:
@@ -374,16 +398,41 @@ def main() -> int:
     print(f"[fetch] títulos públicos de {target.isoformat()}", file=sys.stderr)
     titpub: dict[str, dict[str, float]] = {}
     titpub_rows: list[dict] = []
+    titpub_status = "ok"
     try:
         tp_text = fetch_titulos_publicos(target)
-        titpub = parse_titulos_publicos(tp_text)
-        titpub_rows = parse_titpub_rows(tp_text, target)
-        sizes = ", ".join(f"{k}={len(v)}" for k, v in sorted(titpub.items()))
-        print(f"[fetch]   -> {sizes} | titpub_rows={len(titpub_rows)}",
-              file=sys.stderr)
     except requests.HTTPError as e:
-        print(f"[warn ] títulos públicos indisponível ({e}); spreads ficarão sem referência",
-              file=sys.stderr)
+        # Espelha fetch_db: 404 = warn-and-skip (ANBIMA não publicou ainda);
+        # 5xx ou outros HTTPError viram raise (acionam retry/exit não-zero).
+        # ms.txt é opcional para a pipeline (debêntures/ETTJ continuam), por
+        # isso aqui não retornamos exit 2 como em fetch_db; apenas marcamos
+        # titpub_status='404' e seguimos sem titpub_rows.
+        if e.response is not None and e.response.status_code == 404:
+            print(
+                f"[warn ] títulos públicos de {target.isoformat()} ainda não "
+                f"publicados pela ANBIMA (404); seguindo sem referência exata.",
+                file=sys.stderr,
+            )
+            titpub_status = "404"
+        else:
+            raise
+    else:
+        titpub = parse_titulos_publicos(tp_text)
+        titpub_rows, internal_iso = parse_titpub_rows(tp_text, target)
+        if internal_iso and internal_iso != target.isoformat():
+            print(
+                f"[warn ] ms.txt: Data Referência interna ({internal_iso}) "
+                f"diverge da target ({target.isoformat()}); "
+                f"marcando titpub_status='data_divergente'.",
+                file=sys.stderr,
+            )
+            titpub_status = "data_divergente"
+        sizes = ", ".join(f"{k}={len(v)}" for k, v in sorted(titpub.items()))
+        print(
+            f"[fetch]   -> {sizes} | titpub_rows={len(titpub_rows)} | "
+            f"status={titpub_status}",
+            file=sys.stderr,
+        )
 
     out = {
         "data_referencia": target.isoformat(),
@@ -393,6 +442,7 @@ def main() -> int:
         "ettj_pre": ettj_pre_rows,
         "titulos_publicos": titpub,
         "titpub_rows": titpub_rows,
+        "titpub_status": titpub_status,
     }
     Path(args.out).write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[fetch] -> {args.out}", file=sys.stderr)
