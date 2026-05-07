@@ -184,6 +184,53 @@
   }
   .ms-item:hover { background:#22293a; }
   .ms-all { border-bottom:1px solid var(--border); margin-bottom:4px; padding-bottom:6px; }
+  /* Lista de exclusão (Heatmap Setor × Duration) */
+  .exclusion-list {
+    display:flex; align-items:flex-start; gap:10px; flex-wrap:wrap;
+    margin-top:14px; padding-top:12px; border-top:1px solid var(--border);
+  }
+  .exclusion-list > label {
+    color:var(--muted); font-size:12px; padding-top:8px;
+  }
+  .exclusion-input-wrap { position:relative; min-width:280px; }
+  .exclusion-input-wrap input {
+    background:var(--surface2); color:var(--fg);
+    border:1px solid var(--border-strong); border-radius:4px;
+    padding:6px 10px; font-size:12.5px; font-family:inherit;
+    width:280px;
+  }
+  .exclusion-suggestions {
+    position:absolute; top:calc(100% + 2px); left:0; z-index:300;
+    background:var(--surface2); border:1px solid var(--border-strong);
+    border-radius:4px; min-width:280px; max-width:480px;
+    max-height:280px; overflow-y:auto;
+    box-shadow:0 4px 16px rgba(0,0,0,0.45);
+  }
+  .exclusion-suggestions .ex-sug {
+    padding:6px 10px; font-size:12px; color:var(--fg);
+    cursor:pointer; white-space:nowrap; overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .exclusion-suggestions .ex-sug:hover { background:#22293a; }
+  .exclusion-suggestions .ex-sug-code {
+    color:var(--accent); font-weight:600; margin-right:6px;
+    font-variant-numeric:tabular-nums;
+  }
+  .exclusion-chips {
+    display:flex; gap:6px; flex-wrap:wrap; align-items:center;
+  }
+  .ex-chip {
+    display:inline-flex; align-items:center; gap:6px;
+    background:var(--surface2); color:var(--fg);
+    border:1px solid var(--border-strong);
+    padding:4px 8px; border-radius:12px;
+    font-size:11.5px;
+  }
+  .ex-chip button {
+    background:transparent; border:none; color:#ff7a72;
+    font-size:14px; line-height:1; cursor:pointer; padding:0 2px;
+  }
+  .ex-chip button:hover { color:var(--neg); }
   /* Tabulator dark tweaks */
   .tabulator { font-size:12px; background:transparent; border:none; }
   .tabulator .tabulator-header {
@@ -205,8 +252,8 @@
 <nav class="tabs" id="tabs">
   <a href="#/visao" data-tab="visao">Visão Geral</a>
   <a href="#/curvas" data-tab="curvas">Curvas Históricas</a>
-  <a href="#/dispersao" data-tab="dispersao">Dispersão</a>
-  <a href="#/movimentacoes" data-tab="movimentacoes">Movimentações</a>
+  <a href="#/dispersao" data-tab="dispersao">Debêntures: Gráfico</a>
+  <a href="#/movimentacoes" data-tab="movimentacoes">Debêntures: Papéis</a>
   <a href="#/heatmap" data-tab="heatmap">Heatmap Setor × Duration</a>
   <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
 </nav>
@@ -217,11 +264,11 @@
 <section id="tab-visao" class="tab">
   <div class="panel">
     <div class="controls">
-      <label>Data Atual:
-        <input type="text" id="vis-date-atual" placeholder="YYYY-MM-DD">
-      </label>
       <label>Data Anterior:
         <input type="text" id="vis-date-anterior" placeholder="YYYY-MM-DD">
+      </label>
+      <label>Data Atual:
+        <input type="text" id="vis-date-atual" placeholder="YYYY-MM-DD">
       </label>
     </div>
   </div>
@@ -263,8 +310,8 @@
 <section id="tab-curvas" class="tab hide">
   <div class="panel">
     <div class="controls">
-      <label>Data Final: <input type="text" id="curve-date-atual" placeholder="YYYY-MM-DD"></label>
       <label>Data Inicial: <input type="text" id="curve-date-anterior" placeholder="YYYY-MM-DD"></label>
+      <label>Data Final: <input type="text" id="curve-date-atual" placeholder="YYYY-MM-DD"></label>
     </div>
   </div>
   <div class="curves-grid">
@@ -291,11 +338,11 @@
 <section id="tab-dispersao" class="tab hide">
   <div class="panel">
     <div class="controls filter-row">
-      <label>Data Atual:
-        <input type="text" id="disp-date-atual" placeholder="YYYY-MM-DD">
-      </label>
       <label>Data Anterior:
         <input type="text" id="disp-date-anterior" placeholder="YYYY-MM-DD">
+      </label>
+      <label>Data Atual:
+        <input type="text" id="disp-date-atual" placeholder="YYYY-MM-DD">
       </label>
     </div>
     <div class="controls filter-row">
@@ -340,11 +387,11 @@
 <section id="tab-movimentacoes" class="tab hide">
   <div class="panel">
     <div class="controls">
-      <label>Data Atual:
-        <input type="text" id="mov-date-atual" placeholder="YYYY-MM-DD">
-      </label>
       <label>Data Anterior:
         <input type="text" id="mov-date-anterior" placeholder="YYYY-MM-DD">
+      </label>
+      <label>Data Atual:
+        <input type="text" id="mov-date-atual" placeholder="YYYY-MM-DD">
       </label>
       <label>Indexador:
         <select id="mov-idx"><option value="">Todos</option></select>
@@ -363,23 +410,16 @@
 <section id="tab-titulos-publicos" class="tab hide">
   <div class="panel">
     <div class="controls filter-row">
-      <label>Data Atual:
-        <input type="text" id="tp-date-atual" placeholder="YYYY-MM-DD">
-      </label>
       <label>Data Anterior:
         <input type="text" id="tp-date-anterior" placeholder="YYYY-MM-DD">
       </label>
-    </div>
-    <div class="controls filter-row">
+      <label>Data Atual:
+        <input type="text" id="tp-date-atual" placeholder="YYYY-MM-DD">
+      </label>
       <label>Tipo de Título:
         <select id="tp-tipo"><option value="">Todos</option></select>
       </label>
-      <input type="text" id="tp-search-selic" placeholder="Buscar Cód. SELIC..." style="min-width:200px;">
     </div>
-  </div>
-  <div class="panel" id="tp-chart-panel">
-    <h2>Curva — Taxa Indicativa por Vencimento</h2>
-    <div id="tp-chart-curve" class="chart"></div>
   </div>
   <div class="panel" id="tp-table-panel">
     <h2>Mercado secundário — todos os papéis</h2>
@@ -394,11 +434,11 @@
 <section id="tab-heatmap" class="tab hide">
   <div class="panel">
     <div class="controls">
-      <label>Data Atual:
-        <input type="text" id="hm-date-atual" placeholder="YYYY-MM-DD">
-      </label>
       <label>Data Anterior:
         <input type="text" id="hm-date-anterior" placeholder="YYYY-MM-DD">
+      </label>
+      <label>Data Atual:
+        <input type="text" id="hm-date-atual" placeholder="YYYY-MM-DD">
       </label>
       <label>Indexador:
         <select id="heat-idx">
@@ -411,6 +451,15 @@
       <button data-hm="delta" class="hm-btn">Δ atual − anterior (bps)</button>
     </div>
     <div id="chart-heatmap" class="chart-tall"></div>
+    <div class="exclusion-list">
+      <label for="heat-exclude-search">Excluir do cálculo:</label>
+      <div class="exclusion-input-wrap">
+        <input type="text" id="heat-exclude-search"
+               placeholder="Pesquise emissor ou ticker..." autocomplete="off" />
+        <div class="exclusion-suggestions hide" id="heat-exclude-suggestions"></div>
+      </div>
+      <div class="exclusion-chips" id="heat-exclude-chips"></div>
+    </div>
   </div>
 </section>
 
@@ -1649,35 +1698,44 @@ function buildMovTable() {
         headerFilter: "list",
         headerFilterParams: { values: idxOpts, clearable: true },
         headerFilterFunc: "=" },
-      { title:"Taxa", field:"taxa", width:78, hozAlign:"right",
-        headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">5",
-        formatter: c => fmtPct(c.getValue()) },
-      { title:"%PAR", field:"pct_pu_par", width:84, hozAlign:"right",
-        headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">100",
-        formatter: fmtPctPar },
+      { title:"Vencimento", field:"vencimento", width:105,
+        headerFilter: "input", headerFilterFunc: likeCI },
       { title:"Duration", field:"duration_anos", width:90, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
         headerFilterPlaceholder: ">2",
         formatter: c => fmtAnos(c.getValue()) },
-      { title:"Vencimento", field:"vencimento", width:105,
-        headerFilter: "input", headerFilterFunc: likeCI },
-      { title:"Ref Venc", field:"benchmark_vencimento", width:105,
-        headerFilter: "input", headerFilterFunc: likeCI,
-        formatter: c => c.getValue() || "-" },
-      { title:"Spread Anterior", field:"spread_ref_pp", width:130, hozAlign:"right",
-        headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">1.5",
-        formatter: fmtSpread },
       { title:"Spread Atual", field:"spread_pp", width:120, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
         headerFilterPlaceholder: ">1.5",
         formatter: fmtSpread },
-      { title:"Delta Spread", field:"delta_bps", width:120, hozAlign:"right",
+      { title:"Δ Spread (bps)", field:"delta_bps", width:130, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
         headerFilterPlaceholder: ">10",
         formatter: fmtDelta },
+      { title:"Taxa", field:"taxa", width:78, hozAlign:"right",
+        headerFilter: "input", headerFilterFunc: numericFilter,
+        headerFilterPlaceholder: ">5",
+        formatter: c => fmtPct(c.getValue()) },
+      { title:"PU (R$)", field:"pu", width:120, hozAlign:"right",
+        headerFilter: "input", headerFilterFunc: numericFilter,
+        headerFilterPlaceholder: ">1000",
+        formatter: c => {
+          const v = c.getValue();
+          if (v == null) return "—";
+          return v.toLocaleString("pt-BR",
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        } },
+      { title:"Ref Venc", field:"benchmark_vencimento", width:105,
+        headerFilter: "input", headerFilterFunc: likeCI,
+        formatter: c => c.getValue() || "-" },
+      { title:"%PAR", field:"pct_pu_par", width:84, hozAlign:"right",
+        headerFilter: "input", headerFilterFunc: numericFilter,
+        headerFilterPlaceholder: ">100",
+        formatter: fmtPctPar },
+      { title:"Spread Anterior", field:"spread_ref_pp", width:130, hozAlign:"right",
+        headerFilter: "input", headerFilterFunc: numericFilter,
+        headerFilterPlaceholder: ">1.5",
+        formatter: fmtSpread },
     ],
   });
 }
@@ -1700,6 +1758,8 @@ let HEAT_MODE = "current";
 let HEAT_IDX = "ambos";
 let HM_DATE_ATUAL = null, HM_DATE_ANTERIOR = null;
 let HM_FP_ATUAL = null, HM_FP_ANTERIOR = null;
+// Exclusões aceitam tanto codigo (ex: AEGE17) quanto emissor (ex: AEGEA SANEAMENTO).
+const HEAT_EXCLUDE = new Set();
 
 const _HEAT_BUCKETS_LARGE = [
   ["0–1a", 0, 1], ["1–2a", 1, 2], ["2–3a", 2, 3], ["3–4a", 3, 4],
@@ -1730,6 +1790,7 @@ function _heatGridFor(papers) {
   const total = {};    // j -> array
   for (const p of papers) {
     if (HEAT_IDX !== "ambos" && p.i !== HEAT_IDX) continue;
+    if (HEAT_EXCLUDE.size && (HEAT_EXCLUDE.has(p.c) || HEAT_EXCLUDE.has(p.e))) continue;
     let bi = -1;
     for (let i = 0; i < buckets.length; i++) {
       const [, lo, hi] = buckets[i];
@@ -1791,7 +1852,161 @@ async function renderHeatmap() {
     HEAT_IDX = e.target.value;
     drawHeatmap();
   });
+  _initHeatExcludeUI();
   drawHeatmap();
+}
+
+function _heatPaperIndex() {
+  // Constrói um índice unificado (codigo + emissor) varrendo TODAS as datas
+  // disponíveis no heatmap, para que a busca encontre papéis mesmo que não
+  // estejam na data atual selecionada.
+  const codes = new Map();    // codigo -> emissor
+  const emissores = new Set();
+  for (const date of (HEAT.dates || [])) {
+    const snap = HEAT.by_date[date];
+    if (!snap || !snap.papers) continue;
+    for (const p of snap.papers) {
+      if (p.c) codes.set(p.c, p.e || "");
+      if (p.e) emissores.add(p.e);
+    }
+  }
+  return { codes, emissores };
+}
+
+function _initHeatExcludeUI() {
+  const input = document.getElementById("heat-exclude-search");
+  const sugBox = document.getElementById("heat-exclude-suggestions");
+  const chips = document.getElementById("heat-exclude-chips");
+  if (!input || input.dataset.bound === "1") {
+    _renderHeatChips();
+    return;
+  }
+  input.dataset.bound = "1";
+
+  const idx = _heatPaperIndex();
+
+  const computeSuggestions = (term) => {
+    const q = term.trim().toLowerCase();
+    if (q.length < 2) return [];
+    const out = [];
+    const seen = new Set();
+    for (const [code, emiss] of idx.codes) {
+      if (HEAT_EXCLUDE.has(code) || HEAT_EXCLUDE.has(emiss)) continue;
+      const codeMatch = code.toLowerCase().includes(q);
+      const emissMatch = emiss && emiss.toLowerCase().includes(q);
+      if (codeMatch || emissMatch) {
+        const key = code + "|" + emiss;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ codigo: code, emissor: emiss });
+        if (out.length >= 8) break;
+      }
+    }
+    return out;
+  };
+
+  const renderSug = (list) => {
+    if (!list.length) {
+      sugBox.classList.add("hide");
+      sugBox.innerHTML = "";
+      return;
+    }
+    sugBox.innerHTML = list.map(r =>
+      `<div class="ex-sug" data-code="${r.codigo}" data-emiss="${r.emissor || ""}">` +
+      `<span class="ex-sug-code">${r.codigo || "—"}</span>` +
+      `<span>${r.emissor || ""}</span></div>`
+    ).join("");
+    sugBox.classList.remove("hide");
+  };
+
+  input.addEventListener("input", () => {
+    renderSug(computeSuggestions(input.value));
+  });
+  input.addEventListener("focus", () => {
+    if (input.value.trim().length >= 2)
+      renderSug(computeSuggestions(input.value));
+  });
+  input.addEventListener("blur", () => {
+    setTimeout(() => sugBox.classList.add("hide"), 150);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const term = input.value.trim();
+    if (!term) return;
+    const t = term.toLowerCase();
+    let pick = null;
+    for (const [code, emiss] of idx.codes) {
+      if (code.toLowerCase() === t || (emiss && emiss.toLowerCase() === t)) {
+        pick = { codigo: code, emissor: emiss }; break;
+      }
+    }
+    if (!pick) {
+      const list = computeSuggestions(term);
+      pick = list[0];
+    }
+    if (pick) _heatAddExclusion(pick);
+    input.value = "";
+    sugBox.classList.add("hide");
+  });
+
+  sugBox.addEventListener("mousedown", (e) => {
+    const row = e.target.closest(".ex-sug");
+    if (!row) return;
+    e.preventDefault();
+    _heatAddExclusion({
+      codigo: row.dataset.code,
+      emissor: row.dataset.emiss,
+    });
+    input.value = "";
+    sugBox.classList.add("hide");
+    input.focus();
+  });
+
+  chips.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-remove]");
+    if (!btn) return;
+    HEAT_EXCLUDE.delete(btn.dataset.remove);
+    _renderHeatChips();
+    drawHeatmap();
+  });
+
+  _renderHeatChips();
+}
+
+function _heatAddExclusion({ codigo, emissor }) {
+  // Estratégia: se o usuário escolhe pela busca de emissor (sem código
+  // específico em mente, ele clicou num item que casa pelo nome), excluimos
+  // pelo emissor para pegar todos os papéis do grupo. Caso contrário, pelo
+  // código. A heurística usada aqui: se o termo digitado bate exato com o
+  // código, exclui pelo código; senão, exclui pelo emissor.
+  const input = document.getElementById("heat-exclude-search");
+  const term = (input ? input.value.trim() : "").toLowerCase();
+  let key;
+  if (codigo && term && codigo.toLowerCase() === term) {
+    key = codigo;
+  } else if (emissor) {
+    key = emissor;
+  } else {
+    key = codigo;
+  }
+  if (!key) return;
+  HEAT_EXCLUDE.add(key);
+  _renderHeatChips();
+  drawHeatmap();
+}
+
+function _renderHeatChips() {
+  const chips = document.getElementById("heat-exclude-chips");
+  if (!chips) return;
+  if (!HEAT_EXCLUDE.size) {
+    chips.innerHTML = "";
+    return;
+  }
+  chips.innerHTML = [...HEAT_EXCLUDE].map(k =>
+    `<span class="ex-chip">${k}` +
+    `<button type="button" data-remove="${k}" title="Remover">×</button></span>`
+  ).join("");
 }
 
 function onHmDateChange(which, d) {
@@ -1920,11 +2135,9 @@ async function renderTitulosPublicos() {
   const datas = TITPUB.datas || [];
   const emptyPanel = document.getElementById("tp-empty-panel");
   const emptyMsg = document.getElementById("tp-empty-msg");
-  const chartPanel = document.getElementById("tp-chart-panel");
   const tablePanel = document.getElementById("tp-table-panel");
 
   if (!datas.length) {
-    chartPanel.classList.add("hide");
     tablePanel.classList.add("hide");
     emptyPanel.classList.remove("hide");
     emptyMsg.textContent =
@@ -1932,7 +2145,6 @@ async function renderTitulosPublicos() {
     return;
   }
 
-  chartPanel.classList.remove("hide");
   tablePanel.classList.remove("hide");
   emptyPanel.classList.add("hide");
 
@@ -1963,8 +2175,6 @@ async function renderTitulosPublicos() {
   buildTpTable();
   document.getElementById("tp-tipo")
     .addEventListener("change", refreshTpView);
-  document.getElementById("tp-search-selic")
-    .addEventListener("input", applyTpFilter);
   refreshTpView();
 }
 
@@ -2081,30 +2291,19 @@ function buildTpTable() {
     ],
     columns: [
       { title: "Tipo", field: "tipo", width: 90, formatter: fmtTipo },
-      { title: "Vencimento", field: "vencimento", width: 120,
-        formatter: fmtVenc },
-      { title: "Cód. SELIC", field: "cod_selic", width: 110 },
-      { title: "Taxa Atual", field: "taxa_indicativa", width: 110,
-        hozAlign: "right", formatter: fmtPctCol },
-      { title: "Taxa Anterior", field: "taxa_indicativa_d1", width: 120,
-        hozAlign: "right", formatter: fmtPctCol },
-      { title: "Δ Taxa (bps)", field: "delta_bps", width: 120,
-        hozAlign: "right", formatter: fmtDeltaCol },
-      { title: "Tx. Compra", field: "taxa_compra", width: 110,
-        hozAlign: "right", formatter: fmtPctCol },
-      { title: "Tx. Venda", field: "taxa_venda", width: 110,
-        hozAlign: "right", formatter: fmtPctCol },
-      { title: "Bid-Ask (bps)", field: "bid_ask_bps", width: 120,
-        hozAlign: "right", formatter: fmtBpsCol },
-      { title: "Desvio Padrão (bps)", field: "desvio_padrao_bps", width: 150,
-        hozAlign: "right", formatter: fmtBpsCol },
-      { title: "Range Hoje (bps)", field: "range_bps", width: 140,
-        hozAlign: "right", formatter: fmtBpsCol },
       { title: "Duration (anos)", field: "duration_anos", width: 130,
         hozAlign: "right",
         formatter: c => fmtAnos(c.getValue()) },
+      { title: "Vencimento", field: "vencimento", width: 120,
+        formatter: fmtVenc },
       { title: "PU (R$)", field: "pu", width: 130, hozAlign: "right",
         formatter: fmtPu },
+      { title: "Taxa Anterior", field: "taxa_indicativa_d1", width: 120,
+        hozAlign: "right", formatter: fmtPctCol },
+      { title: "Taxa Atual", field: "taxa_indicativa", width: 110,
+        hozAlign: "right", formatter: fmtPctCol },
+      { title: "Δ Taxa (bps)", field: "delta_bps", width: 120,
+        hozAlign: "right", formatter: fmtDeltaCol },
     ],
   });
 }
@@ -2113,60 +2312,15 @@ function refreshTpView() {
   if (!TP_TABLE) return;
   TP_TABLE.replaceData(_tpRowsForView());
   applyTpFilter();
-  drawTpCurve();
 }
 
 function applyTpFilter() {
   if (!TP_TABLE) return;
   const tipo = document.getElementById("tp-tipo").value;
-  const selic = document.getElementById("tp-search-selic").value.trim();
   TP_TABLE.setFilter(d => {
     if (tipo && d.tipo !== tipo) return false;
-    if (selic && !(d.cod_selic || "").toLowerCase().includes(selic.toLowerCase()))
-      return false;
     return true;
   });
-  drawTpCurve();
-}
-
-function drawTpCurve() {
-  const tipoFiltro = document.getElementById("tp-tipo").value;
-  const rows = _tpRowsForView();
-  // Agrupa por tipo (1 linha por tipo presente no filtro). Ordena por
-  // duration crescente para que o traço da curva seja monotônico no eixo X.
-  const byTipo = {};
-  for (const r of rows) {
-    if (tipoFiltro && r.tipo !== tipoFiltro) continue;
-    if (r.duration_anos == null || r.taxa_indicativa == null) continue;
-    if (!byTipo[r.tipo]) byTipo[r.tipo] = [];
-    byTipo[r.tipo].push(r);
-  }
-  const tipos = (TITPUB.tipos_disponiveis || []).filter(t => byTipo[t]);
-  const traces = tipos.map(tipo => {
-    const pts = byTipo[tipo].slice().sort((a, b) => a.duration_anos - b.duration_anos);
-    return {
-      type: "scatter", mode: "lines+markers", name: tipo,
-      x: pts.map(p => p.duration_anos),
-      y: pts.map(p => p.taxa_indicativa),
-      line: { color: TITPUB_TIPO_COLOR[tipo] || cssVar("--accent"), width: 2 },
-      marker: { color: TITPUB_TIPO_COLOR[tipo] || cssVar("--accent"), size: 8 },
-      customdata: pts.map(p => [p.vencimento, p.cod_selic]),
-      hovertemplate:
-        "<b>" + tipo + "</b><br>" +
-        "Vencimento: %{customdata[0]}<br>" +
-        "Cód. SELIC: %{customdata[1]}<br>" +
-        "Duration: %{x:.2f} anos<br>" +
-        "Taxa: %{y:.4f}%<extra></extra>",
-    };
-  });
-  const layout = Object.assign(PLOTLY_LAYOUT(), {
-    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis,
-      { title: "Anos até vencimento" }),
-    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
-      { title: "Taxa Indicativa (%)" }),
-    showlegend: true,
-  });
-  Plotly.newPlot("tp-chart-curve", traces, layout, PLOTLY_CONFIG);
 }
 
 init().catch(err => {
