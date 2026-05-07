@@ -2264,10 +2264,9 @@ function buildTpTable() {
     layout: "fitData",
     resizableColumns: true,
     height: "65vh",
-    initialSort: [
-      { column: "vencimento", dir: "asc" },
-      { column: "tipo", dir: "asc" },
-    ],
+    // Sort multi-coluna não é definido aqui (initialSort tem ordem reversa
+    // no primeiro render do Tabulator). Aplicado em refreshTpView após cada
+    // replaceData para garantir Vencimento → Tipo.
     columns: [
       { title: "Tipo", field: "tipo", width: 90, formatter: fmtTipo },
       { title: "Duration (anos)", field: "duration_anos", width: 130,
@@ -2285,21 +2284,22 @@ function buildTpTable() {
         hozAlign: "right", formatter: fmtDeltaCol },
     ],
   });
-  // Tabulator (versão atual) aplica initialSort multi-coluna fora de ordem no
-  // primeiro render — força reaplicação após tableBuilt para garantir
-  // Vencimento primário, Tipo secundário.
-  TP_TABLE.on("tableBuilt", () => {
-    TP_TABLE.setSort([
-      { column: "vencimento", dir: "asc" },
-      { column: "tipo", dir: "asc" },
-    ]);
-  });
 }
+
+const TP_SORT = [
+  { column: "vencimento", dir: "asc" },
+  { column: "tipo", dir: "asc" },
+];
 
 function refreshTpView() {
   if (!TP_TABLE) return;
-  TP_TABLE.replaceData(_tpRowsForView());
-  applyTpFilter();
+  // replaceData retorna Promise; aplicar setSort APÓS dados entrarem garante
+  // que o sort multi-coluna (Vencimento → Tipo) seja respeitado mesmo no
+  // primeiro render — initialSort do Tabulator tem ordem reversa nesse caso.
+  Promise.resolve(TP_TABLE.replaceData(_tpRowsForView())).then(() => {
+    TP_TABLE.setSort(TP_SORT);
+    applyTpFilter();
+  });
 }
 
 function applyTpFilter() {
