@@ -527,7 +527,7 @@ const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
 // Substituído pelo build com hash dos JSONs em data/. Em dev (template puro)
 // fica vazio e o cache do browser dita a frescor. Em produção, ?v=<hash>
 // invalida o cache do GitHub Pages quando snapshots novos chegam.
-const BUILD_VERSION = "707b9d739854";
+const BUILD_VERSION = "e5798c7e3653";
 
 const cache = new Map();
 async function loadJSON(path) {
@@ -688,17 +688,13 @@ function onVisDateChange(which, d) {
 function drawVisao() {
   const pair = OVERVIEW.by_pair[VIS_DATE_ATUAL];
   if (!pair) return;
-  // Sobrescreve o snapshot "anterior" do par pré-computado se o usuário
-  // escolheu uma data diferente.
-  let kpis = pair.kpis;
-  let topm = pair.top_movements;
-  if (VIS_DATE_ANTERIOR && VIS_DATE_ANTERIOR !== pair.anterior) {
-    const recomputed = _recomputeVisPair(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
-    if (recomputed) {
-      kpis = recomputed.kpis;
-      topm = recomputed.top_movements;
-    }
-  }
+  // Lookup direto no dicionário pré-computado: by_anterior cobre TODAS as
+  // combinações de Data Anterior estritamente menor que VIS_DATE_ATUAL,
+  // mais a chave "" (sem anterior — KPIs/top movers sem deltas).
+  const key = VIS_DATE_ANTERIOR || "";
+  const slot = (pair.by_anterior && pair.by_anterior[key]) || null;
+  const kpis = slot ? slot.kpis : pair.kpis;
+  const topm = slot ? slot.top_movements : pair.top_movements;
   renderKpis(kpis);
   renderHistogram(pair.histogram["IPCA+"] || null, "IPCA+", "chart-histogram-ipca");
   renderHistogram(pair.histogram["DI+"]   || null, "CDI+",  "chart-histogram-cdi");
@@ -706,78 +702,6 @@ function drawVisao() {
   renderTopMovers(topm["DI+"]   || null, "CDI+",  "top-movers-cdi");
   renderCurvesOverlay(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
   renderCurvesPre(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
-}
-
-function _recomputeVisPair(atual, anterior) {
-  // Busca movements.json — fonte autoritativa por papel — para recomputar o
-  // par escolhido pelo usuário quando difere do par default em by_pair.
-  if (!MOV_DATA) {
-    // dispara load assíncrono e força redraw quando estiver pronto
-    loadJSON("data/movements.json").then(d => { MOV_DATA = d; drawVisao(); });
-    return null;
-  }
-  const cur = MOV_DATA.by_date[atual];
-  const ref = MOV_DATA.by_date[anterior];
-  if (!cur || !ref) return null;
-  const refSp = {};
-  for (const r of ref.rows) if (r.spread_pp != null) refSp[r.codigo] = r.spread_pp;
-  const groups = { Todos: [] };
-  for (const r of cur.rows) {
-    const sp = r.spread_pp; const old = refSp[r.codigo];
-    if (sp == null || old == null) continue;
-    const delta = (sp - old) * 100.0;
-    const m = {
-      codigo: r.codigo, emissor: r.emissor,
-      duration_anos: r.duration_anos, spread_pp: sp,
-      taxa: r.taxa, delta_spread_bps: delta,
-      indexador: r.indexador,
-    };
-    groups.Todos.push(m);
-    (groups[r.indexador] = groups[r.indexador] || []).push(m);
-  }
-  const kpis = { Todos: _kpisFromMovs(cur.rows, refSp, atual, anterior) };
-  for (const k of Object.keys(groups)) {
-    if (k === "Todos") continue;
-    const groupRows = cur.rows.filter(r => r.indexador === k);
-    kpis[k] = _kpisFromMovs(groupRows, refSp, atual, anterior);
-  }
-  const topm = {};
-  for (const k of Object.keys(groups)) {
-    const arr = groups[k].slice().sort((a,b) => b.delta_spread_bps - a.delta_spread_bps);
-    topm[k] = { abrindo: arr.slice(0,10), fechando: arr.slice(-10).reverse(), n_com_d1: arr.length };
-  }
-  return { kpis, top_movements: topm };
-}
-
-function _kpisFromMovs(rows, refSp, atual, anterior) {
-  let nT=rows.length, nL=0, nI=0, nE=0, nSp=0;
-  const deltas = [];
-  const absSpreads = [];
-  for (const r of rows) {
-    if (r.iliquido) nI++; else nL++;
-    if (r.estagnado) nE++;
-    if (r.spread_pp != null) nSp++;
-    if (!r.iliquido && r.spread_pp != null) absSpreads.push(r.spread_pp);
-    if (!r.iliquido && r.spread_pp != null && refSp[r.codigo] != null) {
-      deltas.push((r.spread_pp - refSp[r.codigo]) * 100.0);
-    }
-  }
-  const med = deltas.length ? deltas.reduce((a,b)=>a+b,0)/deltas.length : null;
-  const meanAbs = absSpreads.length
-    ? absSpreads.reduce((a,b)=>a+b,0)/absSpreads.length : null;
-  return {
-    data_referencia: atual,
-    data_anterior: anterior,
-    n_total: nT, n_liquidos: nL, n_iliquidos: nI,
-    pct_iliquidos: nT ? Math.round(100.0*nI/nT*100)/100 : null,
-    n_estagnados: nE,
-    pct_estagnados: nT ? Math.round(100.0*nE/nT*100)/100 : null,
-    n_com_spread: nSp,
-    termometro_med_bps: med != null ? Math.round(med*10)/10 : null,
-    n_com_d1: deltas.length,
-    mean_spread_abs_pp: meanAbs != null ? Math.round(meanAbs*10000)/10000 : null,
-    n_spread_abs: absSpreads.length,
-  };
 }
 
 function renderKpis(kpisMap) {

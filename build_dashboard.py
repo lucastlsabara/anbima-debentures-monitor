@@ -345,36 +345,54 @@ def build_overview(snaps: list[dict]) -> dict:
         }
 
     dates = [s["data_referencia"] for s in snaps]
-    # Pré-computa, para cada par (atual, anterior), o snapshot de KPIs +
-    # top movers + histograma. Custo: O(N²) onde N=len(snaps). Como N≤~250
-    # de um ano, ainda é factível; payloads são esparsos.
+    # Pré-computa, para cada par (atual, anterior), KPIs + top movers
+    # cobrindo TODAS as combinações possíveis (não só o anterior imediato).
+    # Histograma depende só de `atual`, então fica fora do dicionário de
+    # pares para evitar duplicação. Custo: O(N²) pares mas cada par é leve
+    # (4 KPIs + 20 top movers); evita o frontend baixar movements.json
+    # (~4 MB) só para recalcular um par diferente do default.
     pairs: dict[str, dict] = {}
     for i, atual in enumerate(dates):
-        anterior = dates[i - 1] if i > 0 else None
         enr = enriched_by_date[atual]
-        prev_map = spread_maps_by_date.get(anterior) if anterior else None
-        kpis_all = _kpis_for(enr, atual, anterior, prev_map)
-        kpis_by_idx = {"Todos": kpis_all}
-        hist_by_idx: dict[str, dict] = {}
-        top_by_idx = {"Todos": _top_movers(enr, prev_map)}
+        # Histograma e by_grp só dependem de `atual`.
         by_grp: dict[str, list[dict]] = defaultdict(list)
         for p in enr:
             by_grp[p["indexador_grupo"]].append(p)
+        hist_by_idx: dict[str, dict] = {}
         for grp in ALLOWED_INDEXADORES:
             ps = by_grp.get(grp, [])
-            if not ps:
-                continue
-            kpis_by_idx[grp] = _kpis_for(ps, atual, anterior, prev_map)
-            top_by_idx[grp] = _top_movers(ps, prev_map)
             sp = [p["spread_pp"] for p in ps
                   if p.get("spread_pp") is not None and not p.get("flag_iliquido")]
             if sp:
                 hist_by_idx[grp] = _histogram_for(sp)
+        # by_anterior[anterior] = {kpis, top_movements} para cada anterior
+        # estritamente menor que `atual`, mais a chave None (sem anterior).
+        by_anterior: dict[str | None, dict] = {}
+        anteriores: list[str | None] = [None] + [d for d in dates if d < atual]
+        for anterior in anteriores:
+            prev_map = spread_maps_by_date.get(anterior) if anterior else None
+            kpis_by_idx = {"Todos": _kpis_for(enr, atual, anterior, prev_map)}
+            top_by_idx = {"Todos": _top_movers(enr, prev_map)}
+            for grp in ALLOWED_INDEXADORES:
+                ps = by_grp.get(grp, [])
+                if not ps:
+                    continue
+                kpis_by_idx[grp] = _kpis_for(ps, atual, anterior, prev_map)
+                top_by_idx[grp] = _top_movers(ps, prev_map)
+            # Chave do dict precisa ser string para serializar em JSON.
+            key = anterior if anterior is not None else ""
+            by_anterior[key] = {"kpis": kpis_by_idx, "top_movements": top_by_idx}
+        anterior_default = dates[i - 1] if i > 0 else None
         pairs[atual] = {
-            "anterior": anterior,
-            "kpis": kpis_by_idx,
+            "anterior": anterior_default,
+            "anterior_default": anterior_default,
             "histogram": hist_by_idx,
-            "top_movements": top_by_idx,
+            "by_anterior": by_anterior,
+            # Back-compat: o frontend velho lê pair.kpis / pair.top_movements
+            # do par default. Mantido até trocarmos a leitura no JS.
+            "kpis": by_anterior[anterior_default if anterior_default else ""]["kpis"],
+            "top_movements":
+                by_anterior[anterior_default if anterior_default else ""]["top_movements"],
         }
 
     today = dates[-1] if dates else None
