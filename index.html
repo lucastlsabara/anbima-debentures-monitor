@@ -2286,9 +2286,11 @@ function buildTpTable() {
   });
 }
 
+// NOTA: Tabulator aplica sorters em ordem reversa (último do array = primário).
+// Para ordenar PRIMÁRIO por vencimento e SECUNDÁRIO por tipo, passar [{tipo}, {vencimento}].
 const TP_SORT = [
-  { column: "vencimento", dir: "asc" },
   { column: "tipo", dir: "asc" },
+  { column: "vencimento", dir: "asc" },
 ];
 
 function refreshTpView() {
