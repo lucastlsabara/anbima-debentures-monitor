@@ -1720,6 +1720,70 @@ function _heatGridFor(papers) {
   return { means, counts, rows };
 }
 
+// Modo delta: usa intersecao de papers (S, B, indexador) entre as duas datas.
+// Garante delta papel-a-papel real, evitando ruido de pools diferentes.
+function _heatDeltaGrid(curPapers, oldPapers) {
+  const setores = HEAT.setores || [];
+  const buckets = _heatBuckets();
+
+  const _bucketOf = (d) => {
+    for (let i = 0; i < buckets.length; i++) {
+      const [, lo, hi] = buckets[i];
+      if (d >= lo && d < hi) return i;
+    }
+    return -1;
+  };
+
+  const _indexPapers = (papers) => {
+    // code -> {bi, s, i, sp}, ja aplicando filtro de indexador e exclusao.
+    const m = {};
+    for (const p of papers) {
+      if (HEAT_IDX !== "ambos" && p.i !== HEAT_IDX) continue;
+      if (HEAT_EXCLUDE.size && HEAT_EXCLUDE.has(p.e)) continue;
+      const bi = _bucketOf(p.d);
+      if (bi < 0) continue;
+      m[p.c] = { bi, s: p.s, i: p.i, sp: p.sp };
+    }
+    return m;
+  };
+
+  const A = _indexPapers(curPapers);
+  const B = _indexPapers(oldPapers);
+
+  const acc = {};    // "setor|j" -> [delta_paper, ...]
+  const total = {};  // j -> [delta_paper, ...]
+  for (const c in A) {
+    const a = A[c];
+    const b = B[c];
+    if (!b) continue;
+    // So conta se o papel esta no MESMO bucket (S, B, indexador) nas duas datas.
+    if (a.bi !== b.bi || a.s !== b.s || a.i !== b.i) continue;
+    const delta = a.sp - b.sp;
+    const k = a.s + "|" + a.bi;
+    if (!acc[k]) acc[k] = [];
+    acc[k].push(delta);
+    if (!total[a.bi]) total[a.bi] = [];
+    total[a.bi].push(delta);
+  }
+
+  const _avg = arr => arr && arr.length
+    ? Math.round((arr.reduce((x, y) => x + y, 0) / arr.length) * 100000) / 100000
+    : null;
+  const meansSet = setores.map(s => buckets.map((_, j) => _avg(acc[s + "|" + j])));
+  const countsSet = setores.map(s => buckets.map((_, j) => {
+    const arr = acc[s + "|" + j];
+    return arr ? arr.length : 0;
+  }));
+  const meansTotal = buckets.map((_, j) => _avg(total[j]));
+  const countsTotal = buckets.map((_, j) => total[j] ? total[j].length : 0);
+  const spacerRow = buckets.map(() => null);
+  const spacerCounts = buckets.map(() => 0);
+  const rows = [...setores, HEAT_TOTAL_SPACER, HEAT_TOTAL_LABEL];
+  const means = [...meansSet, spacerRow, meansTotal];
+  const counts = [...countsSet, spacerCounts, countsTotal];
+  return { means, counts, rows };
+}
+
 async function renderHeatmap() {
   HEAT = await loadJSON("data/heatmap_history.json");
   const dates = HEAT.dates || [];
@@ -1910,11 +1974,13 @@ function drawHeatmap() {
       root.innerHTML = '<div class="empty">Selecione Data Anterior para Δ.</div>';
       return;
     }
-    const oldGrid = _heatGridFor(old.papers || []);
-    z = curGrid.means.map((row, i) => row.map((v, j) => {
-      const b = oldGrid.means[i] ? oldGrid.means[i][j] : null;
-      return v == null || b == null ? null : Math.round((v - b) * 100.0 * 10) / 10;
-    }));
+    // Delta papel-a-papel: usa intersecao de papers (S, B, indexador) entre
+    // as duas datas em vez de avg(pool atual) - avg(pool anterior). Evita
+    // ruido quando os pools diferem (papel saiu/entrou do bucket).
+    const dGrid = _heatDeltaGrid(cur.papers || [], old.papers || []);
+    z = dGrid.means.map(row => row.map(v =>
+      v == null ? null : Math.round(v * 100.0 * 10) / 10
+    ));
     suffix = " bps";
     title = "Δ spread (bps) — " + brDate(HM_DATE_ATUAL) + " vs " + brDate(HM_DATE_ANTERIOR);
   }
