@@ -1656,8 +1656,28 @@ let HEAT_MODE = "current";
 let HEAT_IDX = "ambos";
 let HM_DATE_ATUAL = null, HM_DATE_ANTERIOR = null;
 let HM_FP_ATUAL = null, HM_FP_ANTERIOR = null;
-// Exclusões aceitam tanto codigo (ex: AEGE17) quanto emissor (ex: AEGEA SANEAMENTO).
+// Exclusões guardadas como nome-base do emissor (sem sufixo de oferta).
+// ANBIMA usa sufixos "(*)", "(**)", etc no FINAL do nome para distinguir
+// tipos de oferta (476 vs publica) do mesmo emissor. Tratamos o nome
+// SEM esse sufixo como chave canonica — ao excluir "CSN" excluimos
+// automaticamente "CSN (*)", "CSN (**)" etc. Empresas com nomes-base
+// distintos (ex: "CSN" vs "CSN MINERACAO") permanecem separadas.
 const HEAT_EXCLUDE = new Set();
+
+function normEmissor(name) {
+  if (!name) return '';
+  // Remove um ou mais sufixos "(*)", "(**)", "(***)" encadeados no FINAL.
+  // ANBIMA pode aplicar mais de um marcador (ex: "EMP S/A (*) (**)"), entao
+  // iteramos ate nao haver mais nada para remover. NAO casa parenteses com
+  // texto qualquer (ex: "(Subsidiaria)") — apenas asteriscos.
+  let prev;
+  let s = name;
+  do {
+    prev = s;
+    s = s.replace(/\s*\(\*+\)\s*$/, '').trim();
+  } while (s !== prev);
+  return s;
+}
 
 const _HEAT_BUCKETS_LARGE = [
   ["0–1a", 0, 1], ["1–2a", 1, 2], ["2–3a", 2, 3], ["3–4a", 3, 4],
@@ -1688,7 +1708,7 @@ function _heatGridFor(papers) {
   const total = {};    // j -> array
   for (const p of papers) {
     if (HEAT_IDX !== "ambos" && p.i !== HEAT_IDX) continue;
-    if (HEAT_EXCLUDE.size && HEAT_EXCLUDE.has(p.e)) continue;
+    if (HEAT_EXCLUDE.size && HEAT_EXCLUDE.has(normEmissor(p.e))) continue;
     let bi = -1;
     for (let i = 0; i < buckets.length; i++) {
       const [, lo, hi] = buckets[i];
@@ -1712,6 +1732,70 @@ function _heatGridFor(papers) {
   const meansTotal = buckets.map((_, j) => _avg(total[j]));
   const countsTotal = buckets.map((_, j) => total[j] ? total[j].length : 0);
   // Spacer = linha de nulos entre setores e TODOS para criar separador visual.
+  const spacerRow = buckets.map(() => null);
+  const spacerCounts = buckets.map(() => 0);
+  const rows = [...setores, HEAT_TOTAL_SPACER, HEAT_TOTAL_LABEL];
+  const means = [...meansSet, spacerRow, meansTotal];
+  const counts = [...countsSet, spacerCounts, countsTotal];
+  return { means, counts, rows };
+}
+
+// Modo delta: usa intersecao de papers (S, B, indexador) entre as duas datas.
+// Garante delta papel-a-papel real, evitando ruido de pools diferentes.
+function _heatDeltaGrid(curPapers, oldPapers) {
+  const setores = HEAT.setores || [];
+  const buckets = _heatBuckets();
+
+  const _bucketOf = (d) => {
+    for (let i = 0; i < buckets.length; i++) {
+      const [, lo, hi] = buckets[i];
+      if (d >= lo && d < hi) return i;
+    }
+    return -1;
+  };
+
+  const _indexPapers = (papers) => {
+    // code -> {bi, s, i, sp}, ja aplicando filtro de indexador e exclusao.
+    const m = {};
+    for (const p of papers) {
+      if (HEAT_IDX !== "ambos" && p.i !== HEAT_IDX) continue;
+      if (HEAT_EXCLUDE.size && HEAT_EXCLUDE.has(normEmissor(p.e))) continue;
+      const bi = _bucketOf(p.d);
+      if (bi < 0) continue;
+      m[p.c] = { bi, s: p.s, i: p.i, sp: p.sp };
+    }
+    return m;
+  };
+
+  const A = _indexPapers(curPapers);
+  const B = _indexPapers(oldPapers);
+
+  const acc = {};    // "setor|j" -> [delta_paper, ...]
+  const total = {};  // j -> [delta_paper, ...]
+  for (const c in A) {
+    const a = A[c];
+    const b = B[c];
+    if (!b) continue;
+    // So conta se o papel esta no MESMO bucket (S, B, indexador) nas duas datas.
+    if (a.bi !== b.bi || a.s !== b.s || a.i !== b.i) continue;
+    const delta = a.sp - b.sp;
+    const k = a.s + "|" + a.bi;
+    if (!acc[k]) acc[k] = [];
+    acc[k].push(delta);
+    if (!total[a.bi]) total[a.bi] = [];
+    total[a.bi].push(delta);
+  }
+
+  const _avg = arr => arr && arr.length
+    ? Math.round((arr.reduce((x, y) => x + y, 0) / arr.length) * 100000) / 100000
+    : null;
+  const meansSet = setores.map(s => buckets.map((_, j) => _avg(acc[s + "|" + j])));
+  const countsSet = setores.map(s => buckets.map((_, j) => {
+    const arr = acc[s + "|" + j];
+    return arr ? arr.length : 0;
+  }));
+  const meansTotal = buckets.map((_, j) => _avg(total[j]));
+  const countsTotal = buckets.map((_, j) => total[j] ? total[j].length : 0);
   const spacerRow = buckets.map(() => null);
   const spacerCounts = buckets.map(() => 0);
   const rows = [...setores, HEAT_TOTAL_SPACER, HEAT_TOTAL_LABEL];
@@ -1755,14 +1839,16 @@ async function renderHeatmap() {
 }
 
 function _heatPaperIndex() {
-  // Lista única de emissores presentes em qualquer snapshot do heatmap.
-  // Exclusão é só por emissor — não indexamos códigos individualmente.
+  // Lista de nomes-BASE de emissores (sem sufixo "(*)", "(**)" etc) presentes
+  // em qualquer snapshot do heatmap. Variantes de oferta do mesmo emissor
+  // ficam agrupadas em uma unica entrada do autocomplete.
   const emissores = new Set();
   for (const date of (HEAT.dates || [])) {
     const snap = HEAT.by_date[date];
     if (!snap || !snap.papers) continue;
     for (const p of snap.papers) {
-      if (p.e) emissores.add(p.e);
+      const base = normEmissor(p.e);
+      if (base) emissores.add(base);
     }
   }
   return { emissores: [...emissores].sort((a, b) => a.localeCompare(b, "pt-BR")) };
@@ -1821,7 +1907,7 @@ function _initHeatExcludeUI() {
     e.preventDefault();
     const term = input.value.trim();
     if (!term) return;
-    const t = term.toLowerCase();
+    const t = normEmissor(term).toLowerCase();
     let pick = idx.emissores.find(e2 => e2.toLowerCase() === t);
     if (!pick) {
       const list = computeSuggestions(term);
@@ -1854,8 +1940,9 @@ function _initHeatExcludeUI() {
 }
 
 function _heatAddExclusion(emissor) {
-  if (!emissor) return;
-  HEAT_EXCLUDE.add(emissor);
+  const base = normEmissor(emissor);
+  if (!base) return;
+  HEAT_EXCLUDE.add(base);
   _renderHeatChips();
   drawHeatmap();
 }
@@ -1910,11 +1997,13 @@ function drawHeatmap() {
       root.innerHTML = '<div class="empty">Selecione Data Anterior para Δ.</div>';
       return;
     }
-    const oldGrid = _heatGridFor(old.papers || []);
-    z = curGrid.means.map((row, i) => row.map((v, j) => {
-      const b = oldGrid.means[i] ? oldGrid.means[i][j] : null;
-      return v == null || b == null ? null : Math.round((v - b) * 100.0 * 10) / 10;
-    }));
+    // Delta papel-a-papel: usa intersecao de papers (S, B, indexador) entre
+    // as duas datas em vez de avg(pool atual) - avg(pool anterior). Evita
+    // ruido quando os pools diferem (papel saiu/entrou do bucket).
+    const dGrid = _heatDeltaGrid(cur.papers || [], old.papers || []);
+    z = dGrid.means.map(row => row.map(v =>
+      v == null ? null : Math.round(v * 100.0 * 10) / 10
+    ));
     suffix = " bps";
     title = "Δ spread (bps) — " + brDate(HM_DATE_ATUAL) + " vs " + brDate(HM_DATE_ANTERIOR);
   }
