@@ -2174,7 +2174,15 @@ function _buildTpTable(containerId, rows) {
     return v.toLocaleString("pt-BR",
       { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
-  const fmtVenc = c => brDate(c.getValue());
+  // Vencimento exibido como "Mês-AA" (pt-BR); dado interno permanece ISO.
+  const _MES_ABBR_PT = ["Jan","Fev","Mar","Abr","Mai","Jun",
+                        "Jul","Ago","Set","Out","Nov","Dez"];
+  const fmtVenc = c => {
+    const v = c.getValue();
+    if (!v) return "";
+    const [y, m] = v.split("-");
+    return _MES_ABBR_PT[parseInt(m, 10) - 1] + "-" + y.slice(2);
+  };
 
   return new Tabulator("#" + containerId, {
     data: rows,
