@@ -101,13 +101,50 @@ Cobertura sell-side (badge azul na tabela, toggle no scatter):
 Aegea, BRK, Iguá, Hapvida, Kora, DASA, Viveo, Oncoclínicas, CSN, Prio,
 Brava, Origem.
 
-## Como rodar
+## Pipeline de coleta (automação externa)
+
+Trigger: **Routine do Claude Code, 23h BRT diariamente**. A configuração da
+routine vive fora do repositório (no painel do Claude Code do operador), mas
+o que ela executa está versionado abaixo:
+
+Janela de catch-up: **[hoje, D-1, D-2, D-3, D-4]** — cinco datas, hoje + 4
+anteriores (em dias corridos, sem pular fim de semana). A janela larga
+absorve dias em que a ANBIMA atrasou a publicação ou a execução pulou.
+
+Para cada data `X` na janela, executa:
+
+```bash
+python3 fetch_anbima.py     --date X
+python3 compute_spreads.py  --date X
+```
+
+Após processar todas as datas, regenera o dashboard:
+
+```bash
+python3 build_dashboard.py
+```
+
+Tratamento de erro por data:
+
+| Cenário | Comportamento |
+|---|---|
+| ANBIMA ainda não publicou (`db<YYMMDD>.txt` 404) | `fetch_anbima.py` sai com exit 2; routine pula a data |
+| ms.txt 404 (títulos públicos) | warn-and-skip; `titpub_status='404'` no snapshot, `titpub_rows=[]` (debêntures + ETTJ continuam) |
+| ms.txt com Data Referência interna divergente da target | warn; `titpub_status='data_divergente'`, rows parseadas normalmente |
+| HTTP 5xx ou erro de rede | raise (routine acusa falha → retry/alerta) |
+| Sábado / domingo / feriado | ANBIMA retorna 404; mesmo path do "ainda não publicou" |
+
+Re-rodar é idempotente: `history/<YYYY-MM-DD>.json` é sobrescrito com o mesmo
+conteúdo determinístico, então catch-up de 5 dias sobre snapshots já bons
+não corrompe nada (apenas re-grava).
+
+## Como rodar manualmente
 
 ```bash
 pip install -r requirements.txt
 
 # 1. coleta + parse (1 dia)
-python3 fetch_anbima.py                  # default: hoje (BRT) — pipeline roda 23h BRT
+python3 fetch_anbima.py                    # default: hoje (BRT)
 python3 fetch_anbima.py --date 2026-04-30  # data específica
 
 # 2. spread + delta D-1 + history
@@ -115,6 +152,13 @@ python3 compute_spreads.py                 # default: mesmo do fetch
 python3 compute_spreads.py --date 2026-04-30
 
 # 3. agregação completa + HTML
+python3 build_dashboard.py
+
+# 4. catch-up manual de N dias (ex.: últimos 5 corridos)
+for d in 2026-05-03 2026-05-04 2026-05-05 2026-05-06 2026-05-07; do
+  python3 fetch_anbima.py    --date "$d" || true   # tolera 404
+  python3 compute_spreads.py --date "$d" || true
+done
 python3 build_dashboard.py
 
 # servir local

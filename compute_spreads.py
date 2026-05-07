@@ -399,6 +399,9 @@ def main() -> int:
         # antigos (anteriores a este campo) ficam sem o dado — frontend trata
         # graceful (mensagem "indisponível para esta data").
         "titpub_rows": raw.get("titpub_rows") or [],
+        # Status do fetch do ms.txt: 'ok' | '404' | 'erro' | 'data_divergente'.
+        # Default 'ok' para snapshots gerados antes desse campo existir.
+        "titpub_status": raw.get("titpub_status", "ok"),
     }
 
     Path(args.out).write_text(
