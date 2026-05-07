@@ -478,6 +478,8 @@ def build_heatmap_history(snaps: list[dict]) -> dict:
                 "i": grp,
                 "d": dur,
                 "sp": round(sp, 4),
+                "c": d.get("codigo"),
+                "e": d.get("emissor"),
             })
         by_date[s["data_referencia"]] = {"papers": rows}
     return {
