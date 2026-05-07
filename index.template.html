@@ -488,6 +488,13 @@ const fmtBps = v => v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(0) + " b
 const fmtAnos = v => v == null ? "—" : v.toFixed(2) + "a";
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
+// Escape para conteúdo de tags (innerHTML). Usado quando inserimos strings
+// vindas de dados ANBIMA (setores como "Petróleo & Gás", emissores) em
+// template literals. Sem isso, "&" gera HTML inválido e potenciais bugs.
+const _ESC_HTML = { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" };
+const escapeHtml = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => _ESC_HTML[c]);
+const escapeAttr = escapeHtml;  // mesma tabela cobre ambos os contextos.
+
 const PLOTLY_LAYOUT = () => ({
   paper_bgcolor: cssVar("--surface"),
   plot_bgcolor: cssVar("--surface"),
@@ -771,11 +778,15 @@ function renderKpis(kpisMap) {
       hint: `${all.n_liquidos} com taxa · ${all.n_com_spread} com spread oficial` },
     { label: "Ilíquidos no dia", val: all.n_iliquidos,
       hint: (all.pct_iliquidos ?? 0) + "% do total" },
-    { label: "Termômetro IPCA+ · spread médio",
+    // Cards de mercado: o IPCA+ mostra o nível absoluto do spread médio
+    // (em pp) — métrica de carrego. O CDI+ mostra a variação média do
+    // spread vs Data Anterior (em bps) — métrica de movimento. Nomes
+    // distintos para evitar a ambiguidade do termo "Termômetro".
+    { label: "Spread médio IPCA+ (nível)",
       val: sIpca == null ? "—" : sIpca.toFixed(2) + " pp",
       cls: _termCls(tIpcaDelta),
       hint: (ipca.n_spread_abs ?? 0) + " papéis IPCA+ com spread" },
-    { label: "Termômetro CDI+ · média Δspread",
+    { label: "Δ Spread médio CDI+ (movimento)",
       val: tCdi == null ? "—" : (tCdi >= 0 ? "+" : "") + tCdi.toFixed(1) + " bps",
       cls: _termCls(tCdi),
       hint: (cdi.n_com_d1 ?? 0) + " papéis CDI+ com Δ vs " + brDate(all.data_anterior) },
@@ -900,7 +911,8 @@ function renderTopMovers(tm, displayLabel, containerId) {
     const dCls = m.delta_spread_bps == null ? ""
       : (m.delta_spread_bps > 0 ? "neg"
         : m.delta_spread_bps < 0 ? "pos" : "");
-    return `<tr><td>${m.codigo}</td><td>${(m.emissor||'').slice(0,32)}</td>` +
+    const emissor = m.emissor || '';
+    return `<tr><td>${m.codigo}</td><td title="${escapeAttr(emissor)}">${escapeHtml(emissor)}</td>` +
       `<td class="num">${fmtAnos(m.duration_anos)}</td>` +
       `<td class="num">${fmtPp(m.spread_pp)}</td>` +
       `<td class="num ${dCls}">${fmtBps(m.delta_spread_bps)}</td></tr>`;
