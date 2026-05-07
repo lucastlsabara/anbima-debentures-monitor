@@ -512,10 +512,16 @@ const PLOTLY_LAYOUT = () => ({
 const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
   modeBarButtonsToRemove: ["lasso2d","select2d","autoScale2d"] };
 
+// Substituído pelo build com hash dos JSONs em data/. Em dev (template puro)
+// fica vazio e o cache do browser dita a frescor. Em produção, ?v=<hash>
+// invalida o cache do GitHub Pages quando snapshots novos chegam.
+const BUILD_VERSION = "707b9d739854";
+
 const cache = new Map();
 async function loadJSON(path) {
   if (cache.has(path)) return cache.get(path);
-  const r = await fetch(path);
+  const url = BUILD_VERSION ? path + "?v=" + BUILD_VERSION : path;
+  const r = await fetch(url);
   if (!r.ok) throw new Error(path + " " + r.status);
   const j = await r.json();
   cache.set(path, j);

@@ -27,6 +27,7 @@ REGRA: nunca inventa dados. Tudo vem de ``history/<YYYY-MM-DD>.json`` real.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -646,8 +647,35 @@ def build_titpub_history(snaps: list[dict]) -> dict:
 # HTML
 # ----------------------------------------------------------------------------
 
-def write_html(out_path: Path) -> int:
+def _build_version(data_dir: Path) -> str:
+    """Hash curto do conteúdo dos JSONs gerados em data/.
+
+    Usado como query string ?v= em todos os fetch() do dashboard para
+    invalidar o cache do GitHub Pages quando os dados mudam. Se o build
+    rodar com o mesmo input (mesmos snapshots em history/), o hash é
+    idêntico — preserva idempotência. Quando snapshots novos chegam, o
+    hash muda e os browsers re-baixam os JSONs.
+    """
+    h = hashlib.sha256()
+    for p in sorted(data_dir.rglob("*.json")):
+        h.update(p.relative_to(data_dir).as_posix().encode("utf-8"))
+        h.update(b"\0")
+        h.update(p.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()[:12]
+
+
+def write_html(out_path: Path, build_version: str) -> int:
     html = (ROOT / "index.template.html").read_text(encoding="utf-8")
+    # Substitui placeholder; se o template já estiver com a versão expandida
+    # (artefato do último build), normaliza primeiro para o placeholder.
+    import re
+    html = re.sub(
+        r'const BUILD_VERSION = "[^"]*";',
+        f'const BUILD_VERSION = "{build_version}";',
+        html,
+        count=1,
+    )
     out_path.write_text(html, encoding="utf-8")
     return len(html.encode("utf-8"))
 
@@ -696,8 +724,10 @@ def main() -> int:
         path = disp_dir / f"{date}.json"
         sizes.append((f"dispersion/{date}.json", path.stat().st_size))
 
-    html_size = write_html(Path(args.out_html))
+    build_version = _build_version(DATA_DIR)
+    html_size = write_html(Path(args.out_html), build_version)
     sizes.append((args.out_html, html_size))
+    print(f"[build] BUILD_VERSION={build_version}", file=sys.stderr)
 
     max_bytes = 0
     print("\n[build] arquivos gerados:", file=sys.stderr)
