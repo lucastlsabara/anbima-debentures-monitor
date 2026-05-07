@@ -671,9 +671,8 @@ function _visAnteriorEnable(atual) {
 function onVisDateChange(which, d) {
   if (which === "atual") {
     VIS_DATE_ATUAL = d;
-    if (VIS_DATE_ANTERIOR != null && VIS_DATE_ANTERIOR >= VIS_DATE_ATUAL) {
-      VIS_DATE_ANTERIOR = defaultAnteriorFor(VIS_DATE_ATUAL, OVERVIEW.dates);
-    }
+    // Auto-pick: Data Anterior = último dia útil disponível < Atual.
+    VIS_DATE_ANTERIOR = defaultAnteriorFor(VIS_DATE_ATUAL, OVERVIEW.dates);
     if (VIS_FP_ANTERIOR) {
       VIS_FP_ANTERIOR.set("enable", _visAnteriorEnable(VIS_DATE_ATUAL));
       if (VIS_DATE_ANTERIOR) VIS_FP_ANTERIOR.setDate(VIS_DATE_ANTERIOR, false);
@@ -1029,9 +1028,8 @@ async function renderDispersao() {
 function onDispDateChange(which, d) {
   if (which === "atual") {
     DISP_DATE_ATUAL = d;
-    if (DISP_DATE_ANTERIOR && DISP_DATE_ANTERIOR >= DISP_DATE_ATUAL) {
-      DISP_DATE_ANTERIOR = defaultAnteriorFor(DISP_DATE_ATUAL, DISP_INDEX.dates);
-    }
+    // Auto-pick: Data Anterior = último dia útil disponível < Atual.
+    DISP_DATE_ANTERIOR = defaultAnteriorFor(DISP_DATE_ATUAL, DISP_INDEX.dates);
     if (DISP_FP_ANTERIOR) {
       DISP_FP_ANTERIOR.set("enable", DISP_INDEX.dates.filter(x => x < DISP_DATE_ATUAL));
       if (DISP_DATE_ANTERIOR) DISP_FP_ANTERIOR.setDate(DISP_DATE_ANTERIOR, false);
@@ -1471,9 +1469,9 @@ function onMovDateChange(which, dstr) {
   if (which === "atual") {
     if (!dstr || dstr === MOV_DATE_ATUAL) return;
     MOV_DATE_ATUAL = dstr;
-    if (MOV_DATE_ANTERIOR != null && MOV_DATE_ANTERIOR >= MOV_DATE_ATUAL) {
-      MOV_DATE_ANTERIOR = null;
-    }
+    // Auto-pick: Data Anterior = último dia útil disponível < Atual.
+    MOV_DATE_ANTERIOR = defaultAnteriorFor(MOV_DATE_ATUAL,
+      (MOV_DATA && MOV_DATA.dates) || []);
     if (MOV_FP_ANTERIOR) {
       MOV_FP_ANTERIOR.set("enable", _movRefEnable(MOV_DATE_ATUAL));
       if (MOV_DATE_ANTERIOR == null) MOV_FP_ANTERIOR.clear(false);
@@ -1878,9 +1876,8 @@ function _renderHeatChips() {
 function onHmDateChange(which, d) {
   if (which === "atual") {
     HM_DATE_ATUAL = d;
-    if (HM_DATE_ANTERIOR && HM_DATE_ANTERIOR >= HM_DATE_ATUAL) {
-      HM_DATE_ANTERIOR = defaultAnteriorFor(HM_DATE_ATUAL, HEAT.dates);
-    }
+    // Auto-pick: Data Anterior = último dia útil disponível < Atual.
+    HM_DATE_ANTERIOR = defaultAnteriorFor(HM_DATE_ATUAL, HEAT.dates);
     if (HM_FP_ANTERIOR) {
       HM_FP_ANTERIOR.set("enable", HEAT.dates.filter(x => x < HM_DATE_ATUAL));
       if (HM_DATE_ANTERIOR) HM_FP_ANTERIOR.setDate(HM_DATE_ANTERIOR, false);
@@ -2066,12 +2063,10 @@ function _tpAtualEnable(inicialDate) {
 function onTpDateChange(which, dstr) {
   if (which === "atual") {
     if (!dstr) return;
-    if (TP_DATE_ANTERIOR != null && dstr <= TP_DATE_ANTERIOR) {
-      // Validação: Final > Inicial. Reverte selecionando a Final anterior.
-      if (TP_FP_ATUAL) TP_FP_ATUAL.setDate(TP_DATE_ATUAL, false);
-      return;
-    }
     TP_DATE_ATUAL = dstr;
+    // Auto-pick: Data Inicial = último dia útil disponível < Final.
+    // Se não houver candidato anterior, Inicial fica em branco (sem comparativo).
+    TP_DATE_ANTERIOR = defaultAnteriorFor(TP_DATE_ATUAL, TP_DATES_ENABLED);
     if (TP_FP_ANTERIOR) {
       TP_FP_ANTERIOR.set("enable", _tpAnteriorEnable(TP_DATE_ATUAL));
       if (TP_DATE_ANTERIOR == null) TP_FP_ANTERIOR.clear(false);
