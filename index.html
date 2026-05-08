@@ -527,7 +527,7 @@ const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
 // Substituído pelo build com hash dos JSONs em data/. Em dev (template puro)
 // fica vazio e o cache do browser dita a frescor. Em produção, ?v=<hash>
 // invalida o cache do GitHub Pages quando snapshots novos chegam.
-const BUILD_VERSION = "e5798c7e3653";
+const BUILD_VERSION = "8c60b8b4db1e";
 
 const cache = new Map();
 async function loadJSON(path) {
@@ -1596,6 +1596,16 @@ function buildMovTable() {
         headerFilter: "list",
         headerFilterParams: { values: idxOpts, clearable: true },
         headerFilterFunc: "=" },
+      { title:"Incent.", field:"is_incentivada", width:80, hozAlign:"center",
+        headerFilter: "list",
+        headerFilterParams: {
+          values: { "": "Todos", "true": "Sim", "false": "Não" },
+          clearable: true },
+        headerFilterFunc: (term, value) => {
+          if (term === "" || term == null) return true;
+          return String(!!value) === String(term);
+        },
+        formatter: c => c.getValue() ? "Sim" : "Não" },
       { title:"Vencimento", field:"vencimento", width:105,
         headerFilter: "input", headerFilterFunc: likeCI },
       { title:"Ref Venc", field:"benchmark_vencimento", width:105,
