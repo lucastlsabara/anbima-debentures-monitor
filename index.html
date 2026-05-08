@@ -291,10 +291,10 @@
   <div class="panel">
     <div class="controls">
       <label>Data Anterior:
-        <input type="text" id="vis-date-anterior" placeholder="YYYY-MM-DD">
+        <input type="text" id="vis-date-anterior" placeholder="DD-MM-YYYY">
       </label>
       <label>Data Atual:
-        <input type="text" id="vis-date-atual" placeholder="YYYY-MM-DD">
+        <input type="text" id="vis-date-atual" placeholder="DD-MM-YYYY">
       </label>
     </div>
   </div>
@@ -337,10 +337,10 @@
   <div class="panel">
     <div class="controls filter-row">
       <label>Data Anterior:
-        <input type="text" id="disp-date-anterior" placeholder="YYYY-MM-DD">
+        <input type="text" id="disp-date-anterior" placeholder="DD-MM-YYYY">
       </label>
       <label>Data Atual:
-        <input type="text" id="disp-date-atual" placeholder="YYYY-MM-DD">
+        <input type="text" id="disp-date-atual" placeholder="DD-MM-YYYY">
       </label>
     </div>
     <div class="controls filter-row">
@@ -386,10 +386,10 @@
   <div class="panel">
     <div class="controls">
       <label>Data Anterior:
-        <input type="text" id="mov-date-anterior" placeholder="YYYY-MM-DD">
+        <input type="text" id="mov-date-anterior" placeholder="DD-MM-YYYY">
       </label>
       <label>Data Atual:
-        <input type="text" id="mov-date-atual" placeholder="YYYY-MM-DD">
+        <input type="text" id="mov-date-atual" placeholder="DD-MM-YYYY">
       </label>
       <label>Indexador:
         <select id="mov-idx"><option value="">Todos</option></select>
@@ -409,10 +409,10 @@
   <div class="panel">
     <div class="controls filter-row">
       <label>Data Inicial:
-        <input type="text" id="tp-date-anterior" placeholder="YYYY-MM-DD">
+        <input type="text" id="tp-date-anterior" placeholder="DD-MM-YYYY">
       </label>
       <label>Data Final:
-        <input type="text" id="tp-date-atual" placeholder="YYYY-MM-DD">
+        <input type="text" id="tp-date-atual" placeholder="DD-MM-YYYY">
       </label>
     </div>
   </div>
@@ -454,10 +454,10 @@
   <div class="panel">
     <div class="controls">
       <label>Data Anterior:
-        <input type="text" id="hm-date-anterior" placeholder="YYYY-MM-DD">
+        <input type="text" id="hm-date-anterior" placeholder="DD-MM-YYYY">
       </label>
       <label>Data Atual:
-        <input type="text" id="hm-date-atual" placeholder="YYYY-MM-DD">
+        <input type="text" id="hm-date-atual" placeholder="DD-MM-YYYY">
       </label>
       <label>Indexador:
         <select id="heat-idx">
@@ -479,6 +479,16 @@
       </div>
       <div class="exclusion-chips" id="heat-exclude-chips"></div>
     </div>
+  </div>
+  <div class="panel">
+    <h2>Evolução dos spreads médios — setor</h2>
+    <div id="hm-evol-sub" class="muted" style="font-size:11px;margin:-4px 0 8px"></div>
+    <div id="chart-heat-evolucao" class="chart-tall"></div>
+  </div>
+  <div class="panel">
+    <h2>Waterfall — variação do spread médio por setor</h2>
+    <div id="hm-wf-sub" class="muted" style="font-size:11px;margin:-4px 0 8px"></div>
+    <div id="chart-heat-waterfall" class="chart-tall"></div>
   </div>
 </section>
 
@@ -527,7 +537,7 @@ const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
 // Substituído pelo build com hash dos JSONs em data/. Em dev (template puro)
 // fica vazio e o cache do browser dita a frescor. Em produção, ?v=<hash>
 // invalida o cache do GitHub Pages quando snapshots novos chegam.
-const BUILD_VERSION = "6258d4b1bc72";
+const BUILD_VERSION = "27aa6719d67d";
 
 const cache = new Map();
 async function loadJSON(path) {
@@ -543,17 +553,7 @@ async function loadJSON(path) {
 function brDate(iso) {
   if (!iso) return "—";
   const [y, m, d] = iso.split("-");
-  return `${d}/${m}/${y}`;
-}
-
-const _MESES_PT = [
-  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
-];
-function brDateLong(iso) {
-  if (!iso) return "—";
-  const [, m, d] = iso.split("-");
-  return `${parseInt(d, 10)} de ${_MESES_PT[parseInt(m, 10) - 1]}`;
+  return `${d}-${m}-${y}`;
 }
 
 // Item 9: Default Data Anterior = data imediatamente anterior à atual em `dates`.
@@ -624,7 +624,7 @@ async function init() {
     hdr.textContent = "Última Atualização em —";
     return;
   }
-  hdr.textContent = "Última Atualização em " + brDateLong(MANIFEST.latest);
+  hdr.textContent = "Última Atualização em " + brDate(MANIFEST.latest);
   activateTab((location.hash || "#/visao").replace(/^#\//, ""));
 }
 
@@ -651,11 +651,11 @@ async function renderVisao() {
   if (VIS_FP_ATUAL) VIS_FP_ATUAL.destroy();
   if (VIS_FP_ANTERIOR) VIS_FP_ANTERIOR.destroy();
   VIS_FP_ATUAL = flatpickr("#vis-date-atual", {
-    dateFormat:"Y-m-d", enable: dates, defaultDate: VIS_DATE_ATUAL,
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: dates, defaultDate: VIS_DATE_ATUAL,
     onChange: (_, d) => { if (d) onVisDateChange("atual", d); },
   });
   VIS_FP_ANTERIOR = flatpickr("#vis-date-anterior", {
-    dateFormat:"Y-m-d", enable: _visAnteriorEnable(VIS_DATE_ATUAL),
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: _visAnteriorEnable(VIS_DATE_ATUAL),
     defaultDate: VIS_DATE_ANTERIOR || undefined,
     onChange: (_, d) => { if (d) onVisDateChange("anterior", d); },
   });
@@ -997,11 +997,11 @@ async function renderDispersao() {
   if (DISP_FP_ATUAL) DISP_FP_ATUAL.destroy();
   if (DISP_FP_ANTERIOR) DISP_FP_ANTERIOR.destroy();
   DISP_FP_ATUAL = flatpickr("#disp-date-atual", {
-    dateFormat:"Y-m-d", enable: dates, defaultDate: DISP_DATE_ATUAL,
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: dates, defaultDate: DISP_DATE_ATUAL,
     onChange: (_, d) => { if (d) onDispDateChange("atual", d); },
   });
   DISP_FP_ANTERIOR = flatpickr("#disp-date-anterior", {
-    dateFormat:"Y-m-d", enable: dates.filter(d => d < DISP_DATE_ATUAL),
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: dates.filter(d => d < DISP_DATE_ATUAL),
     defaultDate: DISP_DATE_ANTERIOR || undefined,
     onChange: (_, d) => { if (d) onDispDateChange("anterior", d); },
   });
@@ -1444,11 +1444,11 @@ async function renderMovimentacoes() {
   if (MOV_FP_ATUAL) MOV_FP_ATUAL.destroy();
   if (MOV_FP_ANTERIOR) MOV_FP_ANTERIOR.destroy();
   MOV_FP_ATUAL = flatpickr("#mov-date-atual", {
-    dateFormat: "Y-m-d", enable: dates, defaultDate: MOV_DATE_ATUAL,
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: dates, defaultDate: MOV_DATE_ATUAL,
     onChange: (_, dstr) => onMovDateChange("atual", dstr),
   });
   MOV_FP_ANTERIOR = flatpickr("#mov-date-anterior", {
-    dateFormat: "Y-m-d", enable: _movRefEnable(MOV_DATE_ATUAL),
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: _movRefEnable(MOV_DATE_ATUAL),
     defaultDate: MOV_DATE_ANTERIOR || undefined,
     onChange: (_, dstr) => onMovDateChange("anterior", dstr),
   });
@@ -1597,10 +1597,11 @@ function buildMovTable() {
         headerFilterParams: { values: idxOpts, clearable: true },
         headerFilterFunc: "=" },
       { title:"Vencimento", field:"vencimento", width:105,
-        headerFilter: "input", headerFilterFunc: likeCI },
+        headerFilter: "input", headerFilterFunc: likeCI,
+        formatter: c => brDate(c.getValue()) },
       { title:"Ref Venc", field:"benchmark_vencimento", width:105,
         headerFilter: "input", headerFilterFunc: likeCI,
-        formatter: c => c.getValue() || "-" },
+        formatter: c => c.getValue() ? brDate(c.getValue()) : "-" },
       { title:"Duration", field:"duration_anos", width:90, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
         headerFilterPlaceholder: ">2",
@@ -1700,12 +1701,16 @@ const HEAT_TOTAL_SPACER = "";
 
 function _heatGridFor(papers) {
   // Retorna { means, counts, rows } indexado por linha (setores + spacer +
-  // TODOS) × bucket (colunas). A linha TODOS agrega todos os papéis que
-  // passaram pelo filtro de indexador, independente de setor.
+  // TODOS) × bucket (colunas + spacer + TODOS). A linha/coluna TODOS agrega
+  // todos os papéis que passaram pelo filtro de indexador. A coluna agregada
+  // segue a mesma lógica da linha: avg sobre o pool real de papéis (não
+  // média-de-médias), o que é equivalente a uma média ponderada por contagem.
   const setores = HEAT.setores || [];
   const buckets = _heatBuckets();
-  const acc = {};      // key "setor|j" -> array
-  const total = {};    // j -> array
+  const acc = {};       // key "setor|j" -> array
+  const total = {};     // j -> array (coluna agregada)
+  const totalRow = {};  // setor -> array (coluna Todos)
+  const totalAll = [];  // global (cell Todos×Todos)
   for (const p of papers) {
     if (HEAT_IDX !== "ambos" && p.i !== HEAT_IDX) continue;
     if (HEAT_EXCLUDE.size && HEAT_EXCLUDE.has(normEmissor(p.e))) continue;
@@ -1720,20 +1725,38 @@ function _heatGridFor(papers) {
     acc[k].push(p.sp);
     if (!total[bi]) total[bi] = [];
     total[bi].push(p.sp);
+    if (!totalRow[p.s]) totalRow[p.s] = [];
+    totalRow[p.s].push(p.sp);
+    totalAll.push(p.sp);
   }
   const _avg = arr => arr && arr.length
     ? Math.round((arr.reduce((a,b)=>a+b,0) / arr.length) * 10000) / 10000
     : null;
-  const meansSet = setores.map(s => buckets.map((_, j) => _avg(acc[s + "|" + j])));
-  const countsSet = setores.map(s => buckets.map((_, j) => {
-    const arr = acc[s + "|" + j];
-    return arr ? arr.length : 0;
-  }));
+  const meansSet = setores.map(s => {
+    const row = buckets.map((_, j) => _avg(acc[s + "|" + j]));
+    row.push(null);                // spacer column
+    row.push(_avg(totalRow[s]));   // Todos
+    return row;
+  });
+  const countsSet = setores.map(s => {
+    const row = buckets.map((_, j) => {
+      const arr = acc[s + "|" + j];
+      return arr ? arr.length : 0;
+    });
+    row.push(0);
+    row.push(totalRow[s] ? totalRow[s].length : 0);
+    return row;
+  });
   const meansTotal = buckets.map((_, j) => _avg(total[j]));
+  meansTotal.push(null);
+  meansTotal.push(_avg(totalAll));
   const countsTotal = buckets.map((_, j) => total[j] ? total[j].length : 0);
+  countsTotal.push(0);
+  countsTotal.push(totalAll.length);
   // Spacer = linha de nulos entre setores e TODOS para criar separador visual.
-  const spacerRow = buckets.map(() => null);
-  const spacerCounts = buckets.map(() => 0);
+  const ncols = buckets.length + 2;
+  const spacerRow = Array(ncols).fill(null);
+  const spacerCounts = Array(ncols).fill(0);
   const rows = [...setores, HEAT_TOTAL_SPACER, HEAT_TOTAL_LABEL];
   const means = [...meansSet, spacerRow, meansTotal];
   const counts = [...countsSet, spacerCounts, countsTotal];
@@ -1770,8 +1793,10 @@ function _heatDeltaGrid(curPapers, oldPapers) {
   const A = _indexPapers(curPapers);
   const B = _indexPapers(oldPapers);
 
-  const acc = {};    // "setor|j" -> [delta_paper, ...]
-  const total = {};  // j -> [delta_paper, ...]
+  const acc = {};       // "setor|j" -> [delta_paper, ...]
+  const total = {};     // j -> [delta_paper, ...]
+  const totalRow = {};  // setor -> [delta_paper, ...] (coluna Todos)
+  const totalAll = [];  // global
   for (const c in A) {
     const a = A[c];
     const b = B[c];
@@ -1784,20 +1809,38 @@ function _heatDeltaGrid(curPapers, oldPapers) {
     acc[k].push(delta);
     if (!total[a.bi]) total[a.bi] = [];
     total[a.bi].push(delta);
+    if (!totalRow[a.s]) totalRow[a.s] = [];
+    totalRow[a.s].push(delta);
+    totalAll.push(delta);
   }
 
   const _avg = arr => arr && arr.length
     ? Math.round((arr.reduce((x, y) => x + y, 0) / arr.length) * 100000) / 100000
     : null;
-  const meansSet = setores.map(s => buckets.map((_, j) => _avg(acc[s + "|" + j])));
-  const countsSet = setores.map(s => buckets.map((_, j) => {
-    const arr = acc[s + "|" + j];
-    return arr ? arr.length : 0;
-  }));
+  const meansSet = setores.map(s => {
+    const row = buckets.map((_, j) => _avg(acc[s + "|" + j]));
+    row.push(null);
+    row.push(_avg(totalRow[s]));
+    return row;
+  });
+  const countsSet = setores.map(s => {
+    const row = buckets.map((_, j) => {
+      const arr = acc[s + "|" + j];
+      return arr ? arr.length : 0;
+    });
+    row.push(0);
+    row.push(totalRow[s] ? totalRow[s].length : 0);
+    return row;
+  });
   const meansTotal = buckets.map((_, j) => _avg(total[j]));
+  meansTotal.push(null);
+  meansTotal.push(_avg(totalAll));
   const countsTotal = buckets.map((_, j) => total[j] ? total[j].length : 0);
-  const spacerRow = buckets.map(() => null);
-  const spacerCounts = buckets.map(() => 0);
+  countsTotal.push(0);
+  countsTotal.push(totalAll.length);
+  const ncols = buckets.length + 2;
+  const spacerRow = Array(ncols).fill(null);
+  const spacerCounts = Array(ncols).fill(0);
   const rows = [...setores, HEAT_TOTAL_SPACER, HEAT_TOTAL_LABEL];
   const means = [...meansSet, spacerRow, meansTotal];
   const counts = [...countsSet, spacerCounts, countsTotal];
@@ -1812,11 +1855,11 @@ async function renderHeatmap() {
   if (HM_FP_ATUAL) HM_FP_ATUAL.destroy();
   if (HM_FP_ANTERIOR) HM_FP_ANTERIOR.destroy();
   HM_FP_ATUAL = flatpickr("#hm-date-atual", {
-    dateFormat:"Y-m-d", enable: dates, defaultDate: HM_DATE_ATUAL,
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: dates, defaultDate: HM_DATE_ATUAL,
     onChange: (_, d) => { if (d) onHmDateChange("atual", d); },
   });
   HM_FP_ANTERIOR = flatpickr("#hm-date-anterior", {
-    dateFormat:"Y-m-d", enable: dates.filter(d => d < HM_DATE_ATUAL),
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: dates.filter(d => d < HM_DATE_ATUAL),
     defaultDate: HM_DATE_ANTERIOR || undefined,
     onChange: (_, d) => { if (d) onHmDateChange("anterior", d); },
   });
@@ -1983,7 +2026,10 @@ function drawHeatmap() {
     root.innerHTML = '<div class="empty">Sem snapshot na Data Atual.</div>';
     return;
   }
-  const buckets = _heatBuckets().map(b => b[0]);
+  // Colunas: buckets + spacer ("") + agregado ("Todos"). Espelha a logica de
+  // linhas (HEAT_TOTAL_SPACER + HEAT_TOTAL_LABEL no fim) para criar separador
+  // visual entre os buckets de duration e a coluna agregada.
+  const buckets = [..._heatBuckets().map(b => b[0]), HEAT_TOTAL_SPACER, HEAT_TOTAL_LABEL];
   const curGrid = _heatGridFor(cur.papers || []);
   const setores = curGrid.rows;
   let z, suffix, title;
@@ -2055,6 +2101,192 @@ function drawHeatmap() {
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { autorange:"reversed" }),
   });
   Plotly.newPlot("chart-heatmap", [trace], layout, PLOTLY_CONFIG);
+  drawHeatEvolucao();
+  drawHeatWaterfall();
+}
+
+// Paleta estavel por setor — garante a mesma cor no line chart e no waterfall.
+// 13 setores na ANBIMA; ciclamos a paleta padrao do Plotly se passar disso.
+const _HEAT_COLORWAY = [
+  "#7facff", "#ffb480", "#3aa66c", "#dc5752", "#b388ff",
+  "#a0735a", "#f48fb1", "#9aa0a6", "#d4d04b", "#4dd0e1",
+  "#ff8a65", "#9ccc65", "#ba68c8",
+];
+function _heatColorFor(setor) {
+  const setores = HEAT?.setores || [];
+  const i = setores.indexOf(setor);
+  return _HEAT_COLORWAY[(i < 0 ? 0 : i) % _HEAT_COLORWAY.length];
+}
+
+function _heatFilteredPapers(snap) {
+  if (!snap) return [];
+  const out = [];
+  for (const p of (snap.papers || [])) {
+    if (HEAT_IDX !== "ambos" && p.i !== HEAT_IDX) continue;
+    if (HEAT_EXCLUDE.size && HEAT_EXCLUDE.has(normEmissor(p.e))) continue;
+    out.push(p);
+  }
+  return out;
+}
+
+function _heatSectorAvgsForDate(date) {
+  // setor -> { avg, n } para a data, depois de filtros de indexador e exclusao.
+  const acc = {};
+  for (const p of _heatFilteredPapers(HEAT.by_date[date])) {
+    if (!acc[p.s]) acc[p.s] = [];
+    acc[p.s].push(p.sp);
+  }
+  const out = {};
+  for (const s in acc) {
+    const arr = acc[s];
+    out[s] = { avg: arr.reduce((a, b) => a + b, 0) / arr.length, n: arr.length };
+  }
+  return out;
+}
+
+function _heatGlobalAvgForDate(date) {
+  const arr = _heatFilteredPapers(HEAT.by_date[date]).map(p => p.sp);
+  if (!arr.length) return null;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+function _heatDatesInRange() {
+  const dates = HEAT.dates || [];
+  const a = HM_DATE_ANTERIOR;
+  const b = HM_DATE_ATUAL;
+  if (!a || !b) return [];
+  return dates.filter(d => d >= a && d <= b);
+}
+
+function drawHeatEvolucao() {
+  // Item 3: line chart com a evolucao do spread medio por setor no
+  // intervalo [Data Anterior, Data Atual]. Spread medio do setor = media
+  // simples dos spreads dos papeis daquele setor que passam HEAT_IDX +
+  // HEAT_EXCLUDE — mesma logica do heatmap. Setores sem papeis sobreviventes
+  // nao aparecem (mesmo efeito que "excluir do calculo" propaga aqui).
+  const root = document.getElementById("chart-heat-evolucao");
+  const sub = document.getElementById("hm-evol-sub");
+  const dateRange = _heatDatesInRange();
+  if (sub) {
+    sub.textContent = dateRange.length
+      ? `${brDate(dateRange[0])} a ${brDate(dateRange[dateRange.length - 1])}`
+      : "Selecione Data Anterior e Data Atual.";
+  }
+  if (dateRange.length < 2) {
+    Plotly.purge(root);
+    root.innerHTML = '<div class="empty">Selecione um intervalo com pelo menos 2 datas.</div>';
+    return;
+  }
+  const setores = HEAT.setores || [];
+  const presentes = new Set();
+  const series = {};
+  for (const s of setores) series[s] = [];
+  for (const d of dateRange) {
+    const avgs = _heatSectorAvgsForDate(d);
+    for (const s of setores) {
+      const v = avgs[s] ? avgs[s].avg : null;
+      series[s].push(v);
+      if (v != null) presentes.add(s);
+    }
+  }
+  const xLabels = dateRange.map(brDate);
+  const traces = setores
+    .filter(s => presentes.has(s))
+    .map(s => ({
+      type: "scatter",
+      mode: "lines+markers",
+      name: s,
+      x: xLabels,
+      y: series[s],
+      line: { width: 2, color: _heatColorFor(s) },
+      marker: { size: 5, color: _heatColorFor(s) },
+      connectgaps: true,
+      hovertemplate: `<b>${escapeHtml(s)}</b><br>%{x}<br>%{y:.2f} pp<extra></extra>`,
+    }));
+  if (!traces.length) {
+    Plotly.purge(root);
+    root.innerHTML = '<div class="empty">Sem papeis apos filtros.</div>';
+    return;
+  }
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    margin: { l: 50, r: 18, t: 12, b: 80 },
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title: "Data", type: "category" }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title: "Spread médio (pp)" }),
+    legend: { orientation: "h", y: -0.22, font: { size: 10 } },
+    hovermode: "closest",
+  });
+  Plotly.newPlot(root, traces, layout, PLOTLY_CONFIG);
+}
+
+function drawHeatWaterfall() {
+  // Item 4: waterfall mostrando a decomposicao da variacao do spread medio
+  // global de Data Anterior para Data Atual.
+  //
+  // Decomposicao: spread_global = sum_s (peso_s * avg_s), onde
+  //   peso_s = n_s / n_total. A contribuicao do setor s ao delta total e
+  //   contrib_s = (peso_s_atual * avg_s_atual) - (peso_s_anterior * avg_s_anterior),
+  // e sum_s contrib_s = avg_global_atual - avg_global_anterior — ou seja, o
+  // waterfall fecha exatamente. Captura mudancas de spread E mudancas de
+  // composicao do pool simultaneamente.
+  const root = document.getElementById("chart-heat-waterfall");
+  const sub = document.getElementById("hm-wf-sub");
+  if (!HM_DATE_ANTERIOR || !HM_DATE_ATUAL) {
+    if (sub) sub.textContent = "Selecione Data Anterior e Data Atual.";
+    Plotly.purge(root);
+    root.innerHTML = '<div class="empty">Selecione Data Anterior e Data Atual.</div>';
+    return;
+  }
+  if (sub) sub.textContent = `De ${brDate(HM_DATE_ANTERIOR)} para ${brDate(HM_DATE_ATUAL)}`;
+
+  const ant = _heatSectorAvgsForDate(HM_DATE_ANTERIOR);
+  const atu = _heatSectorAvgsForDate(HM_DATE_ATUAL);
+  const nAnt = Object.values(ant).reduce((a, x) => a + x.n, 0);
+  const nAtu = Object.values(atu).reduce((a, x) => a + x.n, 0);
+  if (!nAnt || !nAtu) {
+    Plotly.purge(root);
+    root.innerHTML = '<div class="empty">Snapshot ausente em uma das datas.</div>';
+    return;
+  }
+  const avgAnt = _heatGlobalAvgForDate(HM_DATE_ANTERIOR);
+  const avgAtu = _heatGlobalAvgForDate(HM_DATE_ATUAL);
+
+  const setoresUnion = (HEAT.setores || []).filter(s => ant[s] || atu[s]);
+  const contribs = setoresUnion.map(s => {
+    const a = ant[s] ? (ant[s].avg * ant[s].n / nAnt) : 0;
+    const b = atu[s] ? (atu[s].avg * atu[s].n / nAtu) : 0;
+    return { s, contrib: b - a };
+  });
+  // Maior modulo primeiro — leitura natural (drivers no topo).
+  contribs.sort((x, y) => Math.abs(y.contrib) - Math.abs(x.contrib));
+
+  const x = ["Anterior", ...contribs.map(c => c.s), "Atual"];
+  const y = [avgAnt, ...contribs.map(c => c.contrib), 0];
+  const measure = ["absolute", ...contribs.map(() => "relative"), "total"];
+  const text = [
+    avgAnt.toFixed(2) + " pp",
+    ...contribs.map(c => (c.contrib >= 0 ? "+" : "") + (c.contrib * 100).toFixed(1) + " bps"),
+    avgAtu.toFixed(2) + " pp",
+  ];
+
+  const trace = {
+    type: "waterfall",
+    orientation: "v",
+    x, y, measure, text,
+    textposition: "outside",
+    hovertemplate:
+      "<b>%{x}</b><br>Contribuição: %{y:.4f} pp<extra></extra>",
+    connector: { line: { color: "#3a4150", width: 1, dash: "dot" } },
+    increasing: { marker: { color: "#dc5752" } },  // spread abriu
+    decreasing: { marker: { color: "#3aa66c" } },  // spread comprimiu
+    totals: { marker: { color: "#7facff" } },
+  };
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    margin: { l: 50, r: 18, t: 12, b: 110 },
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title: "", tickangle: -25 }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title: "Spread médio (pp)" }),
+    showlegend: false,
+  });
+  Plotly.newPlot(root, [trace], layout, PLOTLY_CONFIG);
 }
 
 /* ============================================================
@@ -2122,12 +2354,12 @@ async function renderTitulosPublicos() {
   if (TP_FP_ATUAL) TP_FP_ATUAL.destroy();
   if (TP_FP_ANTERIOR) TP_FP_ANTERIOR.destroy();
   TP_FP_ANTERIOR = flatpickr("#tp-date-anterior", {
-    dateFormat: "Y-m-d", enable: _tpAnteriorEnable(TP_DATE_ATUAL),
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: _tpAnteriorEnable(TP_DATE_ATUAL),
     defaultDate: TP_DATE_ANTERIOR || undefined,
     onChange: (_, dstr) => onTpDateChange("anterior", dstr),
   });
   TP_FP_ATUAL = flatpickr("#tp-date-atual", {
-    dateFormat: "Y-m-d", enable: _tpAtualEnable(TP_DATE_ANTERIOR),
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: _tpAtualEnable(TP_DATE_ANTERIOR),
     defaultDate: TP_DATE_ATUAL,
     onChange: (_, dstr) => onTpDateChange("atual", dstr),
   });
