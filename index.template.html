@@ -243,6 +243,17 @@
     color:var(--accent); font-weight:600; margin-right:6px;
     font-variant-numeric:tabular-nums;
   }
+  .exclusion-suggestions .ex-sug-tag {
+    display:inline-block; min-width:18px; text-align:center;
+    padding:0 5px; margin-right:8px; border-radius:3px;
+    font-size:10px; font-weight:700; letter-spacing:.05em;
+    vertical-align:1px;
+  }
+  .exclusion-suggestions .ex-sug-tag.t { background:#2b3a55; color:#9bbcff; }
+  .exclusion-suggestions .ex-sug-tag.e { background:#3a2f4d; color:#c9a6ff; }
+  .exclusion-suggestions .ex-sug-meta {
+    color:var(--muted); font-size:11px; margin-left:6px;
+  }
   .exclusion-chips {
     display:flex; gap:6px; flex-wrap:wrap; align-items:center;
   }
@@ -253,6 +264,12 @@
     padding:4px 8px; border-radius:12px;
     font-size:11.5px;
   }
+  .ex-chip.is-emiss { border-color:#7a5fa8; }
+  .ex-chip-prefix {
+    font-size:10px; font-weight:700; letter-spacing:.05em;
+    color:#c9a6ff;
+  }
+  .ex-chip.is-ticker .ex-chip-prefix { color:#9bbcff; }
   .ex-chip button {
     background:transparent; border:none; color:#ff7a72;
     font-size:14px; line-height:1; cursor:pointer; padding:0 2px;
@@ -1949,13 +1966,22 @@ let HEAT_MODE = "current";
 let HEAT_IDX = "ambos";
 let HM_DATE_ATUAL = null, HM_DATE_ANTERIOR = null;
 let HM_FP_ATUAL = null, HM_FP_ANTERIOR = null;
-// Exclusões guardadas como nome-base do emissor (sem sufixo de oferta).
-// ANBIMA usa sufixos "(*)", "(**)", etc no FINAL do nome para distinguir
-// tipos de oferta (476 vs publica) do mesmo emissor. Tratamos o nome
-// SEM esse sufixo como chave canonica — ao excluir "CSN" excluimos
-// automaticamente "CSN (*)", "CSN (**)" etc. Empresas com nomes-base
-// distintos (ex: "CSN" vs "CSN MINERACAO") permanecem separadas.
-const HEAT_EXCLUDE = new Set();
+// Exclusoes do heatmap em dois sets separados:
+//   HEAT_EXCLUDE_TICKERS    -> codigos de papeis individuais (ex "AMNT15").
+//   HEAT_EXCLUDE_EMISSORES  -> nome-BASE do emissor, sem sufixo "(*)" etc.
+// ANBIMA usa sufixos "(*)", "(**)" no FINAL do nome para distinguir tipos de
+// oferta (476 vs publica) do mesmo emissor. Tratamos o nome sem sufixo como
+// chave canonica — ao excluir "CSN" cobrimos "CSN (*)", "CSN (**)". Empresas
+// com nomes-base distintos (ex: "CSN" vs "CSN MINERACAO") seguem separadas.
+// Filtro final = uniao dos dois sets (papel exclui se ticker OU emissor bate).
+const HEAT_EXCLUDE_TICKERS = new Set();
+const HEAT_EXCLUDE_EMISSORES = new Set();
+
+function _heatIsExcluded(p) {
+  if (HEAT_EXCLUDE_TICKERS.size && p.c && HEAT_EXCLUDE_TICKERS.has(p.c)) return true;
+  if (HEAT_EXCLUDE_EMISSORES.size && HEAT_EXCLUDE_EMISSORES.has(normEmissor(p.e))) return true;
+  return false;
+}
 
 function normEmissor(name) {
   if (!name) return '';
@@ -2005,7 +2031,7 @@ function _heatGridFor(papers) {
   const totalAll = [];  // global (cell Todos×Todos)
   for (const p of papers) {
     if (HEAT_IDX !== "ambos" && p.i !== HEAT_IDX) continue;
-    if (HEAT_EXCLUDE.size && HEAT_EXCLUDE.has(normEmissor(p.e))) continue;
+    if (_heatIsExcluded(p)) continue;
     let bi = -1;
     for (let i = 0; i < buckets.length; i++) {
       const [, lo, hi] = buckets[i];
@@ -2137,19 +2163,51 @@ async function renderHeatmap() {
 }
 
 function _heatPaperIndex() {
-  // Lista de nomes-BASE de emissores (sem sufixo "(*)", "(**)" etc) presentes
-  // em qualquer snapshot do heatmap. Variantes de oferta do mesmo emissor
-  // ficam agrupadas em uma unica entrada do autocomplete.
-  const emissores = new Set();
-  for (const date of (HEAT.dates || [])) {
+  // Indice usado pela busca hibrida do filtro "Excluir do calculo":
+  //   - tickers: 1 entrada por codigo unico, com emissor/setor/duration mais
+  //     recentes (ultimo snapshot em que apareceu). Ignora variacao no tempo
+  //     desses metadados (mudam pouco; e um hint visual, nao calculo).
+  //   - emissores: nome-BASE -> { count: papeis distintos (codigos unicos) }.
+  // Evita varrer HEAT.by_date toda vez na busca: monta uma vez por sessao via
+  // cache no flag dataset.bound do input.
+  const tickers = new Map();   // codigo -> { c, e, eBase, s, d }
+  const emissPapers = new Map(); // nome-base -> Set<codigo>
+  const dates = (HEAT.dates || []).slice().sort();
+  for (const date of dates) {
     const snap = HEAT.by_date[date];
     if (!snap || !snap.papers) continue;
     for (const p of snap.papers) {
-      const base = normEmissor(p.e);
-      if (base) emissores.add(base);
+      if (!p.c) continue;
+      const eBase = normEmissor(p.e);
+      tickers.set(p.c, {
+        c: p.c,
+        e: p.e || "",
+        eBase,
+        s: p.s || "",
+        d: typeof p.d === "number" ? p.d : null,
+      });
+      if (eBase) {
+        if (!emissPapers.has(eBase)) emissPapers.set(eBase, new Set());
+        emissPapers.get(eBase).add(p.c);
+      }
     }
   }
-  return { emissores: [...emissores].sort((a, b) => a.localeCompare(b, "pt-BR")) };
+  const tickArr = [...tickers.values()].sort((a, b) =>
+    a.c.localeCompare(b.c, "pt-BR"));
+  const emissArr = [...emissPapers.entries()]
+    .map(([name, set]) => ({ name, count: set.size }))
+    .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  return { tickers: tickArr, emissores: emissArr };
+}
+
+function _heatTickerMeta(t) {
+  // Texto auxiliar usado em sugestao e tooltip do chip da composicao.
+  // Formato: "EMISSOR - Setor - Xa". Campos vazios sao omitidos.
+  const parts = [];
+  if (t.e) parts.push(t.e);
+  if (t.s) parts.push(t.s);
+  if (t.d != null) parts.push(t.d.toFixed(1) + "a");
+  return parts.join(" - ");
 }
 
 function _initHeatExcludeUI() {
@@ -2161,32 +2219,63 @@ function _initHeatExcludeUI() {
     return;
   }
   input.dataset.bound = "1";
+  input.placeholder = "Pesquise ticker ou emissor...";
 
   const idx = _heatPaperIndex();
+  const MAX_PER_KIND = 6;
 
+  // Sugestoes hibridas: ate MAX_PER_KIND tickers (match no codigo) + ate
+  // MAX_PER_KIND emissores (match no nome-base). Tickers vem primeiro porque
+  // sao mais especificos. Itens ja excluidos nao aparecem.
   const computeSuggestions = (term) => {
     const q = term.trim().toLowerCase();
     if (q.length < 2) return [];
-    const out = [];
-    for (const emiss of idx.emissores) {
-      if (HEAT_EXCLUDE.has(emiss)) continue;
-      if (emiss.toLowerCase().includes(q)) {
-        out.push(emiss);
-        if (out.length >= 8) break;
+    const tickHits = [];
+    for (const t of idx.tickers) {
+      if (HEAT_EXCLUDE_TICKERS.has(t.c)) continue;
+      if (t.c.toLowerCase().includes(q)) {
+        tickHits.push(t);
+        if (tickHits.length >= MAX_PER_KIND) break;
       }
     }
-    return out;
+    const emissHits = [];
+    for (const em of idx.emissores) {
+      if (HEAT_EXCLUDE_EMISSORES.has(em.name)) continue;
+      if (em.name.toLowerCase().includes(q)) {
+        emissHits.push(em);
+        if (emissHits.length >= MAX_PER_KIND) break;
+      }
+    }
+    return { tickHits, emissHits };
   };
 
-  const renderSug = (list) => {
-    if (!list.length) {
+  const renderSug = (res) => {
+    if (!res || (!res.tickHits.length && !res.emissHits.length)) {
       sugBox.classList.add("hide");
       sugBox.innerHTML = "";
       return;
     }
-    sugBox.innerHTML = list.map(emiss =>
-      `<div class="ex-sug" data-emiss="${escapeAttr(emiss)}"><span>${escapeHtml(emiss)}</span></div>`
-    ).join("");
+    const parts = [];
+    for (const t of res.tickHits) {
+      const meta = _heatTickerMeta(t);
+      parts.push(
+        `<div class="ex-sug" data-kind="ticker" data-ticker="${escapeAttr(t.c)}">` +
+        `<span class="ex-sug-tag t">T</span>` +
+        `<span class="ex-sug-code">${escapeHtml(t.c)}</span>` +
+        (meta ? `<span class="ex-sug-meta">${escapeHtml(meta)}</span>` : "") +
+        `</div>`
+      );
+    }
+    for (const em of res.emissHits) {
+      parts.push(
+        `<div class="ex-sug" data-kind="emiss" data-emiss="${escapeAttr(em.name)}">` +
+        `<span class="ex-sug-tag e">E</span>` +
+        `<span>${escapeHtml(em.name)}</span>` +
+        `<span class="ex-sug-meta">(${em.count} ${em.count === 1 ? "papel" : "papeis"})</span>` +
+        `</div>`
+      );
+    }
+    sugBox.innerHTML = parts.join("");
     sugBox.classList.remove("hide");
   };
 
@@ -2205,13 +2294,23 @@ function _initHeatExcludeUI() {
     e.preventDefault();
     const term = input.value.trim();
     if (!term) return;
-    const t = normEmissor(term).toLowerCase();
-    let pick = idx.emissores.find(e2 => e2.toLowerCase() === t);
-    if (!pick) {
-      const list = computeSuggestions(term);
-      pick = list[0];
+    // Match exato: ticker tem prioridade sobre emissor (mais especifico).
+    const tNorm = term.toLowerCase();
+    const exactTick = idx.tickers.find(t => t.c.toLowerCase() === tNorm);
+    if (exactTick) {
+      addExclusionTicker(exactTick.c);
+    } else {
+      const eNorm = normEmissor(term).toLowerCase();
+      const exactEmiss = idx.emissores.find(em => em.name.toLowerCase() === eNorm);
+      if (exactEmiss) {
+        addExclusionEmissor(exactEmiss.name);
+      } else {
+        // Fallback: primeira sugestao (ticker antes de emissor).
+        const res = computeSuggestions(term);
+        if (res.tickHits.length) addExclusionTicker(res.tickHits[0].c);
+        else if (res.emissHits.length) addExclusionEmissor(res.emissHits[0].name);
+      }
     }
-    if (pick) _heatAddExclusion(pick);
     input.value = "";
     sugBox.classList.add("hide");
   });
@@ -2220,7 +2319,8 @@ function _initHeatExcludeUI() {
     const row = e.target.closest(".ex-sug");
     if (!row) return;
     e.preventDefault();
-    _heatAddExclusion(row.dataset.emiss);
+    if (row.dataset.kind === "ticker") addExclusionTicker(row.dataset.ticker);
+    else if (row.dataset.kind === "emiss") addExclusionEmissor(row.dataset.emiss);
     input.value = "";
     sugBox.classList.add("hide");
     input.focus();
@@ -2229,7 +2329,10 @@ function _initHeatExcludeUI() {
   chips.addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-remove]");
     if (!btn) return;
-    HEAT_EXCLUDE.delete(btn.dataset.remove);
+    const kind = btn.dataset.kind;
+    const key = btn.dataset.remove;
+    if (kind === "ticker") HEAT_EXCLUDE_TICKERS.delete(key);
+    else if (kind === "emiss") HEAT_EXCLUDE_EMISSORES.delete(key);
     _renderHeatChips();
     drawHeatmap();
   });
@@ -2237,10 +2340,17 @@ function _initHeatExcludeUI() {
   _renderHeatChips();
 }
 
-function _heatAddExclusion(emissor) {
+function addExclusionTicker(codigo) {
+  if (!codigo) return;
+  HEAT_EXCLUDE_TICKERS.add(codigo);
+  _renderHeatChips();
+  drawHeatmap();
+}
+
+function addExclusionEmissor(emissor) {
   const base = normEmissor(emissor);
   if (!base) return;
-  HEAT_EXCLUDE.add(base);
+  HEAT_EXCLUDE_EMISSORES.add(base);
   _renderHeatChips();
   drawHeatmap();
 }
@@ -2248,14 +2358,31 @@ function _heatAddExclusion(emissor) {
 function _renderHeatChips() {
   const chips = document.getElementById("heat-exclude-chips");
   if (!chips) return;
-  if (!HEAT_EXCLUDE.size) {
+  if (!HEAT_EXCLUDE_TICKERS.size && !HEAT_EXCLUDE_EMISSORES.size) {
     chips.innerHTML = "";
     return;
   }
-  chips.innerHTML = [...HEAT_EXCLUDE].map(k =>
-    `<span class="ex-chip">${escapeHtml(k)}` +
-    `<button type="button" data-remove="${escapeAttr(k)}" aria-label="Remover ${escapeAttr(k)}" title="Remover">×</button></span>`
-  ).join("");
+  // Ordem visual: tickers primeiro (alfabetico), depois emissores (alfabetico).
+  const tickArr = [...HEAT_EXCLUDE_TICKERS].sort((a, b) => a.localeCompare(b, "pt-BR"));
+  const emissArr = [...HEAT_EXCLUDE_EMISSORES].sort((a, b) => a.localeCompare(b, "pt-BR"));
+  const parts = [];
+  for (const c of tickArr) {
+    parts.push(
+      `<span class="ex-chip is-ticker">` +
+      `<span class="ex-chip-prefix">T:</span>${escapeHtml(c)}` +
+      `<button type="button" data-kind="ticker" data-remove="${escapeAttr(c)}" ` +
+      `aria-label="Remover ${escapeAttr(c)}" title="Remover">×</button></span>`
+    );
+  }
+  for (const k of emissArr) {
+    parts.push(
+      `<span class="ex-chip is-emiss">` +
+      `<span class="ex-chip-prefix">E:</span>${escapeHtml(k)}` +
+      `<button type="button" data-kind="emiss" data-remove="${escapeAttr(k)}" ` +
+      `aria-label="Remover ${escapeAttr(k)}" title="Remover">×</button></span>`
+    );
+  }
+  chips.innerHTML = parts.join("");
 }
 
 function onHmDateChange(which, d) {
@@ -2374,7 +2501,7 @@ function _heatFilteredPapers(snap) {
   const out = [];
   for (const p of (snap.papers || [])) {
     if (HEAT_IDX !== "ambos" && p.i !== HEAT_IDX) continue;
-    if (HEAT_EXCLUDE.size && HEAT_EXCLUDE.has(normEmissor(p.e))) continue;
+    if (_heatIsExcluded(p)) continue;
     out.push(p);
   }
   return out;
@@ -2562,10 +2689,11 @@ function drawHeatWaterfallDuration() {
   Plotly.newPlot(root, [deltaTrace], layout, PLOTLY_CONFIG);
 }
 
-// Indexa papeis por codigo (codigo -> emissor) aplicando apenas o filtro de
-// indexador. Ignora HEAT_EXCLUDE de proposito: a lista de mudanca de
-// composicao precisa ser estavel para o usuario poder clicar nos chips para
-// adicionar/remover do filtro de exclusao sem que eles desaparecam.
+// Indexa papeis por codigo. Ignora HEAT_EXCLUDE_* de proposito: a lista de
+// mudanca de composicao precisa ser estavel para o usuario poder clicar nos
+// chips para adicionar/remover do filtro de exclusao sem que eles desapareçam.
+// Aplica apenas o filtro de indexador (que altera o universo do heatmap).
+// Retorna Map<codigo, {e, s, d}> com metadados do papel.
 function _heatPapersByCodigo(date) {
   const out = new Map();
   const snap = HEAT.by_date[date];
@@ -2573,16 +2701,20 @@ function _heatPapersByCodigo(date) {
   for (const p of (snap.papers || [])) {
     if (HEAT_IDX !== "ambos" && p.i !== HEAT_IDX) continue;
     if (!p.c) continue;
-    out.set(p.c, p.e);
+    out.set(p.c, {
+      e: p.e || "",
+      s: p.s || "",
+      d: typeof p.d === "number" ? p.d : null,
+    });
   }
   return out;
 }
 
-// Mostra emissores afetados por mudanca de composicao entre as duas datas.
-// Diff e feito a nivel de PAPEL (codigo): saiu = papel em Anterior e nao em
-// Atual; entrou = papel em Atual e nao em Anterior. Listamos os emissores
-// unicos correspondentes; mesmo emissor pode aparecer em ambas listas se
-// teve papel saindo E entrando.
+// Mostra TICKERS afetados por mudanca de composicao entre as duas datas.
+// Diff a nivel de PAPEL (codigo): saiu = codigo em Anterior e nao em Atual;
+// entrou = codigo em Atual e nao em Anterior. Cada chip e um ticker
+// individual (nao agrupado por emissor); hover mostra emissor + setor +
+// duration. Click toggle exclusao individual em HEAT_EXCLUDE_TICKERS.
 function drawHeatComposicao() {
   const wrap = document.getElementById("hm-comp-wrap");
   const title = document.getElementById("hm-comp-title");
@@ -2599,25 +2731,19 @@ function drawHeatComposicao() {
   const ant = _heatPapersByCodigo(HM_DATE_ANTERIOR);
   const atu = _heatPapersByCodigo(HM_DATE_ATUAL);
 
-  // emissor (normalizado) -> Set<codigo> dos papeis que sairam/entraram.
-  const sairam = new Map();
-  const entraram = new Map();
-  for (const [cod, emiss] of ant) {
+  // Lista plana de tickers que sairam/entraram, com metadados para tooltip.
+  const sairam = [];
+  const entraram = [];
+  for (const [cod, meta] of ant) {
     if (atu.has(cod)) continue;
-    const key = normEmissor(emiss);
-    if (!key) continue;
-    if (!sairam.has(key)) sairam.set(key, []);
-    sairam.get(key).push(cod);
+    sairam.push({ c: cod, ...meta });
   }
-  for (const [cod, emiss] of atu) {
+  for (const [cod, meta] of atu) {
     if (ant.has(cod)) continue;
-    const key = normEmissor(emiss);
-    if (!key) continue;
-    if (!entraram.has(key)) entraram.set(key, []);
-    entraram.get(key).push(cod);
+    entraram.push({ c: cod, ...meta });
   }
 
-  if (!sairam.size && !entraram.size) {
+  if (!sairam.length && !entraram.length) {
     wrap.classList.add("hide");
     return;
   }
@@ -2625,40 +2751,39 @@ function drawHeatComposicao() {
   title.textContent =
     `Mudanças de composição entre ${brDate(HM_DATE_ANTERIOR)} e ${brDate(HM_DATE_ATUAL)}`;
 
-  const renderChip = (emiss, codigos) => {
-    const applied = HEAT_EXCLUDE.has(emiss);
-    const codTip = codigos.slice().sort().join(", ");
+  const renderChip = (t) => {
+    const applied = HEAT_EXCLUDE_TICKERS.has(t.c);
+    const tip = _heatTickerMeta(t) || t.c;
     const mark = applied ? '<span class="comp-chip-mark">✓</span>' : "";
     return (
       `<span class="comp-chip${applied ? " applied" : ""}" ` +
-      `data-emiss="${escapeAttr(emiss)}" ` +
-      `title="${escapeAttr(codTip)}">` +
-      `${escapeHtml(emiss)}${mark}` +
+      `data-ticker="${escapeAttr(t.c)}" ` +
+      `title="${escapeAttr(tip)}">` +
+      `${escapeHtml(t.c)}${mark}` +
       `</span>`
     );
   };
-  const renderList = (m) => {
-    if (!m.size) return '<div class="comp-empty">Nenhum.</div>';
-    const arr = [...m.entries()].sort((a, b) =>
-      a[0].localeCompare(b[0], "pt-BR"));
-    return arr.map(([e, codigos]) => renderChip(e, codigos)).join("");
+  const renderList = (arr) => {
+    if (!arr.length) return '<div class="comp-empty">Nenhum.</div>';
+    const sorted = arr.slice().sort((a, b) => a.c.localeCompare(b.c, "pt-BR"));
+    return sorted.map(renderChip).join("");
   };
-  cntOut.textContent = `(${sairam.size})`;
-  cntIn.textContent = `(${entraram.size})`;
+  cntOut.textContent = `(${sairam.length})`;
+  cntIn.textContent = `(${entraram.length})`;
   listOut.innerHTML = renderList(sairam);
   listIn.innerHTML = renderList(entraram);
 
-  // Bind click delegado uma unica vez por container; toggle de exclusao.
+  // Bind click delegado uma unica vez por container; toggle de exclusao por ticker.
   for (const root of [listIn, listOut]) {
     if (root.dataset.bound === "1") continue;
     root.dataset.bound = "1";
     root.addEventListener("click", (e) => {
       const chip = e.target.closest(".comp-chip");
       if (!chip) return;
-      const emiss = chip.dataset.emiss;
-      if (!emiss) return;
-      if (HEAT_EXCLUDE.has(emiss)) HEAT_EXCLUDE.delete(emiss);
-      else HEAT_EXCLUDE.add(emiss);
+      const cod = chip.dataset.ticker;
+      if (!cod) return;
+      if (HEAT_EXCLUDE_TICKERS.has(cod)) HEAT_EXCLUDE_TICKERS.delete(cod);
+      else HEAT_EXCLUDE_TICKERS.add(cod);
       _renderHeatChips();
       drawHeatmap();
     });
