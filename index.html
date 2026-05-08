@@ -573,6 +573,70 @@ function defaultAnteriorFor(atual, dates) {
   return null;
 }
 
+/* ============================================================
+ *  Sincronização global de Data Atual / Data Anterior entre abas.
+ *  Cada aba tem um picker próprio com lista de datas habilitadas
+ *  específica (Visão Geral usa OVERVIEW.dates, Heatmap usa HEAT.dates,
+ *  etc). Quando o usuário muda a data em uma aba, propagamos para as
+ *  demais via _syncDatesFrom: cada aba recebe a data global e cai na
+ *  data habilitada mais próxima caso a exata não exista no seu calendário.
+ * ============================================================ */
+let GLOBAL_DATE_ATUAL = null;
+let GLOBAL_DATE_ANTERIOR = null;
+let _DATE_SYNCING = false;
+const _DATE_SYNC_REGISTRY = [];
+
+// Procura no array `enabled` a data igual ao alvo; se não existir, devolve a
+// maior data <= alvo; se nenhuma <=, a menor > alvo. Null se `enabled` vazio.
+function _nearestEnabledDate(target, enabled) {
+  if (!target || !enabled || !enabled.length) return null;
+  if (enabled.includes(target)) return target;
+  let bestLE = null, bestGT = null;
+  for (const d of enabled) {
+    if (d <= target) { if (bestLE == null || d > bestLE) bestLE = d; }
+    else if (bestGT == null || d < bestGT) bestGT = d;
+  }
+  return bestLE != null ? bestLE : bestGT;
+}
+
+// Cada aba registra um spec ao concluir o init dos seus pickers:
+// { key, getEnabledAtual(), getEnabledAnteriorFor(atu), applyDates(atu, ant) }.
+function _registerDateSync(spec) {
+  // Substitui spec anterior do mesmo tab (re-inits são possíveis em teoria).
+  const i = _DATE_SYNC_REGISTRY.findIndex(s => s.key === spec.key);
+  if (i >= 0) _DATE_SYNC_REGISTRY[i] = spec; else _DATE_SYNC_REGISTRY.push(spec);
+}
+
+// Propaga o par (atu, ant) — vindo da aba `sourceKey` — para todas as outras
+// abas já carregadas. Cada aba alvo resolve para a data habilitada mais
+// próxima no seu próprio calendário.
+function _syncDatesFrom(sourceKey, atu, ant) {
+  if (_DATE_SYNCING) return;
+  GLOBAL_DATE_ATUAL = atu || null;
+  GLOBAL_DATE_ANTERIOR = ant || null;
+  _DATE_SYNCING = true;
+  try {
+    for (const t of _DATE_SYNC_REGISTRY) {
+      if (t.key === sourceKey) continue;
+      let enAtu;
+      try { enAtu = t.getEnabledAtual(); } catch (_) { continue; }
+      if (!enAtu || !enAtu.length) continue;
+      const tAtu = _nearestEnabledDate(atu, enAtu);
+      if (!tAtu) continue;
+      let tAnt = null;
+      if (ant) {
+        let enAnt;
+        try { enAnt = t.getEnabledAnteriorFor(tAtu); } catch (_) { enAnt = []; }
+        tAnt = _nearestEnabledDate(ant, enAnt);
+      }
+      try { t.applyDates(tAtu, tAnt); }
+      catch (e) { console.error("[date-sync]", t.key, e); }
+    }
+  } finally {
+    _DATE_SYNCING = false;
+  }
+}
+
 // Item 3: cor de texto adaptativa por luminância YIQ (mesma lógica do PR #31
 // no heatmap). Retorna "#0e1116" para fundos claros, "#e6e9ef" para escuros.
 function _hex2rgb(h) {
@@ -656,8 +720,22 @@ let VIS_DATE_ATUAL = null, VIS_DATE_ANTERIOR = null;
 async function renderVisao() {
   OVERVIEW = await loadJSON("data/overview.json");
   const dates = OVERVIEW.dates;
-  VIS_DATE_ATUAL = OVERVIEW.latest;
-  VIS_DATE_ANTERIOR = defaultAnteriorFor(VIS_DATE_ATUAL, dates);
+  // Adota datas globais (de outras abas) se já houver, com fallback para
+  // a data habilitada mais próxima neste calendário.
+  if (GLOBAL_DATE_ATUAL) {
+    VIS_DATE_ATUAL = _nearestEnabledDate(GLOBAL_DATE_ATUAL, dates) || OVERVIEW.latest;
+    VIS_DATE_ANTERIOR = GLOBAL_DATE_ANTERIOR
+      ? _nearestEnabledDate(GLOBAL_DATE_ANTERIOR, dates.filter(d => d < VIS_DATE_ATUAL))
+      : defaultAnteriorFor(VIS_DATE_ATUAL, dates);
+  } else {
+    VIS_DATE_ATUAL = OVERVIEW.latest;
+    VIS_DATE_ANTERIOR = defaultAnteriorFor(VIS_DATE_ATUAL, dates);
+    // Primeira aba a inicializar: semeia o estado global. Tabs subsequentes
+    // só LEEM (com fallback local), nunca sobrescrevem — evita drift quando
+    // uma aba não tem a data pedida e cai na mais próxima.
+    GLOBAL_DATE_ATUAL = VIS_DATE_ATUAL;
+    GLOBAL_DATE_ANTERIOR = VIS_DATE_ANTERIOR;
+  }
   if (VIS_FP_ATUAL) VIS_FP_ATUAL.destroy();
   if (VIS_FP_ANTERIOR) VIS_FP_ANTERIOR.destroy();
   VIS_FP_ATUAL = flatpickr("#vis-date-atual", {
@@ -668,6 +746,22 @@ async function renderVisao() {
     dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: _visAnteriorEnable(VIS_DATE_ATUAL),
     defaultDate: VIS_DATE_ANTERIOR || undefined,
     onChange: (_, d) => { if (d) onVisDateChange("anterior", d); },
+  });
+  _registerDateSync({
+    key: "vis",
+    getEnabledAtual: () => OVERVIEW ? OVERVIEW.dates : [],
+    getEnabledAnteriorFor: (atu) => _visAnteriorEnable(atu),
+    applyDates: (atu, ant) => {
+      VIS_DATE_ATUAL = atu;
+      VIS_DATE_ANTERIOR = ant;
+      if (VIS_FP_ATUAL) VIS_FP_ATUAL.setDate(atu, false);
+      if (VIS_FP_ANTERIOR) {
+        VIS_FP_ANTERIOR.set("enable", _visAnteriorEnable(atu));
+        if (ant) VIS_FP_ANTERIOR.setDate(ant, false);
+        else VIS_FP_ANTERIOR.clear(false);
+      }
+      drawVisao();
+    },
   });
   drawVisao();
 }
@@ -692,6 +786,7 @@ function onVisDateChange(which, d) {
     VIS_DATE_ANTERIOR = d;
   }
   drawVisao();
+  _syncDatesFrom("vis", VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
 }
 
 function drawVisao() {
@@ -1068,8 +1163,17 @@ const _colorFor = (key, idx) => PALETTE_QUAL[idx % PALETTE_QUAL.length];
 async function renderDispersao() {
   DISP_INDEX = await loadJSON("data/dispersion/_index.json");
   const dates = DISP_INDEX.dates;
-  DISP_DATE_ATUAL = dates[dates.length - 1];
-  DISP_DATE_ANTERIOR = defaultAnteriorFor(DISP_DATE_ATUAL, dates);
+  if (GLOBAL_DATE_ATUAL) {
+    DISP_DATE_ATUAL = _nearestEnabledDate(GLOBAL_DATE_ATUAL, dates) || dates[dates.length - 1];
+    DISP_DATE_ANTERIOR = GLOBAL_DATE_ANTERIOR
+      ? _nearestEnabledDate(GLOBAL_DATE_ANTERIOR, dates.filter(d => d < DISP_DATE_ATUAL))
+      : defaultAnteriorFor(DISP_DATE_ATUAL, dates);
+  } else {
+    DISP_DATE_ATUAL = dates[dates.length - 1];
+    DISP_DATE_ANTERIOR = defaultAnteriorFor(DISP_DATE_ATUAL, dates);
+    GLOBAL_DATE_ATUAL = DISP_DATE_ATUAL;
+    GLOBAL_DATE_ANTERIOR = DISP_DATE_ANTERIOR;
+  }
 
   // Indexador select (item 11: filtro local na própria aba)
   const idxSel = document.getElementById("disp-idx");
@@ -1092,6 +1196,26 @@ async function renderDispersao() {
     dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: dates.filter(d => d < DISP_DATE_ATUAL),
     defaultDate: DISP_DATE_ANTERIOR || undefined,
     onChange: (_, d) => { if (d) onDispDateChange("anterior", d); },
+  });
+  _registerDateSync({
+    key: "disp",
+    getEnabledAtual: () => DISP_INDEX ? DISP_INDEX.dates : [],
+    getEnabledAnteriorFor: (atu) => (DISP_INDEX ? DISP_INDEX.dates : []).filter(d => d < atu),
+    applyDates: (atu, ant) => {
+      const changedAtu = (atu !== DISP_DATE_ATUAL);
+      DISP_DATE_ATUAL = atu;
+      DISP_DATE_ANTERIOR = ant;
+      if (DISP_FP_ATUAL) DISP_FP_ATUAL.setDate(atu, false);
+      if (DISP_FP_ANTERIOR) {
+        DISP_FP_ANTERIOR.set("enable", DISP_INDEX.dates.filter(x => x < atu));
+        if (ant) DISP_FP_ANTERIOR.setDate(ant, false);
+        else DISP_FP_ANTERIOR.clear(false);
+      }
+      timelinePause();
+      if (changedAtu) loadAndRenderDispersion(atu);
+      else drawDispersion();
+      _updatePlayRangeIndicator();
+    },
   });
   document.getElementById("disp-yaxis").addEventListener("change", drawDispersion);
   document.getElementById("disp-idx").addEventListener("change", drawDispersion);
@@ -1130,6 +1254,7 @@ function onDispDateChange(which, d) {
     timelinePause();
   }
   _updatePlayRangeIndicator();
+  _syncDatesFrom("disp", DISP_DATE_ATUAL, DISP_DATE_ANTERIOR);
 }
 
 function _updatePlayRangeIndicator() {
@@ -1515,8 +1640,18 @@ function _movRowsForCurrentDates() {
 async function renderMovimentacoes() {
   MOV_DATA = await loadJSON("data/movements.json");
   const dates = MOV_DATA.dates || [];
-  MOV_DATE_ATUAL = MOV_DATA.latest || dates[dates.length - 1];
-  MOV_DATE_ANTERIOR = defaultAnteriorFor(MOV_DATE_ATUAL, dates);
+  const _movLatest = MOV_DATA.latest || dates[dates.length - 1];
+  if (GLOBAL_DATE_ATUAL) {
+    MOV_DATE_ATUAL = _nearestEnabledDate(GLOBAL_DATE_ATUAL, dates) || _movLatest;
+    MOV_DATE_ANTERIOR = GLOBAL_DATE_ANTERIOR
+      ? _nearestEnabledDate(GLOBAL_DATE_ANTERIOR, dates.filter(d => d < MOV_DATE_ATUAL))
+      : defaultAnteriorFor(MOV_DATE_ATUAL, dates);
+  } else {
+    MOV_DATE_ATUAL = _movLatest;
+    MOV_DATE_ANTERIOR = defaultAnteriorFor(MOV_DATE_ATUAL, dates);
+    GLOBAL_DATE_ATUAL = MOV_DATE_ATUAL;
+    GLOBAL_DATE_ANTERIOR = MOV_DATE_ANTERIOR;
+  }
 
   const idxSel = document.getElementById("mov-idx");
   while (idxSel.options.length > 1) idxSel.remove(1);
@@ -1539,6 +1674,22 @@ async function renderMovimentacoes() {
     dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: _movRefEnable(MOV_DATE_ATUAL),
     defaultDate: MOV_DATE_ANTERIOR || undefined,
     onChange: (_, dstr) => onMovDateChange("anterior", dstr),
+  });
+  _registerDateSync({
+    key: "mov",
+    getEnabledAtual: () => (MOV_DATA && MOV_DATA.dates) || [],
+    getEnabledAnteriorFor: (atu) => _movRefEnable(atu),
+    applyDates: (atu, ant) => {
+      MOV_DATE_ATUAL = atu;
+      MOV_DATE_ANTERIOR = ant;
+      if (MOV_FP_ATUAL) MOV_FP_ATUAL.setDate(atu, false);
+      if (MOV_FP_ANTERIOR) {
+        MOV_FP_ANTERIOR.set("enable", _movRefEnable(atu));
+        if (ant) MOV_FP_ANTERIOR.setDate(ant, false);
+        else MOV_FP_ANTERIOR.clear(false);
+      }
+      refreshMovData();
+    },
   });
 
   buildMovTable();
@@ -1569,6 +1720,7 @@ function onMovDateChange(which, dstr) {
     MOV_DATE_ANTERIOR = dstr || null;
   }
   refreshMovData();
+  _syncDatesFrom("mov", MOV_DATE_ATUAL, MOV_DATE_ANTERIOR);
 }
 
 function refreshMovData() {
@@ -1876,8 +2028,17 @@ function _heatDeltaGrid(curPapers, oldPapers) {
 async function renderHeatmap() {
   HEAT = await loadJSON("data/heatmap_history.json");
   const dates = HEAT.dates || [];
-  HM_DATE_ATUAL = dates[dates.length - 1];
-  HM_DATE_ANTERIOR = defaultAnteriorFor(HM_DATE_ATUAL, dates);
+  if (GLOBAL_DATE_ATUAL) {
+    HM_DATE_ATUAL = _nearestEnabledDate(GLOBAL_DATE_ATUAL, dates) || dates[dates.length - 1];
+    HM_DATE_ANTERIOR = GLOBAL_DATE_ANTERIOR
+      ? _nearestEnabledDate(GLOBAL_DATE_ANTERIOR, dates.filter(d => d < HM_DATE_ATUAL))
+      : defaultAnteriorFor(HM_DATE_ATUAL, dates);
+  } else {
+    HM_DATE_ATUAL = dates[dates.length - 1];
+    HM_DATE_ANTERIOR = defaultAnteriorFor(HM_DATE_ATUAL, dates);
+    GLOBAL_DATE_ATUAL = HM_DATE_ATUAL;
+    GLOBAL_DATE_ANTERIOR = HM_DATE_ANTERIOR;
+  }
   if (HM_FP_ATUAL) HM_FP_ATUAL.destroy();
   if (HM_FP_ANTERIOR) HM_FP_ANTERIOR.destroy();
   HM_FP_ATUAL = flatpickr("#hm-date-atual", {
@@ -1888,6 +2049,22 @@ async function renderHeatmap() {
     dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: dates.filter(d => d < HM_DATE_ATUAL),
     defaultDate: HM_DATE_ANTERIOR || undefined,
     onChange: (_, d) => { if (d) onHmDateChange("anterior", d); },
+  });
+  _registerDateSync({
+    key: "hm",
+    getEnabledAtual: () => (HEAT && HEAT.dates) || [],
+    getEnabledAnteriorFor: (atu) => ((HEAT && HEAT.dates) || []).filter(d => d < atu),
+    applyDates: (atu, ant) => {
+      HM_DATE_ATUAL = atu;
+      HM_DATE_ANTERIOR = ant;
+      if (HM_FP_ATUAL) HM_FP_ATUAL.setDate(atu, false);
+      if (HM_FP_ANTERIOR) {
+        HM_FP_ANTERIOR.set("enable", HEAT.dates.filter(x => x < atu));
+        if (ant) HM_FP_ANTERIOR.setDate(ant, false);
+        else HM_FP_ANTERIOR.clear(false);
+      }
+      drawHeatmap();
+    },
   });
   document.querySelectorAll(".hm-btn").forEach(b => {
     b.addEventListener("click", () => {
@@ -2043,6 +2220,7 @@ function onHmDateChange(which, d) {
     HM_DATE_ANTERIOR = d;
   }
   drawHeatmap();
+  _syncDatesFrom("hm", HM_DATE_ATUAL, HM_DATE_ANTERIOR);
 }
 
 function drawHeatmap() {
@@ -2386,12 +2564,22 @@ async function renderTitulosPublicos() {
     return;
   }
 
-  TP_DATE_ATUAL = TP_DATES_ENABLED[TP_DATES_ENABLED.length - 1];
-  // Default: 5 dias úteis (último + 4 anteriores).
-  const idxFinal = TP_DATES_ENABLED.length - 1;
-  const idxInicial = Math.max(0, idxFinal - (CURVE_WINDOW_DEFAULT - 1));
-  TP_DATE_ANTERIOR = idxInicial < idxFinal
-    ? TP_DATES_ENABLED[idxInicial] : null;
+  if (GLOBAL_DATE_ATUAL) {
+    TP_DATE_ATUAL = _nearestEnabledDate(GLOBAL_DATE_ATUAL, TP_DATES_ENABLED)
+      || TP_DATES_ENABLED[TP_DATES_ENABLED.length - 1];
+    TP_DATE_ANTERIOR = GLOBAL_DATE_ANTERIOR
+      ? _nearestEnabledDate(GLOBAL_DATE_ANTERIOR, _tpAnteriorEnable(TP_DATE_ATUAL))
+      : null;
+  } else {
+    TP_DATE_ATUAL = TP_DATES_ENABLED[TP_DATES_ENABLED.length - 1];
+    // Default: 5 dias úteis (último + 4 anteriores).
+    const idxFinal = TP_DATES_ENABLED.length - 1;
+    const idxInicial = Math.max(0, idxFinal - (CURVE_WINDOW_DEFAULT - 1));
+    TP_DATE_ANTERIOR = idxInicial < idxFinal
+      ? TP_DATES_ENABLED[idxInicial] : null;
+    GLOBAL_DATE_ATUAL = TP_DATE_ATUAL;
+    GLOBAL_DATE_ANTERIOR = TP_DATE_ANTERIOR;
+  }
 
   if (TP_FP_ATUAL) TP_FP_ATUAL.destroy();
   if (TP_FP_ANTERIOR) TP_FP_ANTERIOR.destroy();
@@ -2404,6 +2592,28 @@ async function renderTitulosPublicos() {
     dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: _tpAtualEnable(TP_DATE_ANTERIOR),
     defaultDate: TP_DATE_ATUAL,
     onChange: (_, dstr) => onTpDateChange("atual", dstr),
+  });
+  _registerDateSync({
+    key: "tp",
+    getEnabledAtual: () => TP_DATES_ENABLED || [],
+    getEnabledAnteriorFor: (atu) => _tpAnteriorEnable(atu),
+    applyDates: (atu, ant) => {
+      TP_DATE_ATUAL = atu;
+      TP_DATE_ANTERIOR = ant;
+      // Atualiza enables nos dois lados (TP tem restrição bidirecional) antes
+      // de fixar as datas para evitar setDate em data fora do enable corrente.
+      if (TP_FP_ANTERIOR) {
+        TP_FP_ANTERIOR.set("enable", _tpAnteriorEnable(atu));
+        if (ant) TP_FP_ANTERIOR.setDate(ant, false);
+        else TP_FP_ANTERIOR.clear(false);
+      }
+      if (TP_FP_ATUAL) {
+        TP_FP_ATUAL.set("enable", _tpAtualEnable(ant));
+        TP_FP_ATUAL.setDate(atu, false);
+      }
+      refreshTpView();
+      drawTpCurves();
+    },
   });
 
   buildTpTables();
@@ -2454,6 +2664,7 @@ function onTpDateChange(which, dstr) {
   }
   refreshTpView();
   drawTpCurves();
+  _syncDatesFrom("tp", TP_DATE_ATUAL, TP_DATE_ANTERIOR);
 }
 
 function drawTpCurves() {
