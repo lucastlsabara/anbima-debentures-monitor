@@ -485,6 +485,11 @@
     <div id="hm-evol-sub" class="muted" style="font-size:11px;margin:-4px 0 8px"></div>
     <div id="chart-heat-evolucao" class="chart-tall"></div>
   </div>
+  <div class="panel">
+    <h2>Waterfall — variação do spread médio por setor</h2>
+    <div id="hm-wf-sub" class="muted" style="font-size:11px;margin:-4px 0 8px"></div>
+    <div id="chart-heat-waterfall" class="chart-tall"></div>
+  </div>
 </section>
 
 </main>
@@ -2097,6 +2102,7 @@ function drawHeatmap() {
   });
   Plotly.newPlot("chart-heatmap", [trace], layout, PLOTLY_CONFIG);
   drawHeatEvolucao();
+  drawHeatWaterfall();
 }
 
 // Paleta estavel por setor — garante a mesma cor no line chart e no waterfall.
@@ -2210,6 +2216,77 @@ function drawHeatEvolucao() {
     hovermode: "closest",
   });
   Plotly.newPlot(root, traces, layout, PLOTLY_CONFIG);
+}
+
+function drawHeatWaterfall() {
+  // Item 4: waterfall mostrando a decomposicao da variacao do spread medio
+  // global de Data Anterior para Data Atual.
+  //
+  // Decomposicao: spread_global = sum_s (peso_s * avg_s), onde
+  //   peso_s = n_s / n_total. A contribuicao do setor s ao delta total e
+  //   contrib_s = (peso_s_atual * avg_s_atual) - (peso_s_anterior * avg_s_anterior),
+  // e sum_s contrib_s = avg_global_atual - avg_global_anterior — ou seja, o
+  // waterfall fecha exatamente. Captura mudancas de spread E mudancas de
+  // composicao do pool simultaneamente.
+  const root = document.getElementById("chart-heat-waterfall");
+  const sub = document.getElementById("hm-wf-sub");
+  if (!HM_DATE_ANTERIOR || !HM_DATE_ATUAL) {
+    if (sub) sub.textContent = "Selecione Data Anterior e Data Atual.";
+    Plotly.purge(root);
+    root.innerHTML = '<div class="empty">Selecione Data Anterior e Data Atual.</div>';
+    return;
+  }
+  if (sub) sub.textContent = `De ${brDate(HM_DATE_ANTERIOR)} para ${brDate(HM_DATE_ATUAL)}`;
+
+  const ant = _heatSectorAvgsForDate(HM_DATE_ANTERIOR);
+  const atu = _heatSectorAvgsForDate(HM_DATE_ATUAL);
+  const nAnt = Object.values(ant).reduce((a, x) => a + x.n, 0);
+  const nAtu = Object.values(atu).reduce((a, x) => a + x.n, 0);
+  if (!nAnt || !nAtu) {
+    Plotly.purge(root);
+    root.innerHTML = '<div class="empty">Snapshot ausente em uma das datas.</div>';
+    return;
+  }
+  const avgAnt = _heatGlobalAvgForDate(HM_DATE_ANTERIOR);
+  const avgAtu = _heatGlobalAvgForDate(HM_DATE_ATUAL);
+
+  const setoresUnion = (HEAT.setores || []).filter(s => ant[s] || atu[s]);
+  const contribs = setoresUnion.map(s => {
+    const a = ant[s] ? (ant[s].avg * ant[s].n / nAnt) : 0;
+    const b = atu[s] ? (atu[s].avg * atu[s].n / nAtu) : 0;
+    return { s, contrib: b - a };
+  });
+  // Maior modulo primeiro — leitura natural (drivers no topo).
+  contribs.sort((x, y) => Math.abs(y.contrib) - Math.abs(x.contrib));
+
+  const x = ["Anterior", ...contribs.map(c => c.s), "Atual"];
+  const y = [avgAnt, ...contribs.map(c => c.contrib), 0];
+  const measure = ["absolute", ...contribs.map(() => "relative"), "total"];
+  const text = [
+    avgAnt.toFixed(2) + " pp",
+    ...contribs.map(c => (c.contrib >= 0 ? "+" : "") + (c.contrib * 100).toFixed(1) + " bps"),
+    avgAtu.toFixed(2) + " pp",
+  ];
+
+  const trace = {
+    type: "waterfall",
+    orientation: "v",
+    x, y, measure, text,
+    textposition: "outside",
+    hovertemplate:
+      "<b>%{x}</b><br>Contribuição: %{y:.4f} pp<extra></extra>",
+    connector: { line: { color: "#3a4150", width: 1, dash: "dot" } },
+    increasing: { marker: { color: "#dc5752" } },  // spread abriu
+    decreasing: { marker: { color: "#3aa66c" } },  // spread comprimiu
+    totals: { marker: { color: "#7facff" } },
+  };
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    margin: { l: 50, r: 18, t: 12, b: 110 },
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title: "", tickangle: -25 }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title: "Spread médio (pp)" }),
+    showlegend: false,
+  });
+  Plotly.newPlot(root, [trace], layout, PLOTLY_CONFIG);
 }
 
 /* ============================================================
