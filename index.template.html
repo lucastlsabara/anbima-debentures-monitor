@@ -318,6 +318,18 @@
   .comp-chip .comp-chip-mark {
     font-size:10px; line-height:1; color:var(--accent);
   }
+  .comp-actions {
+    display:flex; justify-content:flex-end; gap:8px;
+    margin-top:10px;
+  }
+  .comp-actions button {
+    background:var(--surface2); color:var(--fg);
+    border:1px solid var(--border-strong); border-radius:4px;
+    padding:5px 10px; font-size:11.5px; font-family:inherit;
+    cursor:pointer;
+  }
+  .comp-actions button:hover:not(:disabled) { border-color:var(--accent); }
+  .comp-actions button:disabled { opacity:0.45; cursor:default; }
   /* Tabulator dark tweaks */
   .tabulator { font-size:12px; background:transparent; border:none; }
   .tabulator .tabulator-header {
@@ -551,6 +563,10 @@
           <div class="comp-col-head">Entraram <span id="hm-comp-count-in" class="comp-count"></span></div>
           <div id="hm-comp-list-in" class="comp-list"></div>
         </div>
+      </div>
+      <div class="comp-actions">
+        <button type="button" id="hm-comp-select-all">Selecionar todos</button>
+        <button type="button" id="hm-comp-clear">Limpar seleção</button>
       </div>
     </div>
     <div class="exclusion-list">
@@ -2715,6 +2731,13 @@ function _heatPapersByCodigo(date) {
 // entrou = codigo em Atual e nao em Anterior. Cada chip e um ticker
 // individual (nao agrupado por emissor); hover mostra emissor + setor +
 // duration. Click toggle exclusao individual em HEAT_EXCLUDE_TICKERS.
+// Conjunto de codigos atualmente listados no bloco "Mudancas de composicao"
+// (uniao de SAIRAM + ENTRARAM). Atualizado a cada drawHeatComposicao para
+// alimentar os botoes "Selecionar todos" / "Limpar selecao", que operam
+// somente sobre essa janela visivel — nao afetam tickers excluidos por
+// outros caminhos (ex: filtro de busca).
+let _HM_COMP_TICKERS = [];
+
 function drawHeatComposicao() {
   const wrap = document.getElementById("hm-comp-wrap");
   const title = document.getElementById("hm-comp-title");
@@ -2725,6 +2748,7 @@ function drawHeatComposicao() {
   if (!wrap) return;
 
   if (!HM_DATE_ANTERIOR || !HM_DATE_ATUAL) {
+    _HM_COMP_TICKERS = [];
     wrap.classList.add("hide");
     return;
   }
@@ -2744,6 +2768,7 @@ function drawHeatComposicao() {
   }
 
   if (!sairam.length && !entraram.length) {
+    _HM_COMP_TICKERS = [];
     wrap.classList.add("hide");
     return;
   }
@@ -2751,9 +2776,28 @@ function drawHeatComposicao() {
   title.textContent =
     `Mudanças de composição entre ${brDate(HM_DATE_ANTERIOR)} e ${brDate(HM_DATE_ATUAL)}`;
 
+  // Conjunto unico de codigos no bloco (sem dupla contagem entre colunas).
+  const seen = new Set();
+  const allTickers = [];
+  for (const t of sairam.concat(entraram)) {
+    if (seen.has(t.c)) continue;
+    seen.add(t.c);
+    allTickers.push(t);
+  }
+  _HM_COMP_TICKERS = allTickers.map(t => t.c);
+
+  // Estado "aplicado" reflete o filtro efetivo (_heatIsExcluded), nao apenas
+  // HEAT_EXCLUDE_TICKERS. Se o ticker esta excluido via emissor, o chip ja
+  // aparece destacado e o tooltip explicita a origem da exclusao.
   const renderChip = (t) => {
-    const applied = HEAT_EXCLUDE_TICKERS.has(t.c);
-    const tip = _heatTickerMeta(t) || t.c;
+    const psyn = { c: t.c, e: t.e, s: t.s, d: t.d, i: null };
+    const applied = _heatIsExcluded(psyn);
+    const inTickers = HEAT_EXCLUDE_TICKERS.has(t.c);
+    const inEmiss = applied && !inTickers;
+    const baseTip = _heatTickerMeta(t) || t.c;
+    const tip = inEmiss
+      ? `${baseTip} — excluído via emissor`
+      : baseTip;
     const mark = applied ? '<span class="comp-chip-mark">✓</span>' : "";
     return (
       `<span class="comp-chip${applied ? " applied" : ""}" ` +
@@ -2786,6 +2830,54 @@ function drawHeatComposicao() {
       else HEAT_EXCLUDE_TICKERS.add(cod);
       _renderHeatChips();
       drawHeatmap();
+    });
+  }
+
+  _updateCompActions();
+}
+
+// Atualiza textos/estado disabled dos botoes "Selecionar todos" / "Limpar
+// selecao" e instala bind unico. Opera apenas sobre _HM_COMP_TICKERS — janela
+// visivel do bloco "Mudancas de composicao", sem afetar exclusoes externas.
+function _updateCompActions() {
+  const btnAll = document.getElementById("hm-comp-select-all");
+  const btnClr = document.getElementById("hm-comp-clear");
+  if (!btnAll || !btnClr) return;
+  const total = _HM_COMP_TICKERS.length;
+  const selected = _HM_COMP_TICKERS.reduce(
+    (n, c) => n + (HEAT_EXCLUDE_TICKERS.has(c) ? 1 : 0), 0);
+  const remaining = total - selected;
+  btnAll.textContent = `Selecionar todos (${total})`;
+  btnAll.disabled = !total || remaining === 0;
+  btnClr.textContent = `Limpar seleção (${selected})`;
+  btnClr.disabled = !selected;
+  if (btnAll.dataset.bound !== "1") {
+    btnAll.dataset.bound = "1";
+    btnAll.addEventListener("click", () => {
+      let changed = false;
+      for (const c of _HM_COMP_TICKERS) {
+        if (!HEAT_EXCLUDE_TICKERS.has(c)) {
+          HEAT_EXCLUDE_TICKERS.add(c);
+          changed = true;
+        }
+      }
+      if (changed) {
+        _renderHeatChips();
+        drawHeatmap();
+      }
+    });
+  }
+  if (btnClr.dataset.bound !== "1") {
+    btnClr.dataset.bound = "1";
+    btnClr.addEventListener("click", () => {
+      let changed = false;
+      for (const c of _HM_COMP_TICKERS) {
+        if (HEAT_EXCLUDE_TICKERS.delete(c)) changed = true;
+      }
+      if (changed) {
+        _renderHeatChips();
+        drawHeatmap();
+      }
     });
   }
 }
