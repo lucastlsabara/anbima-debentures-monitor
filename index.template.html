@@ -709,10 +709,10 @@ function drawVisao() {
   renderHistogram(pair.histogram["DI+"]   || null, "CDI+",  "chart-histogram-cdi");
   renderTopMovers(topm["IPCA+"] || null, "IPCA+", "top-movers-ipca");
   renderTopMovers(topm["DI+"]   || null, "CDI+",  "top-movers-cdi");
-  // Cor unica nos dois graficos diarios (azul-cinza pastel) — comparacao
-  // visual lado-a-lado entre indexadores fica mais limpa.
-  renderDailySpreadBars("IPCA+", "chart-vis-spread-ipca", "#93B5CF");
-  renderDailySpreadBars("DI+",   "chart-vis-spread-cdi",  "#93B5CF");
+  // Mesma cor dos histogramas (--accent) para consistência visual entre
+  // os 4 cards principais de cada indexador.
+  renderDailySpreadBars("IPCA+", "chart-vis-spread-ipca", cssVar("--accent"));
+  renderDailySpreadBars("DI+",   "chart-vis-spread-cdi",  cssVar("--accent"));
   renderCurvesOverlay(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
   renderCurvesPre(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
 }
@@ -767,29 +767,58 @@ function renderKpis(kpisMap) {
   // − delta = apreciou (verde/pos); 0 ou null = neutro. Aplica-se aos
   // cards de MOVIMENTO (Δ bps); cards de NÍVEL ficam neutros.
   const _termCls = v => v == null ? "" : (v > 0 ? "neg" : v < 0 ? "pos" : "");
-  const tIpca = ipca.termometro_med_bps;
-  const tCdi  = cdi.termometro_med_bps;
   const sIpca = ipca.mean_spread_abs_pp;
   const sCdi  = cdi.mean_spread_abs_pp;
+  // Δ Movimento: nível atual − nível anterior (level-to-level), em bps.
+  // Não usamos termometro_med_bps (papel-a-papel matched) porque ele pode
+  // divergir do level diff quando o pool muda entre as datas.
+  const _levelDelta = (idxKey) => {
+    const dAtu = all.data_referencia;
+    const dAnt = all.data_anterior;
+    if (!dAtu || !dAnt) return null;
+    const pAtu = OVERVIEW.by_pair[dAtu];
+    const pAnt = OVERVIEW.by_pair[dAnt];
+    const lvA = pAtu && pAtu.kpis && pAtu.kpis[idxKey]
+      ? pAtu.kpis[idxKey].mean_spread_abs_pp : null;
+    const lvB = pAnt && pAnt.kpis && pAnt.kpis[idxKey]
+      ? pAnt.kpis[idxKey].mean_spread_abs_pp : null;
+    if (lvA == null || lvB == null) return null;
+    return Math.round((lvA - lvB) * 100 * 10) / 10;  // bps, 1 decimal
+  };
+  const tIpca = _levelDelta("IPCA+");
+  const tCdi  = _levelDelta("DI+");
+  const _nFor = (idxKey, date) => {
+    const p = OVERVIEW.by_pair[date];
+    const k = p && p.kpis ? p.kpis[idxKey] : null;
+    return k ? (k.n_com_spread ?? 0) : 0;
+  };
+  const _hint = (idxKey, label) => {
+    const dAtu = all.data_referencia;
+    const dAnt = all.data_anterior;
+    if (!dAnt) return "—";
+    const nA = _nFor(idxKey, dAtu);
+    const nB = _nFor(idxKey, dAnt);
+    return nA + " papéis " + label + " vs " + nB + " em " + brDate(dAnt);
+  };
   const _fmtBpsKpi = v => v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(1) + " bps";
   const cards = [
     // 4 cards: NÍVEL e MOVIMENTO para cada indexador (IPCA+ e CDI+).
     // NÍVEL = spread médio absoluto na Data Atual (em pp).
-    // MOVIMENTO = média (em bps) da variação spread vs Data Anterior.
+    // MOVIMENTO = (nível atual − nível anterior), em bps (level-to-level).
     { label: "Spread médio IPCA+ (nível)",
       val: sIpca == null ? "—" : sIpca.toFixed(2) + "%",
       hint: (ipca.n_spread_abs ?? 0) + " papéis IPCA+ com spread" },
     { label: "Δ Spread médio IPCA+ (movimento)",
       val: _fmtBpsKpi(tIpca),
       cls: _termCls(tIpca),
-      hint: (ipca.n_com_d1 ?? 0) + " papéis IPCA+ com Δ vs " + brDate(all.data_anterior) },
+      hint: _hint("IPCA+", "IPCA+") },
     { label: "Spread médio CDI+ (nível)",
       val: sCdi == null ? "—" : sCdi.toFixed(2) + "%",
       hint: (cdi.n_spread_abs ?? 0) + " papéis CDI+ com spread" },
     { label: "Δ Spread médio CDI+ (movimento)",
       val: _fmtBpsKpi(tCdi),
       cls: _termCls(tCdi),
-      hint: (cdi.n_com_d1 ?? 0) + " papéis CDI+ com Δ vs " + brDate(all.data_anterior) },
+      hint: _hint("DI+", "CDI+") },
   ];
   document.getElementById("kpi-row").innerHTML = cards.map(c =>
     `<div class="kpi"><div class="label">${c.label}</div>` +
@@ -1822,87 +1851,25 @@ function _heatGridFor(papers) {
   return { means, counts, rows };
 }
 
-// Modo delta: usa intersecao de papers (S, B, indexador) entre as duas datas.
-// Garante delta papel-a-papel real, evitando ruido de pools diferentes.
+// Modo delta level-to-level: para cada celula (setor x bucket), calcula
+// mean(spread) na data atual − mean(spread) na data anterior, considerando
+// TODOS os papeis daquele bucket em cada data (nao apenas matched). Evita
+// que a celula 'Todos x Todos' divirja do level diff agregado.
 function _heatDeltaGrid(curPapers, oldPapers) {
-  const setores = HEAT.setores || [];
-  const buckets = _heatBuckets();
-
-  const _bucketOf = (d) => {
-    for (let i = 0; i < buckets.length; i++) {
-      const [, lo, hi] = buckets[i];
-      if (d >= lo && d < hi) return i;
-    }
-    return -1;
-  };
-
-  const _indexPapers = (papers) => {
-    // code -> {bi, s, i, sp}, ja aplicando filtro de indexador e exclusao.
-    const m = {};
-    for (const p of papers) {
-      if (HEAT_IDX !== "ambos" && p.i !== HEAT_IDX) continue;
-      if (HEAT_EXCLUDE.size && HEAT_EXCLUDE.has(normEmissor(p.e))) continue;
-      const bi = _bucketOf(p.d);
-      if (bi < 0) continue;
-      m[p.c] = { bi, s: p.s, i: p.i, sp: p.sp };
-    }
-    return m;
-  };
-
-  const A = _indexPapers(curPapers);
-  const B = _indexPapers(oldPapers);
-
-  const acc = {};       // "setor|j" -> [delta_paper, ...]
-  const total = {};     // j -> [delta_paper, ...]
-  const totalRow = {};  // setor -> [delta_paper, ...] (coluna Todos)
-  const totalAll = [];  // global
-  for (const c in A) {
-    const a = A[c];
-    const b = B[c];
-    if (!b) continue;
-    // So conta se o papel esta no MESMO bucket (S, B, indexador) nas duas datas.
-    if (a.bi !== b.bi || a.s !== b.s || a.i !== b.i) continue;
-    const delta = a.sp - b.sp;
-    const k = a.s + "|" + a.bi;
-    if (!acc[k]) acc[k] = [];
-    acc[k].push(delta);
-    if (!total[a.bi]) total[a.bi] = [];
-    total[a.bi].push(delta);
-    if (!totalRow[a.s]) totalRow[a.s] = [];
-    totalRow[a.s].push(delta);
-    totalAll.push(delta);
-  }
-
-  const _avg = arr => arr && arr.length
-    ? Math.round((arr.reduce((x, y) => x + y, 0) / arr.length) * 100000) / 100000
-    : null;
-  const meansSet = setores.map(s => {
-    const row = buckets.map((_, j) => _avg(acc[s + "|" + j]));
-    row.push(null);
-    row.push(_avg(totalRow[s]));
-    return row;
-  });
-  const countsSet = setores.map(s => {
-    const row = buckets.map((_, j) => {
-      const arr = acc[s + "|" + j];
-      return arr ? arr.length : 0;
-    });
-    row.push(0);
-    row.push(totalRow[s] ? totalRow[s].length : 0);
-    return row;
-  });
-  const meansTotal = buckets.map((_, j) => _avg(total[j]));
-  meansTotal.push(null);
-  meansTotal.push(_avg(totalAll));
-  const countsTotal = buckets.map((_, j) => total[j] ? total[j].length : 0);
-  countsTotal.push(0);
-  countsTotal.push(totalAll.length);
-  const ncols = buckets.length + 2;
-  const spacerRow = Array(ncols).fill(null);
-  const spacerCounts = Array(ncols).fill(0);
-  const rows = [...setores, HEAT_TOTAL_SPACER, HEAT_TOTAL_LABEL];
-  const means = [...meansSet, spacerRow, meansTotal];
-  const counts = [...countsSet, spacerCounts, countsTotal];
+  const curG = _heatGridFor(curPapers);
+  const oldG = _heatGridFor(oldPapers);
+  // _heatGridFor garante o mesmo shape (linhas/colunas) — mesmo conjunto
+  // de setores e buckets (independente da data).
+  const rows = curG.rows;
+  const ncols = curG.means[0] ? curG.means[0].length : 0;
+  const means = curG.means.map((row, ri) => row.map((v, ci) => {
+    const w = (oldG.means[ri] || [])[ci];
+    if (v == null || w == null) return null;
+    return Math.round((v - w) * 100000) / 100000;
+  }));
+  // Contagens nao sao usadas no modo delta (nao mostramos overlay), mas
+  // mantemos shape consistente com o modo current.
+  const counts = curG.means.map(row => row.map(_ => 0));
   return { means, counts, rows };
 }
 
@@ -2244,11 +2211,12 @@ function drawHeatWaterfall() {
   // Maior magnitude primeiro: leitor identifica drivers a olho.
   rows.sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
 
+  const ysSetor = rows.map(r => r.delta * 100);
   const deltaTrace = {
     type: "bar",
     name: "Variação",
     x: rows.map(r => r.s),
-    y: rows.map(r => r.delta * 100),  // pp -> bps
+    y: ysSetor,
     marker: { color: rows.map(r => r.delta >= 0 ? "#dc5752" : "#3aa66c") },
     text: rows.map(r => _fmtBpsContrib(r.delta)),
     textposition: "outside",
@@ -2258,17 +2226,32 @@ function drawHeatWaterfall() {
       "Δ contribuição: %{y:.2f} bps" +
       "<extra></extra>",
   };
+  // Folga no eixo Y: as labels "outside" das barras ficam coladas no topo
+  // (ou no fundo) do plot area; sem padding o texto encosta na borda e fica
+  // sobreposto pelos rotulos do eixo X. 25% do range em cada lado resolve.
+  const yRangeSetor = _waterfallYRange(ysSetor);
 
   const layout = Object.assign(PLOTLY_LAYOUT(), {
     margin: { l: 60, r: 18, t: 20, b: 110 },
     xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { tickangle: -25 }),
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
-      { title: "Δ contribuição (bps)", ticksuffix: " bps" }),
+      { title: "Δ contribuição (bps)", ticksuffix: " bps", range: yRangeSetor }),
     showlegend: false,
     hovermode: "closest",
   });
   Plotly.newPlot(root, [deltaTrace], layout, PLOTLY_CONFIG);
   drawHeatWaterfallDuration();
+}
+
+// Calcula range com folga para waterfalls de Δ bps (labels outside das barras).
+function _waterfallYRange(ys) {
+  const vals = (ys || []).filter(v => v != null && isFinite(v));
+  if (!vals.length) return undefined;
+  let lo = Math.min(0, ...vals);
+  let hi = Math.max(0, ...vals);
+  const span = hi - lo || Math.max(Math.abs(hi), Math.abs(lo), 1);
+  const pad = span * 0.25;
+  return [lo - pad, hi + pad];
 }
 
 // Mesma decomposicao do waterfall por setor, mas decomposto pelos buckets
@@ -2320,11 +2303,12 @@ function drawHeatWaterfallDuration() {
     return { label: a.label, delta: cAtu - cAnt };
   });
 
+  const ysDur = rows.map(r => r.delta * 100);
   const deltaTrace = {
     type: "bar",
     name: "Variação",
     x: rows.map(r => r.label),
-    y: rows.map(r => r.delta * 100),
+    y: ysDur,
     marker: { color: rows.map(r => r.delta >= 0 ? "#dc5752" : "#3aa66c") },
     text: rows.map(r => _fmtBpsContrib(r.delta)),
     textposition: "outside",
@@ -2334,12 +2318,13 @@ function drawHeatWaterfallDuration() {
       "Δ contribuição: %{y:.2f} bps" +
       "<extra></extra>",
   };
+  const yRangeDur = _waterfallYRange(ysDur);
 
   const layout = Object.assign(PLOTLY_LAYOUT(), {
     margin: { l: 60, r: 18, t: 20, b: 60 },
     xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title: "Duration" }),
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
-      { title: "Δ contribuição (bps)", ticksuffix: " bps" }),
+      { title: "Δ contribuição (bps)", ticksuffix: " bps", range: yRangeDur }),
     showlegend: false,
     hovermode: "closest",
   });
