@@ -299,6 +299,16 @@
     </div>
   </div>
   <div class="grid-kpi" id="kpi-row"></div>
+  <div class="grid-2x2">
+    <div class="panel">
+      <h2>Spread médio IPCA+ por dia</h2>
+      <div id="chart-vis-spread-ipca" class="chart"></div>
+    </div>
+    <div class="panel">
+      <h2>Spread médio CDI+ por dia</h2>
+      <div id="chart-vis-spread-cdi" class="chart"></div>
+    </div>
+  </div>
   <!-- Item 2: Top 20 movimentações sobem para acima de ETTJ + Spread Mediano. -->
   <div class="grid-2x2">
     <div class="panel">
@@ -479,11 +489,6 @@
       </div>
       <div class="exclusion-chips" id="heat-exclude-chips"></div>
     </div>
-  </div>
-  <div class="panel">
-    <h2>Evolução dos spreads médios — setor</h2>
-    <div id="hm-evol-sub" class="muted" style="font-size:11px;margin:-4px 0 8px"></div>
-    <div id="chart-heat-evolucao" class="chart-tall"></div>
   </div>
   <div class="panel">
     <h2>Waterfall — variação do spread médio por setor</h2>
@@ -699,8 +704,51 @@ function drawVisao() {
   renderHistogram(pair.histogram["DI+"]   || null, "CDI+",  "chart-histogram-cdi");
   renderTopMovers(topm["IPCA+"] || null, "IPCA+", "top-movers-ipca");
   renderTopMovers(topm["DI+"]   || null, "CDI+",  "top-movers-cdi");
+  renderDailySpreadBars("IPCA+", "chart-vis-spread-ipca", cssVar("--accent"));
+  renderDailySpreadBars("DI+",   "chart-vis-spread-cdi",  PALETTE_QUAL[2]);
   renderCurvesOverlay(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
   renderCurvesPre(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
+}
+
+function renderDailySpreadBars(idx, containerId, color) {
+  // Spread medio diario para o indexador `idx`, no intervalo
+  // [VIS_DATE_ANTERIOR, VIS_DATE_ATUAL]. So mostra dias com snapshot.
+  const root = document.getElementById(containerId);
+  if (!OVERVIEW || !VIS_DATE_ATUAL) {
+    Plotly.purge(root);
+    root.innerHTML = '<div class="empty">Selecione as datas.</div>';
+    return;
+  }
+  const lo = VIS_DATE_ANTERIOR || VIS_DATE_ATUAL;
+  const hi = VIS_DATE_ATUAL;
+  const range = (OVERVIEW.dates || []).filter(d => d >= lo && d <= hi);
+  const xs = [], ys = [];
+  for (const d of range) {
+    const pair = OVERVIEW.by_pair[d];
+    const k = pair && pair.kpis ? pair.kpis[idx] : null;
+    const v = k ? k.mean_spread_abs_pp : null;
+    if (v != null) { xs.push(d); ys.push(v); }
+  }
+  if (!xs.length) {
+    Plotly.purge(root);
+    root.innerHTML = '<div class="empty">Sem dados no intervalo.</div>';
+    return;
+  }
+  const xLabels = xs.map(brDate);
+  const trace = {
+    type: "bar",
+    x: xLabels,
+    y: ys,
+    marker: { color },
+    hovertemplate: "%{x}<br>%{y:.2f}%<extra></extra>",
+  };
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    margin: { l: 50, r: 18, t: 12, b: 60 },
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title: "", type: "category", tickangle: -25 }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title: "Spread médio (%)", ticksuffix: "%" }),
+    showlegend: false,
+  });
+  Plotly.newPlot(root, [trace], layout, PLOTLY_CONFIG);
 }
 
 function renderKpis(kpisMap) {
@@ -2101,21 +2149,15 @@ function drawHeatmap() {
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { autorange:"reversed" }),
   });
   Plotly.newPlot("chart-heatmap", [trace], layout, PLOTLY_CONFIG);
-  drawHeatEvolucao();
   drawHeatWaterfall();
 }
 
-// Paleta estavel por setor — garante a mesma cor no line chart e no waterfall.
-// 13 setores na ANBIMA; ciclamos a paleta padrao do Plotly se passar disso.
-const _HEAT_COLORWAY = [
-  "#7facff", "#ffb480", "#3aa66c", "#dc5752", "#b388ff",
-  "#a0735a", "#f48fb1", "#9aa0a6", "#d4d04b", "#4dd0e1",
-  "#ff8a65", "#9ccc65", "#ba68c8",
-];
+// Paleta estavel por setor — reusa PALETTE_QUAL da aba Dispersao para garantir
+// consistencia visual entre scatter e waterfall.
 function _heatColorFor(setor) {
   const setores = HEAT?.setores || [];
   const i = setores.indexOf(setor);
-  return _HEAT_COLORWAY[(i < 0 ? 0 : i) % _HEAT_COLORWAY.length];
+  return PALETTE_QUAL[(i < 0 ? 0 : i) % PALETTE_QUAL.length];
 }
 
 function _heatFilteredPapers(snap) {
@@ -2150,84 +2192,15 @@ function _heatGlobalAvgForDate(date) {
   return arr.reduce((a, b) => a + b, 0) / arr.length;
 }
 
-function _heatDatesInRange() {
-  const dates = HEAT.dates || [];
-  const a = HM_DATE_ANTERIOR;
-  const b = HM_DATE_ATUAL;
-  if (!a || !b) return [];
-  return dates.filter(d => d >= a && d <= b);
-}
-
-function drawHeatEvolucao() {
-  // Item 3: line chart com a evolucao do spread medio por setor no
-  // intervalo [Data Anterior, Data Atual]. Spread medio do setor = media
-  // simples dos spreads dos papeis daquele setor que passam HEAT_IDX +
-  // HEAT_EXCLUDE — mesma logica do heatmap. Setores sem papeis sobreviventes
-  // nao aparecem (mesmo efeito que "excluir do calculo" propaga aqui).
-  const root = document.getElementById("chart-heat-evolucao");
-  const sub = document.getElementById("hm-evol-sub");
-  const dateRange = _heatDatesInRange();
-  if (sub) {
-    sub.textContent = dateRange.length
-      ? `${brDate(dateRange[0])} a ${brDate(dateRange[dateRange.length - 1])}`
-      : "Selecione Data Anterior e Data Atual.";
-  }
-  if (dateRange.length < 2) {
-    Plotly.purge(root);
-    root.innerHTML = '<div class="empty">Selecione um intervalo com pelo menos 2 datas.</div>';
-    return;
-  }
-  const setores = HEAT.setores || [];
-  const presentes = new Set();
-  const series = {};
-  for (const s of setores) series[s] = [];
-  for (const d of dateRange) {
-    const avgs = _heatSectorAvgsForDate(d);
-    for (const s of setores) {
-      const v = avgs[s] ? avgs[s].avg : null;
-      series[s].push(v);
-      if (v != null) presentes.add(s);
-    }
-  }
-  const xLabels = dateRange.map(brDate);
-  const traces = setores
-    .filter(s => presentes.has(s))
-    .map(s => ({
-      type: "scatter",
-      mode: "lines+markers",
-      name: s,
-      x: xLabels,
-      y: series[s],
-      line: { width: 2, color: _heatColorFor(s) },
-      marker: { size: 5, color: _heatColorFor(s) },
-      connectgaps: true,
-      hovertemplate: `<b>${escapeHtml(s)}</b><br>%{x}<br>%{y:.2f}%<extra></extra>`,
-    }));
-  if (!traces.length) {
-    Plotly.purge(root);
-    root.innerHTML = '<div class="empty">Sem papeis apos filtros.</div>';
-    return;
-  }
-  const layout = Object.assign(PLOTLY_LAYOUT(), {
-    margin: { l: 50, r: 18, t: 12, b: 80 },
-    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title: "Data", type: "category" }),
-    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title: "Spread médio (%)" }),
-    legend: { orientation: "h", y: -0.22, font: { size: 10 } },
-    hovermode: "closest",
-  });
-  Plotly.newPlot(root, traces, layout, PLOTLY_CONFIG);
-}
-
 function drawHeatWaterfall() {
-  // Item 4: waterfall mostrando a decomposicao da variacao do spread medio
-  // global de Data Anterior para Data Atual.
-  //
-  // Decomposicao: spread_global = sum_s (peso_s * avg_s), onde
-  //   peso_s = n_s / n_total. A contribuicao do setor s ao delta total e
-  //   contrib_s = (peso_s_atual * avg_s_atual) - (peso_s_anterior * avg_s_anterior),
-  // e sum_s contrib_s = avg_global_atual - avg_global_anterior — ou seja, o
-  // waterfall fecha exatamente. Captura mudancas de spread E mudancas de
-  // composicao do pool simultaneamente.
+  // Decomposicao do spread medio global em contribuicoes setoriais:
+  //   spread_global(t) = sum_s contrib_s(t),  contrib_s(t) = avg_s(t) * n_s(t) / n_total(t)
+  // O painel tem dois subplots independentes:
+  //   topo  -> duas barras stacked (Anterior, Atual) decompostas por setor;
+  //   base  -> variacao por setor (delta = contrib_atual - contrib_anterior),
+  //            renderizada em escala propria (amplificada) para evidenciar
+  //            quem dirigiu a mudanca apesar dos totais quase identicos.
+  // Soma dos deltas == avgAtu - avgAnt (waterfall fecha exatamente).
   const root = document.getElementById("chart-heat-waterfall");
   const sub = document.getElementById("hm-wf-sub");
   if (!HM_DATE_ANTERIOR || !HM_DATE_ATUAL) {
@@ -2251,42 +2224,89 @@ function drawHeatWaterfall() {
   const avgAtu = _heatGlobalAvgForDate(HM_DATE_ATUAL);
 
   const setoresUnion = (HEAT.setores || []).filter(s => ant[s] || atu[s]);
-  const contribs = setoresUnion.map(s => {
+  const rows = setoresUnion.map(s => {
     const a = ant[s] ? (ant[s].avg * ant[s].n / nAnt) : 0;
     const b = atu[s] ? (atu[s].avg * atu[s].n / nAtu) : 0;
-    return { s, contrib: b - a };
+    return { s, a, b, delta: b - a };
   });
-  // Maior modulo primeiro — leitura natural (drivers no topo).
-  contribs.sort((x, y) => Math.abs(y.contrib) - Math.abs(x.contrib));
+  // Stack do topo: setor com maior contribuicao media fica embaixo.
+  rows.sort((x, y) => (y.a + y.b) - (x.a + x.b));
 
-  const x = ["Anterior", ...contribs.map(c => c.s), "Atual"];
-  const y = [avgAnt, ...contribs.map(c => c.contrib), 0];
-  const measure = ["absolute", ...contribs.map(() => "relative"), "total"];
-  const text = [
-    avgAnt.toFixed(2) + "%",
-    ...contribs.map(c => (c.contrib >= 0 ? "+" : "") + (c.contrib * 100).toFixed(1) + " bps"),
-    avgAtu.toFixed(2) + "%",
+  const xCats = ["Anterior", "Atual"];
+  const stackTraces = rows.map(r => {
+    const pctA = avgAnt ? (r.a / avgAnt * 100) : 0;
+    const pctB = avgAtu ? (r.b / avgAtu * 100) : 0;
+    return {
+      type: "bar",
+      name: r.s,
+      x: xCats,
+      y: [r.a, r.b],
+      xaxis: "x", yaxis: "y",
+      marker: { color: _heatColorFor(r.s) },
+      customdata: [[pctA], [pctB]],
+      hovertemplate:
+        `<b>${escapeHtml(r.s)}</b><br>` +
+        "%{x}<br>" +
+        "Contribuição: %{y:.4f}% (%{customdata[0]:.1f}% do total)" +
+        "<extra></extra>",
+    };
+  });
+
+  // Subplot inferior: variacao por setor em escala propria.
+  const deltas = rows.slice().sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
+  const deltaTrace = {
+    type: "bar",
+    name: "Variação",
+    x: deltas.map(r => r.s),
+    y: deltas.map(r => r.delta),
+    xaxis: "x2", yaxis: "y2",
+    marker: { color: deltas.map(r => r.delta >= 0 ? "#dc5752" : "#3aa66c") },
+    text: deltas.map(r =>
+      (r.delta >= 0 ? "+" : "") + (r.delta * 100).toFixed(1) + " bps"),
+    textposition: "outside",
+    showlegend: false,
+    hovertemplate:
+      "<b>%{x}</b><br>" +
+      "Δ contribuição: %{y:.4f}%" +
+      "<extra></extra>",
+  };
+
+  const annotations = [
+    { xref: "x", yref: "y", x: "Anterior", y: avgAnt,
+      text: "<b>" + avgAnt.toFixed(2) + "%</b>",
+      showarrow: false, yanchor: "bottom", yshift: 6, font: { size: 12 } },
+    { xref: "x", yref: "y", x: "Atual", y: avgAtu,
+      text: "<b>" + avgAtu.toFixed(2) + "%</b>",
+      showarrow: false, yanchor: "bottom", yshift: 6, font: { size: 12 } },
+    { xref: "paper", yref: "paper", x: 0, y: 1.02,
+      text: "Decomposição por setor",
+      showarrow: false, xanchor: "left",
+      font: { size: 10, color: cssVar("--muted") } },
+    { xref: "paper", yref: "paper", x: 0, y: 0.36,
+      text: "Variação por setor (escala amplificada)",
+      showarrow: false, xanchor: "left",
+      font: { size: 10, color: cssVar("--muted") } },
   ];
 
-  const trace = {
-    type: "waterfall",
-    orientation: "v",
-    x, y, measure, text,
-    textposition: "outside",
-    hovertemplate:
-      "<b>%{x}</b><br>Contribuição: %{y:.4f}%<extra></extra>",
-    connector: { line: { color: "#3a4150", width: 1, dash: "dot" } },
-    increasing: { marker: { color: "#dc5752" } },  // spread abriu
-    decreasing: { marker: { color: "#3aa66c" } },  // spread comprimiu
-    totals: { marker: { color: "#7facff" } },
+  const axisBase = {
+    gridcolor: cssVar("--border"),
+    zerolinecolor: cssVar("--border-strong"),
   };
   const layout = Object.assign(PLOTLY_LAYOUT(), {
-    margin: { l: 50, r: 18, t: 12, b: 110 },
-    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title: "", tickangle: -25 }),
-    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title: "Spread médio (%)" }),
-    showlegend: false,
+    margin: { l: 60, r: 18, t: 30, b: 110 },
+    barmode: "stack",
+    xaxis:  Object.assign({}, axisBase, { anchor: "y",  domain: [0, 1] }),
+    yaxis:  Object.assign({}, axisBase, { anchor: "x",  domain: [0.42, 1.0],
+                                           title: "Spread médio (%)", rangemode: "tozero" }),
+    xaxis2: Object.assign({}, axisBase, { anchor: "y2", domain: [0, 1], tickangle: -25 }),
+    yaxis2: Object.assign({}, axisBase, { anchor: "x2", domain: [0, 0.30],
+                                           title: "Δ contribuição (%)" }),
+    legend: { orientation: "h", y: -0.30, font: { size: 10 } },
+    annotations,
+    showlegend: true,
+    hovermode: "closest",
   });
-  Plotly.newPlot(root, [trace], layout, PLOTLY_CONFIG);
+  Plotly.newPlot(root, [...stackTraces, deltaTrace], layout, PLOTLY_CONFIG);
 }
 
 /* ============================================================
