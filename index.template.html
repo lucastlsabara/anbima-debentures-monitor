@@ -1605,7 +1605,7 @@ function buildMovTable() {
           if (term === "" || term == null) return true;
           return String(!!value) === String(term);
         },
-        formatter: c => c.getValue() ? "Sim" : "Não" },
+        formatter: "tickCross" },
       { title:"Vencimento", field:"vencimento", width:105,
         headerFilter: "input", headerFilterFunc: likeCI },
       { title:"Ref Venc", field:"benchmark_vencimento", width:105,
