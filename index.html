@@ -291,10 +291,10 @@
   <div class="panel">
     <div class="controls">
       <label>Data Anterior:
-        <input type="text" id="vis-date-anterior" placeholder="YYYY-MM-DD">
+        <input type="text" id="vis-date-anterior" placeholder="DD-MM-YYYY">
       </label>
       <label>Data Atual:
-        <input type="text" id="vis-date-atual" placeholder="YYYY-MM-DD">
+        <input type="text" id="vis-date-atual" placeholder="DD-MM-YYYY">
       </label>
     </div>
   </div>
@@ -337,10 +337,10 @@
   <div class="panel">
     <div class="controls filter-row">
       <label>Data Anterior:
-        <input type="text" id="disp-date-anterior" placeholder="YYYY-MM-DD">
+        <input type="text" id="disp-date-anterior" placeholder="DD-MM-YYYY">
       </label>
       <label>Data Atual:
-        <input type="text" id="disp-date-atual" placeholder="YYYY-MM-DD">
+        <input type="text" id="disp-date-atual" placeholder="DD-MM-YYYY">
       </label>
     </div>
     <div class="controls filter-row">
@@ -386,10 +386,10 @@
   <div class="panel">
     <div class="controls">
       <label>Data Anterior:
-        <input type="text" id="mov-date-anterior" placeholder="YYYY-MM-DD">
+        <input type="text" id="mov-date-anterior" placeholder="DD-MM-YYYY">
       </label>
       <label>Data Atual:
-        <input type="text" id="mov-date-atual" placeholder="YYYY-MM-DD">
+        <input type="text" id="mov-date-atual" placeholder="DD-MM-YYYY">
       </label>
       <label>Indexador:
         <select id="mov-idx"><option value="">Todos</option></select>
@@ -409,10 +409,10 @@
   <div class="panel">
     <div class="controls filter-row">
       <label>Data Inicial:
-        <input type="text" id="tp-date-anterior" placeholder="YYYY-MM-DD">
+        <input type="text" id="tp-date-anterior" placeholder="DD-MM-YYYY">
       </label>
       <label>Data Final:
-        <input type="text" id="tp-date-atual" placeholder="YYYY-MM-DD">
+        <input type="text" id="tp-date-atual" placeholder="DD-MM-YYYY">
       </label>
     </div>
   </div>
@@ -454,10 +454,10 @@
   <div class="panel">
     <div class="controls">
       <label>Data Anterior:
-        <input type="text" id="hm-date-anterior" placeholder="YYYY-MM-DD">
+        <input type="text" id="hm-date-anterior" placeholder="DD-MM-YYYY">
       </label>
       <label>Data Atual:
-        <input type="text" id="hm-date-atual" placeholder="YYYY-MM-DD">
+        <input type="text" id="hm-date-atual" placeholder="DD-MM-YYYY">
       </label>
       <label>Indexador:
         <select id="heat-idx">
@@ -543,17 +543,7 @@ async function loadJSON(path) {
 function brDate(iso) {
   if (!iso) return "—";
   const [y, m, d] = iso.split("-");
-  return `${d}/${m}/${y}`;
-}
-
-const _MESES_PT = [
-  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
-];
-function brDateLong(iso) {
-  if (!iso) return "—";
-  const [, m, d] = iso.split("-");
-  return `${parseInt(d, 10)} de ${_MESES_PT[parseInt(m, 10) - 1]}`;
+  return `${d}-${m}-${y}`;
 }
 
 // Item 9: Default Data Anterior = data imediatamente anterior à atual em `dates`.
@@ -624,7 +614,7 @@ async function init() {
     hdr.textContent = "Última Atualização em —";
     return;
   }
-  hdr.textContent = "Última Atualização em " + brDateLong(MANIFEST.latest);
+  hdr.textContent = "Última Atualização em " + brDate(MANIFEST.latest);
   activateTab((location.hash || "#/visao").replace(/^#\//, ""));
 }
 
@@ -651,11 +641,11 @@ async function renderVisao() {
   if (VIS_FP_ATUAL) VIS_FP_ATUAL.destroy();
   if (VIS_FP_ANTERIOR) VIS_FP_ANTERIOR.destroy();
   VIS_FP_ATUAL = flatpickr("#vis-date-atual", {
-    dateFormat:"Y-m-d", enable: dates, defaultDate: VIS_DATE_ATUAL,
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: dates, defaultDate: VIS_DATE_ATUAL,
     onChange: (_, d) => { if (d) onVisDateChange("atual", d); },
   });
   VIS_FP_ANTERIOR = flatpickr("#vis-date-anterior", {
-    dateFormat:"Y-m-d", enable: _visAnteriorEnable(VIS_DATE_ATUAL),
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: _visAnteriorEnable(VIS_DATE_ATUAL),
     defaultDate: VIS_DATE_ANTERIOR || undefined,
     onChange: (_, d) => { if (d) onVisDateChange("anterior", d); },
   });
@@ -997,11 +987,11 @@ async function renderDispersao() {
   if (DISP_FP_ATUAL) DISP_FP_ATUAL.destroy();
   if (DISP_FP_ANTERIOR) DISP_FP_ANTERIOR.destroy();
   DISP_FP_ATUAL = flatpickr("#disp-date-atual", {
-    dateFormat:"Y-m-d", enable: dates, defaultDate: DISP_DATE_ATUAL,
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: dates, defaultDate: DISP_DATE_ATUAL,
     onChange: (_, d) => { if (d) onDispDateChange("atual", d); },
   });
   DISP_FP_ANTERIOR = flatpickr("#disp-date-anterior", {
-    dateFormat:"Y-m-d", enable: dates.filter(d => d < DISP_DATE_ATUAL),
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: dates.filter(d => d < DISP_DATE_ATUAL),
     defaultDate: DISP_DATE_ANTERIOR || undefined,
     onChange: (_, d) => { if (d) onDispDateChange("anterior", d); },
   });
@@ -1444,11 +1434,11 @@ async function renderMovimentacoes() {
   if (MOV_FP_ATUAL) MOV_FP_ATUAL.destroy();
   if (MOV_FP_ANTERIOR) MOV_FP_ANTERIOR.destroy();
   MOV_FP_ATUAL = flatpickr("#mov-date-atual", {
-    dateFormat: "Y-m-d", enable: dates, defaultDate: MOV_DATE_ATUAL,
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: dates, defaultDate: MOV_DATE_ATUAL,
     onChange: (_, dstr) => onMovDateChange("atual", dstr),
   });
   MOV_FP_ANTERIOR = flatpickr("#mov-date-anterior", {
-    dateFormat: "Y-m-d", enable: _movRefEnable(MOV_DATE_ATUAL),
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: _movRefEnable(MOV_DATE_ATUAL),
     defaultDate: MOV_DATE_ANTERIOR || undefined,
     onChange: (_, dstr) => onMovDateChange("anterior", dstr),
   });
@@ -1597,10 +1587,11 @@ function buildMovTable() {
         headerFilterParams: { values: idxOpts, clearable: true },
         headerFilterFunc: "=" },
       { title:"Vencimento", field:"vencimento", width:105,
-        headerFilter: "input", headerFilterFunc: likeCI },
+        headerFilter: "input", headerFilterFunc: likeCI,
+        formatter: c => brDate(c.getValue()) },
       { title:"Ref Venc", field:"benchmark_vencimento", width:105,
         headerFilter: "input", headerFilterFunc: likeCI,
-        formatter: c => c.getValue() || "-" },
+        formatter: c => c.getValue() ? brDate(c.getValue()) : "-" },
       { title:"Duration", field:"duration_anos", width:90, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
         headerFilterPlaceholder: ">2",
@@ -1854,11 +1845,11 @@ async function renderHeatmap() {
   if (HM_FP_ATUAL) HM_FP_ATUAL.destroy();
   if (HM_FP_ANTERIOR) HM_FP_ANTERIOR.destroy();
   HM_FP_ATUAL = flatpickr("#hm-date-atual", {
-    dateFormat:"Y-m-d", enable: dates, defaultDate: HM_DATE_ATUAL,
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: dates, defaultDate: HM_DATE_ATUAL,
     onChange: (_, d) => { if (d) onHmDateChange("atual", d); },
   });
   HM_FP_ANTERIOR = flatpickr("#hm-date-anterior", {
-    dateFormat:"Y-m-d", enable: dates.filter(d => d < HM_DATE_ATUAL),
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: dates.filter(d => d < HM_DATE_ATUAL),
     defaultDate: HM_DATE_ANTERIOR || undefined,
     onChange: (_, d) => { if (d) onHmDateChange("anterior", d); },
   });
@@ -2167,12 +2158,12 @@ async function renderTitulosPublicos() {
   if (TP_FP_ATUAL) TP_FP_ATUAL.destroy();
   if (TP_FP_ANTERIOR) TP_FP_ANTERIOR.destroy();
   TP_FP_ANTERIOR = flatpickr("#tp-date-anterior", {
-    dateFormat: "Y-m-d", enable: _tpAnteriorEnable(TP_DATE_ATUAL),
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: _tpAnteriorEnable(TP_DATE_ATUAL),
     defaultDate: TP_DATE_ANTERIOR || undefined,
     onChange: (_, dstr) => onTpDateChange("anterior", dstr),
   });
   TP_FP_ATUAL = flatpickr("#tp-date-atual", {
-    dateFormat: "Y-m-d", enable: _tpAtualEnable(TP_DATE_ANTERIOR),
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: _tpAtualEnable(TP_DATE_ANTERIOR),
     defaultDate: TP_DATE_ATUAL,
     onChange: (_, dstr) => onTpDateChange("atual", dstr),
   });
