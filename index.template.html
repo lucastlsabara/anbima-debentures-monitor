@@ -258,6 +258,49 @@
     font-size:14px; line-height:1; cursor:pointer; padding:0 2px;
   }
   .ex-chip button:hover { color:var(--neg); }
+  /* Mudancas de composicao (Heatmap Setor x Prazo) */
+  .comp-wrap {
+    margin-top:14px; padding-top:12px;
+    border-top:1px solid var(--border);
+  }
+  .comp-head {
+    color:var(--muted); font-size:11.5px;
+    margin-bottom:8px;
+  }
+  .comp-grid {
+    display:grid; grid-template-columns:1fr 1fr; gap:14px;
+  }
+  @media (max-width:900px) { .comp-grid { grid-template-columns:1fr; } }
+  .comp-col-head {
+    font-size:10.5px; text-transform:uppercase; letter-spacing:.07em;
+    color:var(--muted); margin-bottom:6px;
+  }
+  .comp-count { color:var(--muted); font-variant-numeric:tabular-nums; }
+  .comp-list {
+    display:flex; flex-wrap:wrap; gap:6px;
+    max-height:160px; overflow-y:auto;
+    padding:2px;
+  }
+  .comp-empty {
+    color:var(--muted); font-style:italic; font-size:11.5px;
+    padding:6px 4px;
+  }
+  .comp-chip {
+    display:inline-flex; align-items:center; gap:6px;
+    background:var(--surface2); color:var(--fg);
+    border:1px solid var(--border-strong);
+    padding:3px 9px; border-radius:12px;
+    font-size:11.5px; cursor:pointer;
+    user-select:none;
+  }
+  .comp-chip:hover { border-color:var(--accent); }
+  .comp-chip.applied {
+    border-color:var(--accent); color:var(--accent);
+    background:rgba(90,155,255,0.10);
+  }
+  .comp-chip .comp-chip-mark {
+    font-size:10px; line-height:1; color:var(--accent);
+  }
   /* Tabulator dark tweaks */
   .tabulator { font-size:12px; background:transparent; border:none; }
   .tabulator .tabulator-header {
@@ -480,6 +523,19 @@
       <button data-hm="delta" class="hm-btn">Δ atual − anterior (bps)</button>
     </div>
     <div id="chart-heatmap" class="chart-tall"></div>
+    <div id="hm-comp-wrap" class="comp-wrap hide">
+      <div class="comp-head" id="hm-comp-title"></div>
+      <div class="comp-grid">
+        <div class="comp-col">
+          <div class="comp-col-head">Saíram <span id="hm-comp-count-out" class="comp-count"></span></div>
+          <div id="hm-comp-list-out" class="comp-list"></div>
+        </div>
+        <div class="comp-col">
+          <div class="comp-col-head">Entraram <span id="hm-comp-count-in" class="comp-count"></span></div>
+          <div id="hm-comp-list-in" class="comp-list"></div>
+        </div>
+      </div>
+    </div>
     <div class="exclusion-list">
       <label for="heat-exclude-search">Excluir do cálculo:</label>
       <div class="exclusion-input-wrap">
@@ -2302,6 +2358,7 @@ function drawHeatmap() {
   });
   Plotly.newPlot("chart-heatmap", [trace], layout, PLOTLY_CONFIG);
   drawHeatWaterfall();
+  drawHeatComposicao();
 }
 
 // Paleta estavel por setor — reusa PALETTE_QUAL da aba Dispersao para garantir
@@ -2503,6 +2560,109 @@ function drawHeatWaterfallDuration() {
     hovermode: "closest",
   });
   Plotly.newPlot(root, [deltaTrace], layout, PLOTLY_CONFIG);
+}
+
+// Indexa papeis por codigo (codigo -> emissor) aplicando apenas o filtro de
+// indexador. Ignora HEAT_EXCLUDE de proposito: a lista de mudanca de
+// composicao precisa ser estavel para o usuario poder clicar nos chips para
+// adicionar/remover do filtro de exclusao sem que eles desaparecam.
+function _heatPapersByCodigo(date) {
+  const out = new Map();
+  const snap = HEAT.by_date[date];
+  if (!snap) return out;
+  for (const p of (snap.papers || [])) {
+    if (HEAT_IDX !== "ambos" && p.i !== HEAT_IDX) continue;
+    if (!p.c) continue;
+    out.set(p.c, p.e);
+  }
+  return out;
+}
+
+// Mostra emissores afetados por mudanca de composicao entre as duas datas.
+// Diff e feito a nivel de PAPEL (codigo): saiu = papel em Anterior e nao em
+// Atual; entrou = papel em Atual e nao em Anterior. Listamos os emissores
+// unicos correspondentes; mesmo emissor pode aparecer em ambas listas se
+// teve papel saindo E entrando.
+function drawHeatComposicao() {
+  const wrap = document.getElementById("hm-comp-wrap");
+  const title = document.getElementById("hm-comp-title");
+  const listIn = document.getElementById("hm-comp-list-in");
+  const listOut = document.getElementById("hm-comp-list-out");
+  const cntIn = document.getElementById("hm-comp-count-in");
+  const cntOut = document.getElementById("hm-comp-count-out");
+  if (!wrap) return;
+
+  if (!HM_DATE_ANTERIOR || !HM_DATE_ATUAL) {
+    wrap.classList.add("hide");
+    return;
+  }
+  const ant = _heatPapersByCodigo(HM_DATE_ANTERIOR);
+  const atu = _heatPapersByCodigo(HM_DATE_ATUAL);
+
+  // emissor (normalizado) -> Set<codigo> dos papeis que sairam/entraram.
+  const sairam = new Map();
+  const entraram = new Map();
+  for (const [cod, emiss] of ant) {
+    if (atu.has(cod)) continue;
+    const key = normEmissor(emiss);
+    if (!key) continue;
+    if (!sairam.has(key)) sairam.set(key, []);
+    sairam.get(key).push(cod);
+  }
+  for (const [cod, emiss] of atu) {
+    if (ant.has(cod)) continue;
+    const key = normEmissor(emiss);
+    if (!key) continue;
+    if (!entraram.has(key)) entraram.set(key, []);
+    entraram.get(key).push(cod);
+  }
+
+  if (!sairam.size && !entraram.size) {
+    wrap.classList.add("hide");
+    return;
+  }
+  wrap.classList.remove("hide");
+  title.textContent =
+    `Mudanças de composição entre ${brDate(HM_DATE_ANTERIOR)} e ${brDate(HM_DATE_ATUAL)}`;
+
+  const renderChip = (emiss, codigos) => {
+    const applied = HEAT_EXCLUDE.has(emiss);
+    const codTip = codigos.slice().sort().join(", ");
+    const mark = applied ? '<span class="comp-chip-mark">✓</span>' : "";
+    return (
+      `<span class="comp-chip${applied ? " applied" : ""}" ` +
+      `data-emiss="${escapeAttr(emiss)}" ` +
+      `title="${escapeAttr(codTip)}">` +
+      `${escapeHtml(emiss)}${mark}` +
+      `</span>`
+    );
+  };
+  const renderList = (m) => {
+    if (!m.size) return '<div class="comp-empty">Nenhum.</div>';
+    const arr = [...m.entries()].sort((a, b) =>
+      a[0].localeCompare(b[0], "pt-BR"));
+    return arr.map(([e, codigos]) => renderChip(e, codigos)).join("");
+  };
+  cntOut.textContent = `(${sairam.size})`;
+  cntIn.textContent = `(${entraram.size})`;
+  listOut.innerHTML = renderList(sairam);
+  listIn.innerHTML = renderList(entraram);
+
+  // Bind click delegado uma unica vez por container; toggle de exclusao.
+  for (const root of [listIn, listOut]) {
+    if (root.dataset.bound === "1") continue;
+    root.dataset.bound = "1";
+    root.addEventListener("click", (e) => {
+      const chip = e.target.closest(".comp-chip");
+      if (!chip) return;
+      const emiss = chip.dataset.emiss;
+      if (!emiss) return;
+      if (HEAT_EXCLUDE.has(emiss)) HEAT_EXCLUDE.delete(emiss);
+      else HEAT_EXCLUDE.add(emiss);
+      _renderHeatChips();
+      drawHeatmap();
+    });
+  }
 }
 
 /* ============================================================
