@@ -418,10 +418,10 @@
 <section id="tab-titulos-publicos" class="tab hide">
   <div class="panel">
     <div class="controls filter-row">
-      <label>Data Inicial:
+      <label>Data Anterior:
         <input type="text" id="tp-date-anterior" placeholder="DD-MM-YYYY">
       </label>
-      <label>Data Final:
+      <label>Data Atual:
         <input type="text" id="tp-date-atual" placeholder="DD-MM-YYYY">
       </label>
     </div>
@@ -577,9 +577,10 @@ function defaultAnteriorFor(atual, dates) {
  *  Sincronização global de Data Atual / Data Anterior entre abas.
  *  Cada aba tem um picker próprio com lista de datas habilitadas
  *  específica (Visão Geral usa OVERVIEW.dates, Heatmap usa HEAT.dates,
- *  etc). Quando o usuário muda a data em uma aba, propagamos para as
- *  demais via _syncDatesFrom: cada aba recebe a data global e cai na
- *  data habilitada mais próxima caso a exata não exista no seu calendário.
+ *  etc). Toda aba é igualmente fonte de verdade: qualquer onChange
+ *  atualiza GLOBAL_DATE_* e propaga via _syncDatesFrom para as demais.
+ *  Cada aba alvo cai na data habilitada mais próxima quando a exata
+ *  não existe no seu calendário.
  * ============================================================ */
 let GLOBAL_DATE_ATUAL = null;
 let GLOBAL_DATE_ANTERIOR = null;
@@ -720,8 +721,6 @@ let VIS_DATE_ATUAL = null, VIS_DATE_ANTERIOR = null;
 async function renderVisao() {
   OVERVIEW = await loadJSON("data/overview.json");
   const dates = OVERVIEW.dates;
-  // Adota datas globais (de outras abas) se já houver, com fallback para
-  // a data habilitada mais próxima neste calendário.
   if (GLOBAL_DATE_ATUAL) {
     VIS_DATE_ATUAL = _nearestEnabledDate(GLOBAL_DATE_ATUAL, dates) || OVERVIEW.latest;
     VIS_DATE_ANTERIOR = GLOBAL_DATE_ANTERIOR
@@ -730,12 +729,9 @@ async function renderVisao() {
   } else {
     VIS_DATE_ATUAL = OVERVIEW.latest;
     VIS_DATE_ANTERIOR = defaultAnteriorFor(VIS_DATE_ATUAL, dates);
-    // Primeira aba a inicializar: semeia o estado global. Tabs subsequentes
-    // só LEEM (com fallback local), nunca sobrescrevem — evita drift quando
-    // uma aba não tem a data pedida e cai na mais próxima.
-    GLOBAL_DATE_ATUAL = VIS_DATE_ATUAL;
-    GLOBAL_DATE_ANTERIOR = VIS_DATE_ANTERIOR;
   }
+  GLOBAL_DATE_ATUAL = VIS_DATE_ATUAL;
+  GLOBAL_DATE_ANTERIOR = VIS_DATE_ANTERIOR;
   if (VIS_FP_ATUAL) VIS_FP_ATUAL.destroy();
   if (VIS_FP_ANTERIOR) VIS_FP_ANTERIOR.destroy();
   VIS_FP_ATUAL = flatpickr("#vis-date-atual", {
@@ -1171,9 +1167,9 @@ async function renderDispersao() {
   } else {
     DISP_DATE_ATUAL = dates[dates.length - 1];
     DISP_DATE_ANTERIOR = defaultAnteriorFor(DISP_DATE_ATUAL, dates);
-    GLOBAL_DATE_ATUAL = DISP_DATE_ATUAL;
-    GLOBAL_DATE_ANTERIOR = DISP_DATE_ANTERIOR;
   }
+  GLOBAL_DATE_ATUAL = DISP_DATE_ATUAL;
+  GLOBAL_DATE_ANTERIOR = DISP_DATE_ANTERIOR;
 
   // Indexador select (item 11: filtro local na própria aba)
   const idxSel = document.getElementById("disp-idx");
@@ -1649,9 +1645,9 @@ async function renderMovimentacoes() {
   } else {
     MOV_DATE_ATUAL = _movLatest;
     MOV_DATE_ANTERIOR = defaultAnteriorFor(MOV_DATE_ATUAL, dates);
-    GLOBAL_DATE_ATUAL = MOV_DATE_ATUAL;
-    GLOBAL_DATE_ANTERIOR = MOV_DATE_ANTERIOR;
   }
+  GLOBAL_DATE_ATUAL = MOV_DATE_ATUAL;
+  GLOBAL_DATE_ANTERIOR = MOV_DATE_ANTERIOR;
 
   const idxSel = document.getElementById("mov-idx");
   while (idxSel.options.length > 1) idxSel.remove(1);
@@ -2036,9 +2032,9 @@ async function renderHeatmap() {
   } else {
     HM_DATE_ATUAL = dates[dates.length - 1];
     HM_DATE_ANTERIOR = defaultAnteriorFor(HM_DATE_ATUAL, dates);
-    GLOBAL_DATE_ATUAL = HM_DATE_ATUAL;
-    GLOBAL_DATE_ANTERIOR = HM_DATE_ANTERIOR;
   }
+  GLOBAL_DATE_ATUAL = HM_DATE_ATUAL;
+  GLOBAL_DATE_ANTERIOR = HM_DATE_ANTERIOR;
   if (HM_FP_ATUAL) HM_FP_ATUAL.destroy();
   if (HM_FP_ANTERIOR) HM_FP_ANTERIOR.destroy();
   HM_FP_ATUAL = flatpickr("#hm-date-atual", {
@@ -2577,9 +2573,9 @@ async function renderTitulosPublicos() {
     const idxInicial = Math.max(0, idxFinal - (CURVE_WINDOW_DEFAULT - 1));
     TP_DATE_ANTERIOR = idxInicial < idxFinal
       ? TP_DATES_ENABLED[idxInicial] : null;
-    GLOBAL_DATE_ATUAL = TP_DATE_ATUAL;
-    GLOBAL_DATE_ANTERIOR = TP_DATE_ANTERIOR;
   }
+  GLOBAL_DATE_ATUAL = TP_DATE_ATUAL;
+  GLOBAL_DATE_ANTERIOR = TP_DATE_ANTERIOR;
 
   if (TP_FP_ATUAL) TP_FP_ATUAL.destroy();
   if (TP_FP_ANTERIOR) TP_FP_ANTERIOR.destroy();
