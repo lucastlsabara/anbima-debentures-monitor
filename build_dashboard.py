@@ -165,15 +165,26 @@ def _clean_emissor(name: str | None) -> str:
     return re.sub(r"\s*\(\*+\)\s*", " ", name).strip()
 
 
+def _is_incentivada(name: str | None) -> bool:
+    # ANBIMA marca debêntures incentivadas (Lei 12.431) com sufixo (*) no
+    # nome do emissor no db<YYMMDD>.txt do mercado secundário.
+    if not name:
+        return False
+    import re
+    return bool(re.search(r"\(\*+\)", name))
+
+
 def _enrich(papers: list[dict]) -> list[dict]:
     """Anota cada papel com emissor normalizado + grupo de indexador + setor."""
     out = []
     for p in papers:
         e = dict(p)
-        emissor_clean = _clean_emissor(p.get("emissor"))
+        emissor_raw = p.get("emissor")
+        emissor_clean = _clean_emissor(emissor_raw)
         e["emissor_clean"] = emissor_clean
         e["indexador_grupo"] = _indexador_group(p.get("indice"))
         e["setor"] = _classify_setor(p.get("codigo"), p.get("emissor"))
+        e["is_incentivada"] = _is_incentivada(emissor_raw)
         out.append(e)
     return out
 
@@ -535,6 +546,7 @@ def build_movements(snaps: list[dict]) -> dict:
                 "iliquido": bool(p.get("flag_iliquido")),
                 "estagnado": bool(p.get("flag_estagnado")),
                 "dias_sem_variacao": p.get("dias_sem_variacao"),
+                "is_incentivada": bool(p.get("is_incentivada")),
             })
         return out
 
