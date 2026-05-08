@@ -282,7 +282,6 @@
   <a href="#/heatmap" data-tab="heatmap">Debêntures: Setor × Prazo</a>
   <a href="#/dispersao" data-tab="dispersao">Debêntures: Gráfico</a>
   <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
-  <a href="#/incentivadas" data-tab="incentivadas">Debêntures Incentivadas</a>
 </nav>
 
 <main>
@@ -483,32 +482,6 @@
   </div>
 </section>
 
-<!-- ===================== Tab: Debêntures Incentivadas (Lei 12.431) ===================== -->
-<!-- Filtra apenas papéis com marcador (*) sem (**) no campo Nome do db.txt
-     da ANBIMA — debêntures de infraestrutura com isenção de IR para PF
-     conforme Lei 12.431/2011. Fonte: data/incentivadas_history.json. -->
-<section id="tab-incentivadas" class="tab hide">
-  <div class="panel">
-    <h2>Debêntures Incentivadas — Lei 12.431/2011 — Isenção de IR para PF</h2>
-    <div class="controls">
-      <label>Data Anterior:
-        <input type="text" id="inc-date-anterior" placeholder="YYYY-MM-DD">
-      </label>
-      <label>Data Atual:
-        <input type="text" id="inc-date-atual" placeholder="YYYY-MM-DD">
-      </label>
-      <label>Indexador:
-        <select id="inc-idx"><option value="">Todos</option></select>
-      </label>
-      <label>
-        <input type="checkbox" id="inc-hide-iliq" checked> Esconder ilíquidos
-      </label>
-    </div>
-    <div class="grid-kpi" id="inc-kpis"></div>
-    <div id="inc-table"></div>
-  </div>
-</section>
-
 </main>
 
 <footer>
@@ -554,7 +527,7 @@ const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
 // Substituído pelo build com hash dos JSONs em data/. Em dev (template puro)
 // fica vazio e o cache do browser dita a frescor. Em produção, ?v=<hash>
 // invalida o cache do GitHub Pages quando snapshots novos chegam.
-const BUILD_VERSION = "49b15acd0979";
+const BUILD_VERSION = "e5798c7e3653";
 
 const cache = new Map();
 async function loadJSON(path) {
@@ -605,7 +578,7 @@ function adaptiveTextColor(bgHex) {
 /* ============================================================
  *  hash routing
  * ============================================================ */
-const TABS = ["visao","dispersao","movimentacoes","heatmap","titulos-publicos","incentivadas"];
+const TABS = ["visao","dispersao","movimentacoes","heatmap","titulos-publicos"];
 const loaded = new Set();
 
 // Aba "Curvas Históricas" foi consolidada em "Títulos Públicos" — redireciona
@@ -661,7 +634,6 @@ async function renderTab(name) {
   if (name === "movimentacoes") return renderMovimentacoes();
   if (name === "heatmap") return renderHeatmap();
   if (name === "titulos-publicos") return renderTitulosPublicos();
-  if (name === "incentivadas") return renderIncentivadas();
 }
 
 /* ============================================================
@@ -2335,314 +2307,6 @@ function refreshTpView() {
     const rows = all.filter(r => r.tipo === tipo);
     TP_TABLES[tipo].replaceData(rows);
   }
-}
-
-/* ============================================================
- *  Tab 7 — Debêntures Incentivadas (Lei 12.431)
- * ============================================================ */
-let INC_DATA = null;
-let INC_DATE_ATUAL = null, INC_DATE_ANTERIOR = null;
-let INC_FP_ATUAL = null, INC_FP_ANTERIOR = null;
-let INC_TABLE = null;
-let INC_STATS = null;
-
-function _incSpreadMap(date) {
-  if (!date) return null;
-  const entry = INC_DATA.by_date[date];
-  if (!entry) return null;
-  if (!entry._spread_map) {
-    const m = Object.create(null);
-    for (const p of entry.papers) if (p.sp != null) m[p.c] = p.sp;
-    entry._spread_map = m;
-  }
-  return entry._spread_map;
-}
-
-function _incRowsForCurrentDates() {
-  const baseEntry = INC_DATA.by_date[INC_DATE_ATUAL];
-  if (!baseEntry) return [];
-  const refMap = _incSpreadMap(INC_DATE_ANTERIOR);
-  return baseEntry.papers.map(p => {
-    let delta = null, spreadRef = null;
-    if (refMap) {
-      const old = refMap[p.c];
-      if (old != null) {
-        spreadRef = old;
-        if (p.sp != null) delta = Math.round((p.sp - old) * 100.0 * 10) / 10;
-      }
-    }
-    return {
-      codigo: p.c, emissor: p.e, setor: p.s, indexador: p.i,
-      indice: p.indice, vencimento: p.venc, ref_venc: p.ref_venc,
-      duration_anos: p.d, taxa: p.taxa, pu: p.pu, pct_pu_par: p.ppar,
-      spread_pp: p.sp, spread_ref_pp: spreadRef, delta_bps: delta,
-      iliquido: !!p.iliq, estagnado: !!p.estag,
-    };
-  });
-}
-
-function _computeIncStats(rows) {
-  const _pct = (arr, p) => arr.length
-    ? arr[Math.min(arr.length - 1, Math.floor((arr.length - 1) * p + 0.5))] : null;
-  const pparDist = rows.map(r => r.pct_pu_par).filter(v => v != null)
-    .map(v => Math.abs(v - 100)).sort((a,b)=>a-b);
-  const dltAbs = rows.map(r => r.delta_bps).filter(v => v != null)
-    .map(v => Math.abs(v)).sort((a,b)=>a-b);
-  return {
-    pparDistP95: _pct(pparDist, 0.95) ?? 0,
-    deltaAbsP95: _pct(dltAbs, 0.95) ?? 0,
-  };
-}
-
-function _incRefEnable(baseDate) {
-  const dates = (INC_DATA && INC_DATA.dates) || [];
-  const i = dates.indexOf(baseDate);
-  return i > 0 ? dates.slice(0, i) : [];
-}
-
-function _incRenderKpis(rows) {
-  const cont = document.getElementById("inc-kpis");
-  if (!cont) return;
-  const liq = rows.filter(r => !r.iliquido);
-  const spreads = liq.map(r => r.spread_pp).filter(v => v != null);
-  const meanSpread = spreads.length
-    ? spreads.reduce((a, b) => a + b, 0) / spreads.length : null;
-  const setorCounts = {};
-  for (const r of liq) {
-    if (!r.setor) continue;
-    setorCounts[r.setor] = (setorCounts[r.setor] || 0) + 1;
-  }
-  let topSetor = "—", topN = 0;
-  for (const [s, c] of Object.entries(setorCounts)) {
-    if (c > topN) { topSetor = s; topN = c; }
-  }
-  cont.innerHTML =
-    `<div class="kpi"><div class="label">Papéis Incentivados</div>` +
-    `<div class="val">${rows.length}</div>` +
-    `<div class="hint">${liq.length} líquidos</div></div>` +
-    `<div class="kpi"><div class="label">Spread Médio (líquidos)</div>` +
-    `<div class="val">${meanSpread == null ? "—"
-       : (meanSpread >= 0 ? "+" : "") + meanSpread.toFixed(2) + " pp"}</div>` +
-    `<div class="hint">média simples • n=${spreads.length}</div></div>` +
-    `<div class="kpi"><div class="label">Setor Principal</div>` +
-    `<div class="val">${topSetor}</div>` +
-    `<div class="hint">${topN} papéis</div></div>`;
-}
-
-async function renderIncentivadas() {
-  INC_DATA = await loadJSON("data/incentivadas_history.json");
-  const dates = INC_DATA.dates || [];
-  INC_DATE_ATUAL = INC_DATA.latest || dates[dates.length - 1];
-  INC_DATE_ANTERIOR = defaultAnteriorFor(INC_DATE_ATUAL, dates);
-
-  const idxSel = document.getElementById("inc-idx");
-  while (idxSel.options.length > 1) idxSel.remove(1);
-  const idxs = new Set();
-  for (const date of dates)
-    for (const p of INC_DATA.by_date[date].papers)
-      if (p.i) idxs.add(p.i);
-  for (const s of [...idxs].sort()) {
-    const o = document.createElement("option"); o.value = s; o.textContent = s;
-    idxSel.appendChild(o);
-  }
-
-  if (INC_FP_ATUAL) INC_FP_ATUAL.destroy();
-  if (INC_FP_ANTERIOR) INC_FP_ANTERIOR.destroy();
-  INC_FP_ATUAL = flatpickr("#inc-date-atual", {
-    dateFormat: "Y-m-d", enable: dates, defaultDate: INC_DATE_ATUAL,
-    onChange: (_, dstr) => onIncDateChange("atual", dstr),
-  });
-  INC_FP_ANTERIOR = flatpickr("#inc-date-anterior", {
-    dateFormat: "Y-m-d", enable: _incRefEnable(INC_DATE_ATUAL),
-    defaultDate: INC_DATE_ANTERIOR || undefined,
-    onChange: (_, dstr) => onIncDateChange("anterior", dstr),
-  });
-
-  buildIncTable();
-  document.getElementById("inc-idx").addEventListener("change", applyIncFilter);
-  document.getElementById("inc-hide-iliq").addEventListener("change", applyIncFilter);
-  applyIncFilter();
-}
-
-function onIncDateChange(which, dstr) {
-  if (which === "atual") {
-    if (!dstr || dstr === INC_DATE_ATUAL) return;
-    INC_DATE_ATUAL = dstr;
-    INC_DATE_ANTERIOR = defaultAnteriorFor(INC_DATE_ATUAL,
-      (INC_DATA && INC_DATA.dates) || []);
-    if (INC_FP_ANTERIOR) {
-      INC_FP_ANTERIOR.set("enable", _incRefEnable(INC_DATE_ATUAL));
-      if (INC_DATE_ANTERIOR == null) INC_FP_ANTERIOR.clear(false);
-      else INC_FP_ANTERIOR.setDate(INC_DATE_ANTERIOR, false);
-    }
-  } else {
-    INC_DATE_ANTERIOR = dstr || null;
-  }
-  refreshIncData();
-}
-
-function refreshIncData() {
-  if (!INC_TABLE) return;
-  const rows = _incRowsForCurrentDates();
-  INC_STATS = _computeIncStats(rows);
-  INC_TABLE.replaceData(rows);
-  _incRenderKpis(rows);
-  applyIncFilter();
-}
-
-function buildIncTable() {
-  const fmtSpread = c => {
-    const v = c.getValue();
-    return v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + " pp";
-  };
-  const fmtDelta = c => {
-    const v = c.getValue();
-    const el = c.getElement();
-    el.classList.remove("neg", "pos");
-    el.style.backgroundColor = "";
-    if (v == null) return "—";
-    if (v > 0) el.classList.add("neg");
-    else if (v < 0) el.classList.add("pos");
-    el.style.backgroundColor = _bgForDelta(v, INC_STATS && INC_STATS.deltaAbsP95);
-    return (v >= 0 ? "+" : "") + v.toFixed(0);
-  };
-  const fmtPctPar = c => {
-    const v = c.getValue();
-    const el = c.getElement();
-    el.classList.remove("neg", "pos");
-    el.style.backgroundColor = "";
-    if (v == null) return "—";
-    if (v > 100) el.classList.add("pos");
-    else if (v < 100) el.classList.add("neg");
-    el.style.backgroundColor = _bgForPctPar(v, INC_STATS && INC_STATS.pparDistP95);
-    return v.toFixed(2) + "%";
-  };
-  const likeCI = (term, value) => {
-    if (term == null || term === "") return true;
-    const s = (value == null ? "" : String(value)).toLowerCase();
-    return s.includes(String(term).toLowerCase());
-  };
-  const likeMulti = (term, value) => {
-    if (term == null || term === "") return true;
-    const s = (value == null ? "" : String(value)).toLowerCase();
-    const parts = String(term).toLowerCase().split(",")
-      .map(t => t.trim()).filter(Boolean);
-    if (!parts.length) return true;
-    return parts.some(p => s.includes(p));
-  };
-  const numericFilter = (term, value) => {
-    if (term == null || term === "") return true;
-    const s = String(term).trim();
-    if (value == null) return false;
-    const m = s.match(/^(>=|<=|>|<|=)\s*(-?\d+(?:[.,]\d+)?)$/);
-    if (m) {
-      const op = m[1];
-      const ref = parseFloat(m[2].replace(",", "."));
-      const v = Number(value);
-      if (Number.isNaN(v)) return false;
-      if (op === ">") return v > ref;
-      if (op === "<") return v < ref;
-      if (op === ">=") return v >= ref;
-      if (op === "<=") return v <= ref;
-      if (op === "=") return v === ref;
-    }
-    return likeCI(term, value);
-  };
-  const setorOpts = (() => {
-    const all = new Set();
-    for (const date of (INC_DATA.dates || []))
-      for (const p of INC_DATA.by_date[date].papers)
-        if (p.s) all.add(p.s);
-    return ["", ...[...all].sort()];
-  })();
-  const idxOpts = (() => {
-    const all = new Set();
-    for (const date of (INC_DATA.dates || []))
-      for (const p of INC_DATA.by_date[date].papers)
-        if (p.i) all.add(p.i);
-    return ["", ...[...all].sort()];
-  })();
-  const _initialRows = _incRowsForCurrentDates();
-  INC_STATS = _computeIncStats(_initialRows);
-  _incRenderKpis(_initialRows);
-  INC_TABLE = new Tabulator("#inc-table", {
-    data: _initialRows,
-    layout: "fitData",
-    resizableColumns: true,
-    height: "70vh",
-    initialSort: [{ column: "spread_pp", dir: "desc" }],
-    columns: [
-      { title: "Código", field: "codigo", width: 88, frozen: true,
-        headerFilter: "input", headerFilterFunc: likeCI,
-        formatter: c => {
-          const r = c.getRow().getData();
-          let s = c.getValue();
-          if (r.estagnado) s += '<span class="badge warn">estag</span>';
-          return s;
-        } },
-      { title: "Emissor", field: "emissor", minWidth: 200,
-        headerFilter: "input", headerFilterFunc: likeMulti,
-        headerFilterPlaceholder: "ex: Aegea, BRK" },
-      { title: "Setor", field: "setor", width: 160,
-        headerFilter: "list",
-        headerFilterParams: { values: setorOpts, clearable: true },
-        headerFilterFunc: "=",
-        formatter: c => c.getValue() || "—" },
-      { title: "Index", field: "indexador", width: 80,
-        headerFilter: "list",
-        headerFilterParams: { values: idxOpts, clearable: true },
-        headerFilterFunc: "=" },
-      { title: "Vencimento", field: "vencimento", width: 105,
-        headerFilter: "input", headerFilterFunc: likeCI },
-      { title: "Ref Venc", field: "ref_venc", width: 105,
-        headerFilter: "input", headerFilterFunc: likeCI,
-        formatter: c => c.getValue() || "-" },
-      { title: "Duration", field: "duration_anos", width: 90, hozAlign: "right",
-        headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">2",
-        formatter: c => fmtAnos(c.getValue()) },
-      { title: "PU (R$)", field: "pu", width: 120, hozAlign: "right",
-        headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">1000",
-        formatter: c => {
-          const v = c.getValue();
-          if (v == null) return "—";
-          return v.toLocaleString("pt-BR",
-            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        } },
-      { title: "Taxa", field: "taxa", width: 78, hozAlign: "right",
-        headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">5",
-        formatter: c => fmtPct(c.getValue()) },
-      { title: "%PAR", field: "pct_pu_par", width: 84, hozAlign: "right",
-        headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">100",
-        formatter: fmtPctPar },
-      { title: "Spread Anterior", field: "spread_ref_pp", width: 130, hozAlign: "right",
-        headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">1.5",
-        formatter: fmtSpread },
-      { title: "Spread Atual", field: "spread_pp", width: 120, hozAlign: "right",
-        headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">1.5",
-        formatter: fmtSpread },
-      { title: "Δ Spread (bps)", field: "delta_bps", width: 130, hozAlign: "right",
-        headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">10",
-        formatter: fmtDelta },
-    ],
-  });
-}
-
-function applyIncFilter() {
-  if (!INC_TABLE) return;
-  const idx = document.getElementById("inc-idx").value;
-  const hideIliq = document.getElementById("inc-hide-iliq").checked;
-  INC_TABLE.setFilter(d => {
-    if (hideIliq && d.iliquido) return false;
-    if (idx && d.indexador !== idx) return false;
-    return true;
-  });
 }
 
 // DOMContentLoaded garante que os scripts <head defer> (Tabulator, Plotly,

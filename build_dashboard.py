@@ -165,27 +165,6 @@ def _clean_emissor(name: str | None) -> str:
     return re.sub(r"\s*\(\*+\)\s*", " ", name).strip()
 
 
-def _is_incentivada(emissor: str | None) -> bool:
-    """Detecta debênture Lei 12.431 (incentivada — IR isento p/ PF) via marcador
-    ANBIMA no campo 'Nome' do db.txt.
-
-    Convenção do arquivo oficial:
-      - sufixo "(*)"        -> Lei 12.431/2011 (incentivada de infra, IR isento PF)
-      - sufixo "(**)"       -> Lei 14.801/2024 (debênture de infra; benefício
-                                vai para a emissora, NÃO para o investidor PF)
-      - sufixo "(*) (**)"   -> ambos os regimes coexistindo
-
-    Esta função flagga APENAS Lei 12.431 puro: tem (*) E NÃO tem (**). Papéis
-    em regime dual ((*) (**)) ficam fora desta primeira iteração — o usuário
-    Lucas optou por escopo restrito ao benefício para PF.
-    """
-    if not emissor:
-        return False
-    has_star = "(*)" in emissor
-    has_double = "(**)" in emissor
-    return has_star and not has_double
-
-
 def _enrich(papers: list[dict]) -> list[dict]:
     """Anota cada papel com emissor normalizado + grupo de indexador + setor."""
     out = []
@@ -621,69 +600,6 @@ def build_dispersion(snaps: list[dict], dispersion_dir: Path) -> dict:
 
 
 # ----------------------------------------------------------------------------
-# incentivadas history (Tab 7: Debêntures Incentivadas — Lei 12.431)
-# ----------------------------------------------------------------------------
-
-def build_incentivadas_history(snaps: list[dict]) -> dict:
-    """Snapshot por data com APENAS papéis Lei 12.431 (incentivadas puras).
-
-    ISOLAMENTO: esta função é a ÚNICA produtora deste arquivo e NÃO modifica
-    nenhum dos snapshots de entrada nem propaga flags para outras saídas
-    (movements/overview/heatmap/dispersion ficam intocados byte-a-byte). A
-    detecção de Lei 12.431 acontece em memória via _is_incentivada(emissor),
-    sem depender de _enrich() — assim a remoção/inclusão desta aba não toca
-    em nenhum outro arquivo de dados.
-
-    Schema (chaves curtas para reduzir payload):
-      {
-        dates: [...],
-        latest: 'YYYY-MM-DD',
-        by_date: {
-          'YYYY-MM-DD': { papers: [
-              { c, e, s, i, d, sp, pu, ppar, taxa, venc, ref_venc, iliq, estag,
-                indice }, ...
-          ]}
-        }
-      }
-
-    A flag é re-derivada do campo emissor de cada snapshot histórico; assim
-    snapshots gerados ANTES desta mudança ganham o flag retroativamente sem
-    necessidade de re-fetch (o sufixo '(*)' já está preservado pelo parser).
-    """
-    by_date: dict[str, dict] = {}
-    dates: list[str] = []
-    for s in snaps:
-        date = s["data_referencia"]
-        dates.append(date)
-        papers = []
-        for p in _filter_allowed(s["debentures"]):
-            if not _is_incentivada(p.get("emissor")):
-                continue
-            papers.append({
-                "c": p.get("codigo"),
-                "e": _clean_emissor(p.get("emissor")),
-                "s": _classify_setor(p.get("codigo"), p.get("emissor")),
-                "i": _indexador_group(p.get("indice")),
-                "indice": p.get("indice"),
-                "d": p.get("duration_anos"),
-                "sp": p.get("spread_pp"),
-                "pu": p.get("pu"),
-                "ppar": p.get("pct_pu_par"),
-                "taxa": p.get("taxa_indicativa"),
-                "venc": p.get("vencimento"),
-                "ref_venc": p.get("benchmark_vencimento"),
-                "iliq": bool(p.get("flag_iliquido")),
-                "estag": bool(p.get("flag_estagnado")),
-            })
-        by_date[date] = {"papers": papers}
-    return {
-        "dates": dates,
-        "latest": dates[-1] if dates else None,
-        "by_date": by_date,
-    }
-
-
-# ----------------------------------------------------------------------------
 # titulos públicos history (Tab 6: Títulos Públicos)
 # ----------------------------------------------------------------------------
 
@@ -817,9 +733,6 @@ def main() -> int:
         _write_json(DATA_DIR / "movements.json", build_movements(snaps))))
     sizes.append(("titpub_history.json",
         _write_json(DATA_DIR / "titpub_history.json", build_titpub_history(snaps))))
-    sizes.append(("incentivadas_history.json",
-        _write_json(DATA_DIR / "incentivadas_history.json",
-                    build_incentivadas_history(snaps))))
 
     disp_index = build_dispersion(snaps, disp_dir)
     sizes.append(("dispersion/_index.json",
