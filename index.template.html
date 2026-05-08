@@ -466,7 +466,7 @@
           <option value="DI+">Apenas CDI</option>
         </select>
       </label>
-      <button data-hm="current" class="hm-btn active">Spread atual (pp)</button>
+      <button data-hm="current" class="hm-btn active">Spread atual (%)</button>
       <button data-hm="delta" class="hm-btn">Δ atual − anterior (bps)</button>
     </div>
     <div id="chart-heatmap" class="chart-tall"></div>
@@ -505,7 +505,7 @@
  *  utils
  * ============================================================ */
 const fmtPct = v => v == null ? "—" : v.toFixed(2) + "%";
-const fmtPp  = v => v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + " pp";
+const fmtPp  = v => v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
 const fmtBps = v => v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(0) + " bps";
 const fmtAnos = v => v == null ? "—" : v.toFixed(2) + "a";
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -724,7 +724,7 @@ function renderKpis(kpisMap) {
     // spread vs Data Anterior (em bps) — métrica de movimento. Nomes
     // distintos para evitar a ambiguidade do termo "Termômetro".
     { label: "Spread médio IPCA+ (nível)",
-      val: sIpca == null ? "—" : sIpca.toFixed(2) + " pp",
+      val: sIpca == null ? "—" : sIpca.toFixed(2) + "%",
       cls: _termCls(tIpcaDelta),
       hint: (ipca.n_spread_abs ?? 0) + " papéis IPCA+ com spread" },
     { label: "Δ Spread médio CDI+ (movimento)",
@@ -816,7 +816,7 @@ function renderHistogram(h, displayLabel, containerId) {
     x: centers, y: h.counts, type: "bar",
     marker: { color: cssVar("--accent"),
               line: { color: cssVar("--surface2"), width: 1 } },
-    hovertemplate: "Spread ≈ %{x:.2f} pp<br>n=%{y}<extra></extra>",
+    hovertemplate: "Spread ≈ %{x:.2f}%<br>n=%{y}<extra></extra>",
     width: 0.22,
   };
   const shapes = [
@@ -829,12 +829,12 @@ function renderHistogram(h, displayLabel, containerId) {
   ];
   const layout = Object.assign(PLOTLY_LAYOUT(), {
     xaxis: Object.assign(PLOTLY_LAYOUT().xaxis,
-      { title:"Spread (pp)", ticksuffix:" pp" }),
+      { title:"Spread (%)", ticksuffix:"%" }),
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title:"n papéis" }),
     shapes,
     annotations: [{
       x: h.p50, y: 1, yref: "paper", yanchor: "bottom",
-      text: "mediana " + h.p50.toFixed(2) + " pp",
+      text: "mediana " + h.p50.toFixed(2) + "%",
       showarrow: false, font: { color: cssVar("--warn"), size: 10 },
     }],
     bargap: 0.05,
@@ -1116,7 +1116,7 @@ function drawDispersion() {
           "Setor %{customdata[4]}<br>" +
           "Indexador %{customdata[3]}<br>" +
           "Duration %{x:.2f}a<br>Taxa %{customdata[2]:.2f}%<br>" +
-          (yIsPP ? "% do PAR %{y:.4f}%" : "Spread %{y:.2f} pp") +
+          (yIsPP ? "% do PAR %{y:.4f}%" : "Spread %{y:.2f}%") +
           "<extra></extra>",
       };
     }
@@ -1142,7 +1142,7 @@ function drawDispersion() {
         "Setor %{customdata[4]}<br>" +
         "Indexador %{customdata[3]}<br>" +
         "Duration %{x:.2f}a<br>Taxa %{customdata[2]:.2f}%<br>" +
-        (yIsPP ? "% do PAR %{y:.4f}%" : "Spread %{y:.2f} pp") +
+        (yIsPP ? "% do PAR %{y:.4f}%" : "Spread %{y:.2f}%") +
         "<extra></extra>",
     };
     for (const t of tail) {
@@ -1174,19 +1174,19 @@ function drawDispersion() {
         "Setor %{customdata[4]}<br>" +
         "Indexador %{customdata[3]}<br>" +
         "Duration %{x:.2f}a<br>Taxa %{customdata[2]:.2f}%<br>" +
-        (yIsPP ? "% do PAR %{y:.4f}%" : "Spread %{y:.2f} pp") +
+        (yIsPP ? "% do PAR %{y:.4f}%" : "Spread %{y:.2f}%") +
         "<extra></extra>",
     };
     data.push(hi);
   }
   let yTitle = yIsPP ? "% do PAR"
-    : (idxSel === "DI+" ? "Spread sobre CDI (pp)"
-      : idxSel === "Prefixado" ? "Spread sobre Pré (pp)"
-      : "Spread (pp)");
+    : (idxSel === "DI+" ? "Spread sobre CDI (%)"
+      : idxSel === "Prefixado" ? "Spread sobre Pré (%)"
+      : "Spread (%)");
   const layout = Object.assign(PLOTLY_LAYOUT(), {
     xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title:"Duration (anos)" }),
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
-      { title: yTitle, ticksuffix: yIsPP ? "%" : " pp" }),
+      { title: yTitle, ticksuffix: "%" }),
     legend:{ font:{size:10}, orientation:"v" },
   });
   if (TL_STATE.playing && TL_STATE.xRange && TL_STATE.yRange) {
@@ -1494,7 +1494,7 @@ function refreshMovData() {
 function buildMovTable() {
   const fmtSpread = c => {
     const v = c.getValue();
-    return v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + " pp";
+    return v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
   };
   const fmtDelta = c => {
     const v = c.getValue();
@@ -2035,8 +2035,8 @@ function drawHeatmap() {
   let z, suffix, title;
   if (HEAT_MODE === "current") {
     z = curGrid.means;
-    suffix = " pp";
-    title = "Spread médio (pp) — " + brDate(HM_DATE_ATUAL);
+    suffix = "%";
+    title = "Spread médio (%) — " + brDate(HM_DATE_ATUAL);
   } else {
     const old = HM_DATE_ANTERIOR ? HEAT.by_date[HM_DATE_ANTERIOR] : null;
     if (!old) {
@@ -2201,7 +2201,7 @@ function drawHeatEvolucao() {
       line: { width: 2, color: _heatColorFor(s) },
       marker: { size: 5, color: _heatColorFor(s) },
       connectgaps: true,
-      hovertemplate: `<b>${escapeHtml(s)}</b><br>%{x}<br>%{y:.2f} pp<extra></extra>`,
+      hovertemplate: `<b>${escapeHtml(s)}</b><br>%{x}<br>%{y:.2f}%<extra></extra>`,
     }));
   if (!traces.length) {
     Plotly.purge(root);
@@ -2211,7 +2211,7 @@ function drawHeatEvolucao() {
   const layout = Object.assign(PLOTLY_LAYOUT(), {
     margin: { l: 50, r: 18, t: 12, b: 80 },
     xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title: "Data", type: "category" }),
-    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title: "Spread médio (pp)" }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title: "Spread médio (%)" }),
     legend: { orientation: "h", y: -0.22, font: { size: 10 } },
     hovermode: "closest",
   });
@@ -2263,9 +2263,9 @@ function drawHeatWaterfall() {
   const y = [avgAnt, ...contribs.map(c => c.contrib), 0];
   const measure = ["absolute", ...contribs.map(() => "relative"), "total"];
   const text = [
-    avgAnt.toFixed(2) + " pp",
+    avgAnt.toFixed(2) + "%",
     ...contribs.map(c => (c.contrib >= 0 ? "+" : "") + (c.contrib * 100).toFixed(1) + " bps"),
-    avgAtu.toFixed(2) + " pp",
+    avgAtu.toFixed(2) + "%",
   ];
 
   const trace = {
@@ -2274,7 +2274,7 @@ function drawHeatWaterfall() {
     x, y, measure, text,
     textposition: "outside",
     hovertemplate:
-      "<b>%{x}</b><br>Contribuição: %{y:.4f} pp<extra></extra>",
+      "<b>%{x}</b><br>Contribuição: %{y:.4f}%<extra></extra>",
     connector: { line: { color: "#3a4150", width: 1, dash: "dot" } },
     increasing: { marker: { color: "#dc5752" } },  // spread abriu
     decreasing: { marker: { color: "#3aa66c" } },  // spread comprimiu
@@ -2283,7 +2283,7 @@ function drawHeatWaterfall() {
   const layout = Object.assign(PLOTLY_LAYOUT(), {
     margin: { l: 50, r: 18, t: 12, b: 110 },
     xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title: "", tickangle: -25 }),
-    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title: "Spread médio (pp)" }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title: "Spread médio (%)" }),
     showlegend: false,
   });
   Plotly.newPlot(root, [trace], layout, PLOTLY_CONFIG);
