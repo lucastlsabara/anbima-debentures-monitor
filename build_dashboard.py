@@ -195,7 +195,6 @@ def _enrich(papers: list[dict]) -> list[dict]:
         e["emissor_clean"] = emissor_clean
         e["indexador_grupo"] = _indexador_group(p.get("indice"))
         e["setor"] = _classify_setor(p.get("codigo"), p.get("emissor"))
-        e["is_incentivada"] = _is_incentivada(p.get("emissor"))
         out.append(e)
     return out
 
@@ -557,7 +556,6 @@ def build_movements(snaps: list[dict]) -> dict:
                 "iliquido": bool(p.get("flag_iliquido")),
                 "estagnado": bool(p.get("flag_estagnado")),
                 "dias_sem_variacao": p.get("dias_sem_variacao"),
-                "is_incentivada": bool(p.get("is_incentivada")),
             })
         return out
 
@@ -627,9 +625,16 @@ def build_dispersion(snaps: list[dict], dispersion_dir: Path) -> dict:
 # ----------------------------------------------------------------------------
 
 def build_incentivadas_history(snaps: list[dict]) -> dict:
-    """Snapshot por data com APENAS papéis Lei 12.431 (is_incentivada=True).
+    """Snapshot por data com APENAS papéis Lei 12.431 (incentivadas puras).
 
-    Schema enxuto (chaves curtas para reduzir payload):
+    ISOLAMENTO: esta função é a ÚNICA produtora deste arquivo e NÃO modifica
+    nenhum dos snapshots de entrada nem propaga flags para outras saídas
+    (movements/overview/heatmap/dispersion ficam intocados byte-a-byte). A
+    detecção de Lei 12.431 acontece em memória via _is_incentivada(emissor),
+    sem depender de _enrich() — assim a remoção/inclusão desta aba não toca
+    em nenhum outro arquivo de dados.
+
+    Schema (chaves curtas para reduzir payload):
       {
         dates: [...],
         latest: 'YYYY-MM-DD',
@@ -650,16 +655,15 @@ def build_incentivadas_history(snaps: list[dict]) -> dict:
     for s in snaps:
         date = s["data_referencia"]
         dates.append(date)
-        enr = _enrich(_filter_allowed(s["debentures"]))
         papers = []
-        for p in enr:
-            if not p.get("is_incentivada"):
+        for p in _filter_allowed(s["debentures"]):
+            if not _is_incentivada(p.get("emissor")):
                 continue
             papers.append({
-                "c": p["codigo"],
-                "e": p.get("emissor_clean"),
-                "s": p.get("setor"),
-                "i": p.get("indexador_grupo"),
+                "c": p.get("codigo"),
+                "e": _clean_emissor(p.get("emissor")),
+                "s": _classify_setor(p.get("codigo"), p.get("emissor")),
+                "i": _indexador_group(p.get("indice")),
                 "indice": p.get("indice"),
                 "d": p.get("duration_anos"),
                 "sp": p.get("spread_pp"),
