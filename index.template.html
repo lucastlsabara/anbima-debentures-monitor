@@ -493,7 +493,12 @@
   <div class="panel">
     <h2>Waterfall — variação do spread médio por setor</h2>
     <div id="hm-wf-sub" class="muted" style="font-size:11px;margin:-4px 0 8px"></div>
-    <div id="chart-heat-waterfall" class="chart-tall"></div>
+    <div id="chart-heat-waterfall" class="chart"></div>
+  </div>
+  <div class="panel">
+    <h2>Waterfall — variação do spread médio por duration</h2>
+    <div id="hm-wf-dur-sub" class="muted" style="font-size:11px;margin:-4px 0 8px"></div>
+    <div id="chart-heat-waterfall-dur" class="chart"></div>
   </div>
 </section>
 
@@ -704,8 +709,10 @@ function drawVisao() {
   renderHistogram(pair.histogram["DI+"]   || null, "CDI+",  "chart-histogram-cdi");
   renderTopMovers(topm["IPCA+"] || null, "IPCA+", "top-movers-ipca");
   renderTopMovers(topm["DI+"]   || null, "CDI+",  "top-movers-cdi");
-  renderDailySpreadBars("IPCA+", "chart-vis-spread-ipca", cssVar("--accent"));
-  renderDailySpreadBars("DI+",   "chart-vis-spread-cdi",  PALETTE_QUAL[2]);
+  // Cor unica nos dois graficos diarios (azul-cinza pastel) — comparacao
+  // visual lado-a-lado entre indexadores fica mais limpa.
+  renderDailySpreadBars("IPCA+", "chart-vis-spread-ipca", "#93B5CF");
+  renderDailySpreadBars("DI+",   "chart-vis-spread-cdi",  "#93B5CF");
   renderCurvesOverlay(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
   renderCurvesPre(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
 }
@@ -757,26 +764,30 @@ function renderKpis(kpisMap) {
   const cdi = kpisMap["DI+"] || {};
   const ipca = kpisMap["IPCA+"] || {};
   // Cor do termômetro: + delta = papel desvalorizou (vermelho/neg);
-  // − delta = apreciou (verde/pos); 0 ou null = neutro.
+  // − delta = apreciou (verde/pos); 0 ou null = neutro. Aplica-se aos
+  // cards de MOVIMENTO (Δ bps); cards de NÍVEL ficam neutros.
   const _termCls = v => v == null ? "" : (v > 0 ? "neg" : v < 0 ? "pos" : "");
-  const tCdi = cdi.termometro_med_bps;
-  const tIpcaDelta = ipca.termometro_med_bps;
+  const tIpca = ipca.termometro_med_bps;
+  const tCdi  = cdi.termometro_med_bps;
   const sIpca = ipca.mean_spread_abs_pp;
+  const sCdi  = cdi.mean_spread_abs_pp;
+  const _fmtBpsKpi = v => v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(1) + " bps";
   const cards = [
-    { label: "Papéis (IPCA+, CDI+, Pré)", val: all.n_total,
-      hint: `${all.n_liquidos} com taxa · ${all.n_com_spread} com spread oficial` },
-    { label: "Ilíquidos no dia", val: all.n_iliquidos,
-      hint: (all.pct_iliquidos ?? 0) + "% do total" },
-    // Cards de mercado: o IPCA+ mostra o nível absoluto do spread médio
-    // (em pp) — métrica de carrego. O CDI+ mostra a variação média do
-    // spread vs Data Anterior (em bps) — métrica de movimento. Nomes
-    // distintos para evitar a ambiguidade do termo "Termômetro".
+    // 4 cards: NÍVEL e MOVIMENTO para cada indexador (IPCA+ e CDI+).
+    // NÍVEL = spread médio absoluto na Data Atual (em pp).
+    // MOVIMENTO = média (em bps) da variação spread vs Data Anterior.
     { label: "Spread médio IPCA+ (nível)",
       val: sIpca == null ? "—" : sIpca.toFixed(2) + "%",
-      cls: _termCls(tIpcaDelta),
       hint: (ipca.n_spread_abs ?? 0) + " papéis IPCA+ com spread" },
+    { label: "Δ Spread médio IPCA+ (movimento)",
+      val: _fmtBpsKpi(tIpca),
+      cls: _termCls(tIpca),
+      hint: (ipca.n_com_d1 ?? 0) + " papéis IPCA+ com Δ vs " + brDate(all.data_anterior) },
+    { label: "Spread médio CDI+ (nível)",
+      val: sCdi == null ? "—" : sCdi.toFixed(2) + "%",
+      hint: (cdi.n_spread_abs ?? 0) + " papéis CDI+ com spread" },
     { label: "Δ Spread médio CDI+ (movimento)",
-      val: tCdi == null ? "—" : (tCdi >= 0 ? "+" : "") + tCdi.toFixed(1) + " bps",
+      val: _fmtBpsKpi(tCdi),
       cls: _termCls(tCdi),
       hint: (cdi.n_com_d1 ?? 0) + " papéis CDI+ com Δ vs " + brDate(all.data_anterior) },
   ];
@@ -2192,15 +2203,18 @@ function _heatGlobalAvgForDate(date) {
   return arr.reduce((a, b) => a + b, 0) / arr.length;
 }
 
+// Formata um delta de contribuicao (em pp/percentage points) como bps.
+// 1pp = 100 bps, entao multiplicamos por 100. Ex: 0.001pp -> "+0.1 bps".
+function _fmtBpsContrib(deltaPp) {
+  const bps = deltaPp * 100;
+  return (bps >= 0 ? "+" : "") + bps.toFixed(1) + " bps";
+}
+
 function drawHeatWaterfall() {
-  // Decomposicao do spread medio global em contribuicoes setoriais:
-  //   spread_global(t) = sum_s contrib_s(t),  contrib_s(t) = avg_s(t) * n_s(t) / n_total(t)
-  // O painel tem dois subplots independentes:
-  //   topo  -> duas barras stacked (Anterior, Atual) decompostas por setor;
-  //   base  -> variacao por setor (delta = contrib_atual - contrib_anterior),
-  //            renderizada em escala propria (amplificada) para evidenciar
-  //            quem dirigiu a mudanca apesar dos totais quase identicos.
-  // Soma dos deltas == avgAtu - avgAnt (waterfall fecha exatamente).
+  // Decomposicao da variacao do spread medio global em contribuicoes
+  // setoriais: contrib_s(t) = avg_s(t) * n_s(t) / n_total(t).
+  // delta_s = contrib_s(atual) - contrib_s(anterior). Soma == avgAtu - avgAnt
+  // (waterfall fecha exatamente).
   const root = document.getElementById("chart-heat-waterfall");
   const sub = document.getElementById("hm-wf-sub");
   if (!HM_DATE_ANTERIOR || !HM_DATE_ATUAL) {
@@ -2220,93 +2234,116 @@ function drawHeatWaterfall() {
     root.innerHTML = '<div class="empty">Snapshot ausente em uma das datas.</div>';
     return;
   }
-  const avgAnt = _heatGlobalAvgForDate(HM_DATE_ANTERIOR);
-  const avgAtu = _heatGlobalAvgForDate(HM_DATE_ATUAL);
 
   const setoresUnion = (HEAT.setores || []).filter(s => ant[s] || atu[s]);
   const rows = setoresUnion.map(s => {
     const a = ant[s] ? (ant[s].avg * ant[s].n / nAnt) : 0;
     const b = atu[s] ? (atu[s].avg * atu[s].n / nAtu) : 0;
-    return { s, a, b, delta: b - a };
+    return { s, delta: b - a };
   });
-  // Stack do topo: setor com maior contribuicao media fica embaixo.
-  rows.sort((x, y) => (y.a + y.b) - (x.a + x.b));
+  // Maior magnitude primeiro: leitor identifica drivers a olho.
+  rows.sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
 
-  const xCats = ["Anterior", "Atual"];
-  const stackTraces = rows.map(r => {
-    const pctA = avgAnt ? (r.a / avgAnt * 100) : 0;
-    const pctB = avgAtu ? (r.b / avgAtu * 100) : 0;
-    return {
-      type: "bar",
-      name: r.s,
-      x: xCats,
-      y: [r.a, r.b],
-      xaxis: "x", yaxis: "y",
-      marker: { color: _heatColorFor(r.s) },
-      customdata: [[pctA], [pctB]],
-      hovertemplate:
-        `<b>${escapeHtml(r.s)}</b><br>` +
-        "%{x}<br>" +
-        "Contribuição: %{y:.4f}% (%{customdata[0]:.1f}% do total)" +
-        "<extra></extra>",
-    };
-  });
-
-  // Subplot inferior: variacao por setor em escala propria.
-  const deltas = rows.slice().sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
   const deltaTrace = {
     type: "bar",
     name: "Variação",
-    x: deltas.map(r => r.s),
-    y: deltas.map(r => r.delta),
-    xaxis: "x2", yaxis: "y2",
-    marker: { color: deltas.map(r => r.delta >= 0 ? "#dc5752" : "#3aa66c") },
-    text: deltas.map(r =>
-      (r.delta >= 0 ? "+" : "") + (r.delta * 100).toFixed(1) + " bps"),
+    x: rows.map(r => r.s),
+    y: rows.map(r => r.delta * 100),  // pp -> bps
+    marker: { color: rows.map(r => r.delta >= 0 ? "#dc5752" : "#3aa66c") },
+    text: rows.map(r => _fmtBpsContrib(r.delta)),
     textposition: "outside",
     showlegend: false,
     hovertemplate:
       "<b>%{x}</b><br>" +
-      "Δ contribuição: %{y:.4f}%" +
+      "Δ contribuição: %{y:.2f} bps" +
       "<extra></extra>",
   };
 
-  const annotations = [
-    { xref: "x", yref: "y", x: "Anterior", y: avgAnt,
-      text: "<b>" + avgAnt.toFixed(2) + "%</b>",
-      showarrow: false, yanchor: "bottom", yshift: 6, font: { size: 12 } },
-    { xref: "x", yref: "y", x: "Atual", y: avgAtu,
-      text: "<b>" + avgAtu.toFixed(2) + "%</b>",
-      showarrow: false, yanchor: "bottom", yshift: 6, font: { size: 12 } },
-    { xref: "paper", yref: "paper", x: 0, y: 1.02,
-      text: "Decomposição por setor",
-      showarrow: false, xanchor: "left",
-      font: { size: 10, color: cssVar("--muted") } },
-    { xref: "paper", yref: "paper", x: 0, y: 0.36,
-      text: "Variação por setor (escala amplificada)",
-      showarrow: false, xanchor: "left",
-      font: { size: 10, color: cssVar("--muted") } },
-  ];
-
-  const axisBase = {
-    gridcolor: cssVar("--border"),
-    zerolinecolor: cssVar("--border-strong"),
-  };
   const layout = Object.assign(PLOTLY_LAYOUT(), {
-    margin: { l: 60, r: 18, t: 30, b: 110 },
-    barmode: "stack",
-    xaxis:  Object.assign({}, axisBase, { anchor: "y",  domain: [0, 1] }),
-    yaxis:  Object.assign({}, axisBase, { anchor: "x",  domain: [0.42, 1.0],
-                                           title: "Spread médio (%)", rangemode: "tozero" }),
-    xaxis2: Object.assign({}, axisBase, { anchor: "y2", domain: [0, 1], tickangle: -25 }),
-    yaxis2: Object.assign({}, axisBase, { anchor: "x2", domain: [0, 0.30],
-                                           title: "Δ contribuição (%)" }),
-    legend: { orientation: "h", y: -0.30, font: { size: 10 } },
-    annotations,
-    showlegend: true,
+    margin: { l: 60, r: 18, t: 20, b: 110 },
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { tickangle: -25 }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
+      { title: "Δ contribuição (bps)", ticksuffix: " bps" }),
+    showlegend: false,
     hovermode: "closest",
   });
-  Plotly.newPlot(root, [...stackTraces, deltaTrace], layout, PLOTLY_CONFIG);
+  Plotly.newPlot(root, [deltaTrace], layout, PLOTLY_CONFIG);
+  drawHeatWaterfallDuration();
+}
+
+// Mesma decomposicao do waterfall por setor, mas decomposto pelos buckets
+// de duration usados no heatmap (alinhamento conceitual: barras do mesmo
+// universo, agora segmentado pela outra dimensao). Soma dos deltas tambem
+// fecha com avgAtu - avgAnt do pool global filtrado.
+function _heatBucketAvgsForDate(date) {
+  const buckets = _heatBuckets();
+  const acc = buckets.map(() => []);
+  for (const p of _heatFilteredPapers(HEAT.by_date[date])) {
+    for (let i = 0; i < buckets.length; i++) {
+      const [, lo, hi] = buckets[i];
+      if (p.d >= lo && p.d < hi) { acc[i].push(p.sp); break; }
+    }
+  }
+  return buckets.map((b, i) => {
+    const arr = acc[i];
+    return arr.length
+      ? { label: b[0], avg: arr.reduce((x, y) => x + y, 0) / arr.length, n: arr.length }
+      : { label: b[0], avg: 0, n: 0 };
+  });
+}
+
+function drawHeatWaterfallDuration() {
+  const root = document.getElementById("chart-heat-waterfall-dur");
+  const sub = document.getElementById("hm-wf-dur-sub");
+  if (!HM_DATE_ANTERIOR || !HM_DATE_ATUAL) {
+    if (sub) sub.textContent = "Selecione Data Anterior e Data Atual.";
+    Plotly.purge(root);
+    root.innerHTML = '<div class="empty">Selecione Data Anterior e Data Atual.</div>';
+    return;
+  }
+  if (sub) sub.textContent = `De ${brDate(HM_DATE_ANTERIOR)} para ${brDate(HM_DATE_ATUAL)}`;
+
+  const ant = _heatBucketAvgsForDate(HM_DATE_ANTERIOR);
+  const atu = _heatBucketAvgsForDate(HM_DATE_ATUAL);
+  const nAnt = ant.reduce((a, x) => a + x.n, 0);
+  const nAtu = atu.reduce((a, x) => a + x.n, 0);
+  if (!nAnt || !nAtu) {
+    Plotly.purge(root);
+    root.innerHTML = '<div class="empty">Snapshot ausente em uma das datas.</div>';
+    return;
+  }
+  // Mantem a ordem natural dos buckets (curto -> longo) para leitura do prazo.
+  const rows = ant.map((a, i) => {
+    const b = atu[i];
+    const cAnt = a.n ? (a.avg * a.n / nAnt) : 0;
+    const cAtu = b.n ? (b.avg * b.n / nAtu) : 0;
+    return { label: a.label, delta: cAtu - cAnt };
+  });
+
+  const deltaTrace = {
+    type: "bar",
+    name: "Variação",
+    x: rows.map(r => r.label),
+    y: rows.map(r => r.delta * 100),
+    marker: { color: rows.map(r => r.delta >= 0 ? "#dc5752" : "#3aa66c") },
+    text: rows.map(r => _fmtBpsContrib(r.delta)),
+    textposition: "outside",
+    showlegend: false,
+    hovertemplate:
+      "<b>%{x}</b><br>" +
+      "Δ contribuição: %{y:.2f} bps" +
+      "<extra></extra>",
+  };
+
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    margin: { l: 60, r: 18, t: 20, b: 60 },
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title: "Duration" }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
+      { title: "Δ contribuição (bps)", ticksuffix: " bps" }),
+    showlegend: false,
+    hovermode: "closest",
+  });
+  Plotly.newPlot(root, [deltaTrace], layout, PLOTLY_CONFIG);
 }
 
 /* ============================================================
