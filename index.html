@@ -480,6 +480,11 @@
       <div class="exclusion-chips" id="heat-exclude-chips"></div>
     </div>
   </div>
+  <div class="panel">
+    <h2>Evolução dos spreads médios — setor</h2>
+    <div id="hm-evol-sub" class="muted" style="font-size:11px;margin:-4px 0 8px"></div>
+    <div id="chart-heat-evolucao" class="chart-tall"></div>
+  </div>
 </section>
 
 </main>
@@ -2091,6 +2096,120 @@ function drawHeatmap() {
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { autorange:"reversed" }),
   });
   Plotly.newPlot("chart-heatmap", [trace], layout, PLOTLY_CONFIG);
+  drawHeatEvolucao();
+}
+
+// Paleta estavel por setor — garante a mesma cor no line chart e no waterfall.
+// 13 setores na ANBIMA; ciclamos a paleta padrao do Plotly se passar disso.
+const _HEAT_COLORWAY = [
+  "#7facff", "#ffb480", "#3aa66c", "#dc5752", "#b388ff",
+  "#a0735a", "#f48fb1", "#9aa0a6", "#d4d04b", "#4dd0e1",
+  "#ff8a65", "#9ccc65", "#ba68c8",
+];
+function _heatColorFor(setor) {
+  const setores = HEAT?.setores || [];
+  const i = setores.indexOf(setor);
+  return _HEAT_COLORWAY[(i < 0 ? 0 : i) % _HEAT_COLORWAY.length];
+}
+
+function _heatFilteredPapers(snap) {
+  if (!snap) return [];
+  const out = [];
+  for (const p of (snap.papers || [])) {
+    if (HEAT_IDX !== "ambos" && p.i !== HEAT_IDX) continue;
+    if (HEAT_EXCLUDE.size && HEAT_EXCLUDE.has(normEmissor(p.e))) continue;
+    out.push(p);
+  }
+  return out;
+}
+
+function _heatSectorAvgsForDate(date) {
+  // setor -> { avg, n } para a data, depois de filtros de indexador e exclusao.
+  const acc = {};
+  for (const p of _heatFilteredPapers(HEAT.by_date[date])) {
+    if (!acc[p.s]) acc[p.s] = [];
+    acc[p.s].push(p.sp);
+  }
+  const out = {};
+  for (const s in acc) {
+    const arr = acc[s];
+    out[s] = { avg: arr.reduce((a, b) => a + b, 0) / arr.length, n: arr.length };
+  }
+  return out;
+}
+
+function _heatGlobalAvgForDate(date) {
+  const arr = _heatFilteredPapers(HEAT.by_date[date]).map(p => p.sp);
+  if (!arr.length) return null;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+function _heatDatesInRange() {
+  const dates = HEAT.dates || [];
+  const a = HM_DATE_ANTERIOR;
+  const b = HM_DATE_ATUAL;
+  if (!a || !b) return [];
+  return dates.filter(d => d >= a && d <= b);
+}
+
+function drawHeatEvolucao() {
+  // Item 3: line chart com a evolucao do spread medio por setor no
+  // intervalo [Data Anterior, Data Atual]. Spread medio do setor = media
+  // simples dos spreads dos papeis daquele setor que passam HEAT_IDX +
+  // HEAT_EXCLUDE — mesma logica do heatmap. Setores sem papeis sobreviventes
+  // nao aparecem (mesmo efeito que "excluir do calculo" propaga aqui).
+  const root = document.getElementById("chart-heat-evolucao");
+  const sub = document.getElementById("hm-evol-sub");
+  const dateRange = _heatDatesInRange();
+  if (sub) {
+    sub.textContent = dateRange.length
+      ? `${brDate(dateRange[0])} a ${brDate(dateRange[dateRange.length - 1])}`
+      : "Selecione Data Anterior e Data Atual.";
+  }
+  if (dateRange.length < 2) {
+    Plotly.purge(root);
+    root.innerHTML = '<div class="empty">Selecione um intervalo com pelo menos 2 datas.</div>';
+    return;
+  }
+  const setores = HEAT.setores || [];
+  const presentes = new Set();
+  const series = {};
+  for (const s of setores) series[s] = [];
+  for (const d of dateRange) {
+    const avgs = _heatSectorAvgsForDate(d);
+    for (const s of setores) {
+      const v = avgs[s] ? avgs[s].avg : null;
+      series[s].push(v);
+      if (v != null) presentes.add(s);
+    }
+  }
+  const xLabels = dateRange.map(brDate);
+  const traces = setores
+    .filter(s => presentes.has(s))
+    .map(s => ({
+      type: "scatter",
+      mode: "lines+markers",
+      name: s,
+      x: xLabels,
+      y: series[s],
+      line: { width: 2, color: _heatColorFor(s) },
+      marker: { size: 5, color: _heatColorFor(s) },
+      connectgaps: true,
+      hovertemplate: `<b>${escapeHtml(s)}</b><br>%{x}<br>%{y:.2f} pp<extra></extra>`,
+    }));
+  if (!traces.length) {
+    Plotly.purge(root);
+    root.innerHTML = '<div class="empty">Sem papeis apos filtros.</div>';
+    return;
+  }
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    margin: { l: 50, r: 18, t: 12, b: 80 },
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title: "Data", type: "category" }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title: "Spread médio (pp)" }),
+    legend: { orientation: "h", y: -0.22, font: { size: 10 } },
+    hovermode: "closest",
+  });
+  Plotly.newPlot(root, traces, layout, PLOTLY_CONFIG);
 }
 
 /* ============================================================
