@@ -392,6 +392,16 @@
   .trd-evol-title {
     color:var(--muted); font-size:11.5px; margin:-4px 0 6px;
   }
+  .trd-evol-notice {
+    display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+    color:var(--warn); font-size:11.5px; margin:-2px 0 8px;
+  }
+  .trd-evol-link {
+    background:transparent; border:none; padding:0;
+    color:var(--accent); font-size:11.5px; font-family:inherit;
+    cursor:pointer; text-decoration:underline;
+  }
+  .trd-evol-link:hover { opacity:.85; }
   .trd-evol-chart { width:100%; min-height:360px; }
 </style>
 </head>
@@ -692,6 +702,10 @@
         <span id="trd-evol-bucket" class="trd-evol-bucket"></span>
       </div>
       <div class="trd-evol-title" id="trd-evol-title"></div>
+      <div class="trd-evol-notice hide" id="trd-evol-notice">
+        <span id="trd-evol-notice-text"></span>
+        <button type="button" id="trd-evol-toggle" class="trd-evol-link"></button>
+      </div>
       <div id="trd-evol-msg" class="empty hide"></div>
       <div id="trd-evol-chart" class="trd-evol-chart"></div>
     </div>
@@ -3292,6 +3306,10 @@ let TRD_EVOL_INDEX = null;          // {tickers:[{c,issuer,vol}], emissores:[{na
 // Selecao do picker; persiste entre re-renders (ate o usuario remover ou
 // trocar de range pra um onde o item nao existe mais).
 let TRD_EVOL_SELECTION = null;      // {type:'t'|'e', value:string} | null
+// Em modo emissor, default oculta tickers com rate medio >= 50% (provavel
+// %CDI, semantica diferente). 'all' renderiza todos. Sem efeito em modo
+// ticker (selecao explicita sempre renderiza).
+let TRD_EVOL_OUTLIER_MODE = "default";   // 'default' | 'all'
 const TRD_DAY_CACHE = new Map();   // date -> {columns, rows, ...}
 const TRD_COLUMNS = [
   "instrument","issuer","ticker","setor","qtd","price","vol",
@@ -3584,6 +3602,13 @@ function trd_renderDailyChart(daily) {
 const TRD_BUCKET_LABEL = {
   hour: "hora", day: "dia", week: "semana", month: "mês",
 };
+// d3-format strings usados no eixo X do chart (Plotly date axis).
+const TRD_BUCKET_TICKFORMAT = {
+  hour: "%d-%m %H:%M", day: "%d-%m", week: "%d-%m", month: "%b %Y",
+};
+// Threshold pra distinguir indexador aditivo (IPCA+/CDI+/Pre, rate ~5-15%)
+// de %CDI (rate ~95-115%). Usado pra ocultar outliers no modo emissor.
+const TRD_OUTLIER_RATE_THRESHOLD = 50;
 const TRD_MES_ABBR = ["Jan","Fev","Mar","Abr","Mai","Jun",
                       "Jul","Ago","Set","Out","Nov","Dez"];
 
@@ -3817,6 +3842,8 @@ function trd_initEvolPicker() {
     if (!e.target.closest("button[data-remove]")) return;
     trd_handleChipRemove();
   });
+  document.getElementById("trd-evol-toggle")
+    .addEventListener("click", () => trd_handleOutlierToggle());
 }
 
 function trd_handlePickerSelect(type, value) {
@@ -3868,6 +3895,44 @@ function trd_resolveEvolSelection() {
   return { type: "t", value: top.c, tickers: [top.c], headerText: top.c };
 }
 
+// Particiona series de tickers de um emissor entre Grupo A (rate medio
+// < threshold) e Grupo B (>=). Calcula vwap medio do papel pesado por
+// volume — usa as proprias series ja agregadas por bucket.
+function trd_partitionEvolSeries(seriesByTicker) {
+  const groupA = [], groupB = [];
+  for (const s of seriesByTicker) {
+    let sumRV = 0, sumV = 0;
+    for (const p of s.series) {
+      if (typeof p.vwap !== "number" || typeof p.vol !== "number") continue;
+      sumRV += p.vwap * p.vol;
+      sumV += p.vol;
+    }
+    const meanRate = sumV > 0 ? sumRV / sumV : null;
+    if (meanRate != null && meanRate >= TRD_OUTLIER_RATE_THRESHOLD) {
+      groupB.push(s);
+    } else {
+      groupA.push(s);
+    }
+  }
+  return { groupA, groupB };
+}
+
+function trd_filterEvolSeries(seriesByTicker, selType, mode) {
+  // Em modo ticker, sempre renderiza tudo (selecao explicita).
+  if (selType !== "e") {
+    return { visible: seriesByTicker, hiddenCount: 0, hiddenAll: false };
+  }
+  const { groupA, groupB } = trd_partitionEvolSeries(seriesByTicker);
+  if (mode === "all") {
+    return { visible: [...groupA, ...groupB], hiddenCount: 0, hiddenAll: false };
+  }
+  // mode = 'default'
+  if (groupA.length === 0 && groupB.length > 0) {
+    return { visible: [], hiddenCount: groupB.length, hiddenAll: true };
+  }
+  return { visible: groupA, hiddenCount: groupB.length, hiddenAll: false };
+}
+
 function trd_renderEvolChart() {
   if (!TRD_RANGE_ROWS || !TRD_RANGE_ROWS.length) return;
 
@@ -3880,6 +3945,11 @@ function trd_renderEvolChart() {
   const msgEl = document.getElementById("trd-evol-msg");
   const chartEl = document.getElementById("trd-evol-chart");
   const titleEl = document.getElementById("trd-evol-title");
+  const noticeEl = document.getElementById("trd-evol-notice");
+  const noticeTextEl = document.getElementById("trd-evol-notice-text");
+  const toggleEl = document.getElementById("trd-evol-toggle");
+
+  const _hideNotice = () => { noticeEl.classList.add("hide"); };
 
   const sel = trd_resolveEvolSelection();
   trd_renderEvolChip();
@@ -3889,6 +3959,7 @@ function trd_renderEvolChart() {
     msgEl.textContent = "Sem papéis no período.";
     msgEl.classList.remove("hide");
     chartEl.innerHTML = "";
+    _hideNotice();
     return;
   }
   titleEl.textContent = sel.headerText;
@@ -3899,27 +3970,68 @@ function trd_renderEvolChart() {
   })).filter(s => s.series.length > 0);
 
   if (!seriesByTicker.length) {
-    const subj = sel.type === "t" ? sel.value : sel.value;
-    msgEl.textContent = `Sem trades com taxa para ${subj} no período.`;
+    msgEl.textContent = `Sem trades com taxa para ${sel.value} no período.`;
+    msgEl.classList.remove("hide");
+    chartEl.innerHTML = "";
+    _hideNotice();
+    return;
+  }
+
+  const filtered = trd_filterEvolSeries(seriesByTicker, sel.type, TRD_EVOL_OUTLIER_MODE);
+
+  // Aviso/toggle de outliers (so em modo emissor com Grupo B presente).
+  if (sel.type === "e" && (filtered.hiddenCount > 0 || TRD_EVOL_OUTLIER_MODE === "all")) {
+    const groupB = trd_partitionEvolSeries(seriesByTicker).groupB;
+    const nB = groupB.length;
+    if (TRD_EVOL_OUTLIER_MODE === "all" && nB > 0) {
+      noticeTextEl.textContent =
+        `${nB} papel${nB === 1 ? "" : "eis"} com rate ≥${TRD_OUTLIER_RATE_THRESHOLD}% (provável %CDI) visível${nB === 1 ? "" : "(eis)"}.`;
+      toggleEl.textContent = "Ocultar outliers";
+      noticeEl.classList.remove("hide");
+    } else if (filtered.hiddenAll) {
+      noticeTextEl.textContent =
+        `Todos os papéis de ${sel.value} são %CDI (rate ≥${TRD_OUTLIER_RATE_THRESHOLD}%).`;
+      toggleEl.textContent = "Mostrar todos";
+      noticeEl.classList.remove("hide");
+    } else if (filtered.hiddenCount > 0) {
+      const n = filtered.hiddenCount;
+      noticeTextEl.textContent =
+        `${n} papel${n === 1 ? "" : "eis"} ocultado${n === 1 ? "" : "s"} (rate ≥${TRD_OUTLIER_RATE_THRESHOLD}%, provável %CDI).`;
+      toggleEl.textContent = "Mostrar todos";
+      noticeEl.classList.remove("hide");
+    } else {
+      _hideNotice();
+    }
+  } else {
+    _hideNotice();
+  }
+
+  if (!filtered.visible.length) {
+    msgEl.textContent = `Sem trades com taxa para ${sel.value} no período.`;
     msgEl.classList.remove("hide");
     chartEl.innerHTML = "";
     return;
   }
   msgEl.classList.add("hide");
 
-  const traces = seriesByTicker.map((s, idx) => {
+  const traces = filtered.visible.map((s, idx) => {
     const color = sel.type === "t" ? cssVar("--accent") : PALETTE_QUAL[idx % PALETTE_QUAL.length];
+    // X = ms epoch UTC do bucket (consistente com bucket calculado em local
+    // time; Plotly trata como Date e ordena cronologicamente). customdata
+    // carrega o label pt-BR pre-formatado para o hover.
+    const xs = s.series.map(p => p.ts.getTime());
+    const ys = s.series.map(p => p.vwap);
+    const customdata = s.series.map(p => [p.label, trd_fmtMoneyShort(p.vol), p.n]);
     return {
       type: "scatter", mode: "lines+markers",
       name: s.ticker,
-      x: s.series.map(p => p.label),
-      y: s.series.map(p => p.vwap),
+      x: xs, y: ys,
       line: { color, width: 2 },
       marker: { color, size: 6 },
-      customdata: s.series.map(p => [trd_fmtMoneyShort(p.vol), p.n]),
+      customdata,
       hovertemplate:
-        `<b>${s.ticker}</b><br>%{x}<br>VWAP: %{y:.4f}%` +
-        `<br>Vol: %{customdata[0]}<br>N: %{customdata[1]}<extra></extra>`,
+        `<b>${s.ticker}</b><br>%{customdata[0]}<br>VWAP: %{y:.4f}%` +
+        `<br>Vol: %{customdata[1]}<br>N: %{customdata[2]}<extra></extra>`,
     };
   });
 
@@ -3932,12 +4044,20 @@ function trd_renderEvolChart() {
       ? { x: 1.02, y: 1, xanchor: "left", yanchor: "top",
           bgcolor: "rgba(0,0,0,0)", font: { size: 11 } }
       : undefined,
-    xaxis: Object.assign({}, base.xaxis, { type: "category" }),
+    xaxis: Object.assign({}, base.xaxis, {
+      type: "date",
+      tickformat: TRD_BUCKET_TICKFORMAT[granularity],
+    }),
     yaxis: Object.assign({}, base.yaxis, {
       tickformat: ".4f", ticksuffix: "%",
     }),
   });
   Plotly.newPlot("trd-evol-chart", traces, layout, PLOTLY_CONFIG);
+}
+
+function trd_handleOutlierToggle() {
+  TRD_EVOL_OUTLIER_MODE = (TRD_EVOL_OUTLIER_MODE === "default") ? "all" : "default";
+  trd_renderEvolChart();
 }
 
 function trd_renderTable(rows) {
