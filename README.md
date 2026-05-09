@@ -215,6 +215,32 @@ Setor das debêntures (`instrument == "DEB"`) é resolvido via
 literalmente `"Outros"`. Mudanças em `sectors.py` só refletem nos snapshots
 existentes após rodar `recompute_sectors.py`.
 
+## Aba Trades (multi-indexador)
+
+Aba comparativa que separa os tickers selecionados em **CDI** vs **IPCA** e
+mostra, para cada grupo, VWAP por bucket (line) e volume R$ por bucket
+(stacked bar). Reusa os trades de `data/b3_trades/` e adiciona um segundo
+pipeline para resolver o indexador de cada ticker:
+
+```bash
+# B3 InstrumentRegistration: cobre o universo completo (DEB/CRA/CRI/...).
+# Roda diariamente como parte da routine ANBIMA Debentures Diário.
+python3 fetch_b3_instruments.py                    # default: último dia útil
+python3 fetch_b3_instruments.py 2026-05-08         # data específica
+```
+
+Saída em `data/b3_instruments/{YYYY-MM-DD}.json` (formato colunar
+minificado) + `manifest.json`. Idempotente — pula dia já existente. O
+mapping `ticker → indexador` é a união de:
+1. `history/<data>.json` (ANBIMA, prioritário, cobre debêntures via
+   `indexador_grupo`)
+2. `data/b3_instruments/<data>.json` (B3, fallback para CRA/CRI/CFF/COE
+   via campo `indexer`)
+
+Tickers Pré-fixados / Outros aparecem como chips, mas não são plotados
+nos charts CDI/IPCA — o aviso sutil do card identifica quantos foram
+ocultados.
+
 ## Convenção
 
 - **252 dias úteis = 1 ano** (convenção ANBIMA da ETTJ)

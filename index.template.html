@@ -403,6 +403,36 @@
   }
   .trd-evol-link:hover { opacity:.85; }
   .trd-evol-chart { width:100%; min-height:360px; }
+  /* Aba Trades (multi-indexador) */
+  .tr2-toolbar { row-gap:8px; }
+  .tr2-pk {
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    margin-left:auto;
+  }
+  .tr2-pk-label { color:var(--muted); font-size:12px; }
+  .tr2-pk-wrap { position:relative; min-width:280px; }
+  .tr2-pk-wrap input {
+    background:var(--surface2); color:var(--fg);
+    border:1px solid var(--border-strong); border-radius:4px;
+    padding:6px 10px; font-size:12.5px; font-family:inherit;
+    width:280px;
+  }
+  .tr2-pk-wrap input:focus { outline:none; border-color:var(--accent); }
+  .tr2-pk-sug { min-width:280px; max-width:520px; }
+  .tr2-clear {
+    background:var(--surface2); color:var(--fg);
+    border:1px solid var(--border-strong); border-radius:4px;
+    padding:5px 10px; font-size:11.5px; font-family:inherit;
+    cursor:pointer;
+  }
+  .tr2-clear:hover { border-color:var(--accent); }
+  .tr2-chips {
+    display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;
+  }
+  .tr2-chips:empty { display:none; }
+  .tr2-notice {
+    color:var(--warn); font-size:11.5px; margin-top:8px;
+  }
 </style>
 </head>
 <body>
@@ -418,6 +448,7 @@
   <a href="#/dispersao" data-tab="dispersao">Debêntures: Gráfico</a>
   <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
   <a href="#/trades-b3" data-tab="trades-b3">Trades B3</a>
+  <a href="#/trades" data-tab="trades">Trades</a>
 </nav>
 
 <main>
@@ -716,6 +747,60 @@
   </div>
 </section>
 
+<!-- ===================== Tab: Trades (multi-indexador) ===================== -->
+<section id="tab-trades" class="tab hide">
+  <div class="panel">
+    <div class="controls tr2-toolbar">
+      <label>De:
+        <input type="text" id="tr2-date-ini" placeholder="DD-MM-YYYY">
+      </label>
+      <label>Até:
+        <input type="text" id="tr2-date-fim" placeholder="DD-MM-YYYY">
+      </label>
+      <button id="tr2-apply" type="button">Aplicar</button>
+      <span id="tr2-status" class="trd-status"></span>
+      <div class="tr2-pk">
+        <label class="tr2-pk-label" for="tr2-picker">Buscar:</label>
+        <div class="tr2-pk-wrap">
+          <input type="text" id="tr2-picker" autocomplete="off"
+                 placeholder="ticker ou emissor (ex: GGBRA7, Gerdau)">
+          <div class="exclusion-suggestions hide tr2-pk-sug" id="tr2-suggestions"></div>
+        </div>
+        <button type="button" id="tr2-clear" class="tr2-clear hide">Limpar tudo</button>
+      </div>
+    </div>
+    <div class="tr2-chips" id="tr2-chips"></div>
+    <div class="tr2-notice hide" id="tr2-notice"></div>
+  </div>
+  <div id="tr2-empty" class="empty hide"></div>
+  <div id="tr2-error" class="empty hide">
+    <div id="tr2-error-msg"></div>
+    <button id="tr2-retry" type="button" class="play-btn" style="margin-top:10px">Tentar novamente</button>
+  </div>
+  <div id="tr2-content">
+    <div class="grid-2x2">
+      <div class="panel">
+        <h2>Taxa VWAP — CDI</h2>
+        <div id="tr2-line-cdi" class="chart"></div>
+      </div>
+      <div class="panel">
+        <h2>Taxa VWAP — IPCA</h2>
+        <div id="tr2-line-ipca" class="chart"></div>
+      </div>
+    </div>
+    <div class="grid-2x2">
+      <div class="panel">
+        <h2>Volume R$ por bucket — CDI</h2>
+        <div id="tr2-bar-cdi" class="chart"></div>
+      </div>
+      <div class="panel">
+        <h2>Volume R$ por bucket — IPCA</h2>
+        <div id="tr2-bar-ipca" class="chart"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
 </main>
 
 <footer>
@@ -867,7 +952,7 @@ function adaptiveTextColor(bgHex) {
 /* ============================================================
  *  hash routing
  * ============================================================ */
-const TABS = ["visao","dispersao","movimentacoes","heatmap","titulos-publicos","trades-b3"];
+const TABS = ["visao","dispersao","movimentacoes","heatmap","titulos-publicos","trades-b3","trades"];
 const loaded = new Set();
 
 // Aba "Curvas Históricas" foi consolidada em "Títulos Públicos" — redireciona
@@ -924,6 +1009,7 @@ async function renderTab(name) {
   if (name === "heatmap") return renderHeatmap();
   if (name === "titulos-publicos") return renderTitulosPublicos();
   if (name === "trades-b3") return renderTradesB3();
+  if (name === "trades") return renderTrades();
 }
 
 /* ============================================================
@@ -4145,6 +4231,628 @@ function trd_renderTable(rows) {
         headerFilter: "input", headerFilterFunc: trd_likeCI },
     ],
   });
+}
+
+/* ============================================================
+ *  Tab 7 — Trades (multi-indexador, separa CDI vs IPCA)
+ * ============================================================ */
+let TR2_MANIFEST = null;
+let TR2_INSTR_MANIFEST = null;
+let TR2_FP_INI = null, TR2_FP_FIM = null;
+let TR2_DATE_INI = null, TR2_DATE_FIM = null;
+let TR2_RANGE_ROWS = null;
+let TR2_RANGE_NDAYS = 0;
+let TR2_INDEXER_MAP = null;            // ticker -> 'CDI'|'IPCA'|'PRE'|'OUTRO'
+let TR2_INDEX = null;                  // {tickers, emissores}
+const TR2_SELECTED = new Map();        // ticker -> {ticker, issuer, color}
+let TR2_INITED = false;
+
+const TR2_GROUPS = ["CDI", "IPCA"];
+const TR2_DOM = {
+  CDI:  { line: "tr2-line-cdi",  bar: "tr2-bar-cdi"  },
+  IPCA: { line: "tr2-line-ipca", bar: "tr2-bar-ipca" },
+};
+
+// Mapeamento ANBIMA indexador_grupo -> grupo agregado.
+const TR2_ANBIMA_MAP = {
+  "DI+": "CDI", "%DI": "CDI",
+  "IPCA+": "IPCA",
+  "Prefixado": "PRE",
+};
+
+// Mapeamento B3 InstrumentRegistration indexer -> grupo agregado.
+function tr2_classifyB3Indexer(raw) {
+  if (!raw) return "OUTRO";
+  const s = String(raw).trim().toUpperCase();
+  if (s === "DI") return "CDI";
+  if (s === "IPCA" || s === "IPCA VCP") return "IPCA";
+  if (s === "PREFIXADO" || s === "PRE") return "PRE";
+  return "OUTRO";
+}
+
+function tr2_classifyAnbimaGroup(grp) {
+  if (!grp) return "OUTRO";
+  return TR2_ANBIMA_MAP[grp] || "OUTRO";
+}
+
+function tr2_setStatus(text, busy) {
+  const el = document.getElementById("tr2-status");
+  if (!el) return;
+  el.innerHTML = busy
+    ? '<span class="trd-spinner"></span>' + escapeHtml(text || "")
+    : escapeHtml(text || "");
+}
+
+function tr2_showEmpty(msg) {
+  document.getElementById("tr2-content").classList.add("hide");
+  document.getElementById("tr2-error").classList.add("hide");
+  const e = document.getElementById("tr2-empty");
+  e.textContent = msg;
+  e.classList.remove("hide");
+}
+
+function tr2_showError(msg) {
+  document.getElementById("tr2-content").classList.add("hide");
+  document.getElementById("tr2-empty").classList.add("hide");
+  document.getElementById("tr2-error-msg").textContent = msg;
+  document.getElementById("tr2-error").classList.remove("hide");
+}
+
+function tr2_showContent() {
+  document.getElementById("tr2-empty").classList.add("hide");
+  document.getElementById("tr2-error").classList.add("hide");
+  document.getElementById("tr2-content").classList.remove("hide");
+}
+
+async function renderTrades() {
+  if (!TR2_INITED) {
+    document.getElementById("tr2-apply").addEventListener("click", () => tr2_onApply());
+    document.getElementById("tr2-retry").addEventListener("click", () => tr2_load());
+    document.getElementById("tr2-clear").addEventListener("click", () => tr2_clearAllChips());
+    tr2_initPicker();
+    TR2_INITED = true;
+  }
+
+  tr2_setStatus("Carregando manifest…", true);
+  try {
+    TR2_MANIFEST = await loadJSON("data/b3_trades/manifest.json");
+  } catch (e) {
+    console.error("[trades] manifest b3_trades", e);
+    tr2_setStatus("");
+    tr2_showEmpty("Sem dados ainda. Rode backfill_b3_trades.py.");
+    return;
+  }
+  // b3_instruments e' opcional: o fallback ANBIMA cobre debentures (DEB).
+  try {
+    TR2_INSTR_MANIFEST = await loadJSON("data/b3_instruments/manifest.json");
+  } catch (e) {
+    console.warn("[trades] manifest b3_instruments ausente; usando fallback ANBIMA only");
+    TR2_INSTR_MANIFEST = null;
+  }
+  tr2_setStatus("");
+
+  const dates = (TR2_MANIFEST.dates || []).map(e => e.date);
+  if (!dates.length) {
+    tr2_showEmpty("Sem dados ainda. Rode backfill_b3_trades.py.");
+    return;
+  }
+  const latest = TR2_MANIFEST.latest_date || dates[dates.length - 1];
+  const earliest = TR2_MANIFEST.earliest_date || dates[0];
+  TR2_DATE_INI = latest;
+  TR2_DATE_FIM = latest;
+
+  if (TR2_FP_INI) TR2_FP_INI.destroy();
+  if (TR2_FP_FIM) TR2_FP_FIM.destroy();
+  TR2_FP_INI = flatpickr("#tr2-date-ini", {
+    dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
+    enable: dates, defaultDate: TR2_DATE_INI, minDate: earliest, maxDate: latest,
+    onChange: (_, d) => { if (d) TR2_DATE_INI = d; },
+  });
+  TR2_FP_FIM = flatpickr("#tr2-date-fim", {
+    dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
+    enable: dates, defaultDate: TR2_DATE_FIM, minDate: earliest, maxDate: latest,
+    onChange: (_, d) => { if (d) TR2_DATE_FIM = d; },
+  });
+
+  await tr2_load();
+}
+
+function tr2_onApply() {
+  if (!TR2_DATE_INI || !TR2_DATE_FIM) return;
+  if (TR2_DATE_INI > TR2_DATE_FIM) {
+    const tmp = TR2_DATE_INI; TR2_DATE_INI = TR2_DATE_FIM; TR2_DATE_FIM = tmp;
+  }
+  tr2_load();
+}
+
+function tr2_datesInRange(manifest) {
+  if (!manifest || !manifest.dates) return [];
+  const out = [];
+  for (const e of manifest.dates) {
+    if (e.date >= TR2_DATE_INI && e.date <= TR2_DATE_FIM) out.push(e);
+  }
+  return out;
+}
+
+async function tr2_fetchTradeDay(entry) {
+  // Reusa cache da aba Trades B3 quando disponivel.
+  if (typeof TRD_DAY_CACHE !== "undefined" && TRD_DAY_CACHE.has(entry.date)) {
+    return TRD_DAY_CACHE.get(entry.date);
+  }
+  const path = "data/b3_trades/" + entry.filename;
+  const url = BUILD_VERSION ? path + "?v=" + BUILD_VERSION : path;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(entry.date + " HTTP " + r.status);
+  const j = await r.json();
+  if (typeof TRD_DAY_CACHE !== "undefined") TRD_DAY_CACHE.set(entry.date, j);
+  return j;
+}
+
+async function tr2_buildIndexerMap(rangeDates) {
+  const map = new Map();   // ticker -> grupo
+
+  // 1) Snapshot ANBIMA mais recente DENTRO do range. Cobre apenas DEB com
+  //    rate aditivo (IPCA+/CDI+) e %DI/Pre. Prioritario por ser oficial.
+  const anbimaCandidates = [];
+  for (const d of rangeDates) {
+    const url = `history/${d}.json`;
+    anbimaCandidates.push(d);
+  }
+  for (let i = anbimaCandidates.length - 1; i >= 0; i--) {
+    const d = anbimaCandidates[i];
+    try {
+      const url = BUILD_VERSION ? `history/${d}.json?v=${BUILD_VERSION}` : `history/${d}.json`;
+      const r = await fetch(url);
+      if (!r.ok) continue;
+      const snap = await r.json();
+      for (const row of (snap.debentures || [])) {
+        if (row.codigo) map.set(row.codigo, tr2_classifyAnbimaGroup(row.indexador_grupo));
+      }
+      break;   // achou um snapshot; nao precisa olhar mais antigos
+    } catch (_) { /* tenta proximo */ }
+  }
+
+  // 2) Snapshot B3 InstrumentRegistration mais recente dentro do range.
+  //    Preenche tickers ainda nao mapeados (CRA/CRI/CFF/COE etc).
+  if (TR2_INSTR_MANIFEST && TR2_INSTR_MANIFEST.dates) {
+    const instr = TR2_INSTR_MANIFEST.dates
+      .filter(e => e.date >= TR2_DATE_INI && e.date <= TR2_DATE_FIM)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    if (instr.length) {
+      const e = instr[instr.length - 1];
+      try {
+        const url = BUILD_VERSION
+          ? `data/b3_instruments/${e.filename}?v=${BUILD_VERSION}`
+          : `data/b3_instruments/${e.filename}`;
+        const r = await fetch(url);
+        if (r.ok) {
+          const snap = await r.json();
+          const cols = snap.columns || [];
+          const iTicker = cols.indexOf("ticker");
+          const iIndexer = cols.indexOf("indexer");
+          for (const row of (snap.rows || [])) {
+            const t = row[iTicker];
+            if (!t || map.has(t)) continue;
+            map.set(t, tr2_classifyB3Indexer(row[iIndexer]));
+          }
+        }
+      } catch (err) {
+        console.warn("[trades] falha ao ler b3_instruments", err);
+      }
+    }
+  }
+
+  return map;
+}
+
+async function tr2_load() {
+  const dateEntries = tr2_datesInRange(TR2_MANIFEST);
+  if (!dateEntries.length) {
+    tr2_showEmpty("0 trades neste período.");
+    return;
+  }
+
+  tr2_setStatus(`Carregando ${dateEntries.length} dia(s)…`, true);
+  document.getElementById("tr2-content").classList.add("hide");
+  document.getElementById("tr2-empty").classList.add("hide");
+  document.getElementById("tr2-error").classList.add("hide");
+
+  let payloads;
+  try {
+    payloads = await Promise.all(dateEntries.map(e => tr2_fetchTradeDay(e)));
+  } catch (err) {
+    console.error("[trades] fetch", err);
+    tr2_setStatus("");
+    tr2_showError("Falha ao carregar dados: " + err.message);
+    return;
+  }
+
+  // Monta lista de rows usando a mesma estrutura de TRD_RANGE_ROWS
+  // (objetos com .ticker .issuer .vol .rate .time .date).
+  const allRows = [];
+  for (const p of payloads) {
+    for (const r of p.rows) {
+      const obj = (typeof trd_rowToObj !== "undefined")
+        ? trd_rowToObj(r, p.date)
+        : _tr2_rowToObj(r, p.date, p.columns);
+      allRows.push(obj);
+    }
+  }
+
+  TR2_RANGE_ROWS = allRows;
+  TR2_RANGE_NDAYS = dateEntries.length;
+
+  if (!allRows.length) {
+    tr2_setStatus("");
+    tr2_showEmpty("0 trades neste período.");
+    return;
+  }
+
+  TR2_INDEXER_MAP = await tr2_buildIndexerMap(dateEntries.map(e => e.date));
+  TR2_INDEX = tr2_buildIndex(allRows);
+  // Selecao default: top 1 ticker CDI + top 1 ticker IPCA, se houver.
+  if (!TR2_SELECTED.size) tr2_pickDefaults();
+
+  tr2_setStatus("");
+  tr2_showContent();
+  tr2_renderChips();
+  tr2_renderAllCharts();
+}
+
+function _tr2_rowToObj(arr, date, columns) {
+  const obj = { date };
+  const cols = columns || [
+    "instrument","issuer","ticker","setor","qtd","price","vol",
+    "rate","origin","time","trade_code","isin","settlement_dt","situation",
+  ];
+  for (let i = 0; i < cols.length; i++) obj[cols[i]] = arr[i];
+  return obj;
+}
+
+function tr2_buildIndex(rows) {
+  const tk = new Map();
+  const em = new Map();
+  for (const r of rows) {
+    if (!r.ticker) continue;
+    const v = (typeof r.vol === "number") ? r.vol : 0;
+    let curT = tk.get(r.ticker);
+    if (!curT) {
+      curT = { c: r.ticker, issuer: r.issuer || "", vol: 0,
+               group: TR2_INDEXER_MAP.get(r.ticker) || "OUTRO" };
+      tk.set(r.ticker, curT);
+    }
+    curT.vol += v;
+    const issuer = r.issuer || "";
+    if (issuer) {
+      let curE = em.get(issuer);
+      if (!curE) {
+        curE = { name: issuer, tickers: new Set(), vol: 0 };
+        em.set(issuer, curE);
+      }
+      curE.tickers.add(r.ticker);
+      curE.vol += v;
+    }
+  }
+  const tickers = [...tk.values()].sort((a, b) => b.vol - a.vol);
+  const emissores = [...em.values()]
+    .map(e => ({ name: e.name, count: e.tickers.size, vol: e.vol,
+                 tickers: [...e.tickers] }))
+    .sort((a, b) => b.vol - a.vol);
+  return { tickers, emissores };
+}
+
+function tr2_pickDefaults() {
+  if (!TR2_INDEX) return;
+  for (const grp of TR2_GROUPS) {
+    const top = TR2_INDEX.tickers.find(t => t.group === grp);
+    if (top) tr2_addTicker(top.c, top.issuer);
+  }
+}
+
+function tr2_colorForIndex(idx) {
+  return PALETTE_QUAL[idx % PALETTE_QUAL.length];
+}
+
+function tr2_addTicker(ticker, issuer) {
+  if (!ticker || TR2_SELECTED.has(ticker)) return;
+  const color = tr2_colorForIndex(TR2_SELECTED.size);
+  TR2_SELECTED.set(ticker, { ticker, issuer: issuer || "", color });
+}
+
+function tr2_removeTicker(ticker) {
+  TR2_SELECTED.delete(ticker);
+  // Re-atribui cores em ordem para evitar saltos visuais.
+  let i = 0;
+  for (const v of TR2_SELECTED.values()) v.color = tr2_colorForIndex(i++);
+}
+
+function tr2_clearAllChips() {
+  TR2_SELECTED.clear();
+  tr2_renderChips();
+  tr2_renderAllCharts();
+}
+
+function tr2_renderChips() {
+  const box = document.getElementById("tr2-chips");
+  const clearBtn = document.getElementById("tr2-clear");
+  if (!TR2_SELECTED.size) {
+    box.innerHTML = "";
+    clearBtn.classList.add("hide");
+    return;
+  }
+  if (TR2_SELECTED.size >= 2) clearBtn.classList.remove("hide");
+  else clearBtn.classList.add("hide");
+  const html = [];
+  for (const v of TR2_SELECTED.values()) {
+    const grp = TR2_INDEXER_MAP ? (TR2_INDEXER_MAP.get(v.ticker) || "OUTRO") : "OUTRO";
+    html.push(
+      `<span class="ex-chip is-ticker" style="border-color:${v.color}">` +
+      `<span class="ex-chip-prefix" style="color:${v.color}">${escapeHtml(grp)}:</span>` +
+      `${escapeHtml(v.ticker)}` +
+      `<button type="button" data-remove="${escapeAttr(v.ticker)}" aria-label="Remover">×</button>` +
+      `</span>`
+    );
+  }
+  box.innerHTML = html.join("");
+  // Single delegated listener (rebind a cada render — innerHTML zera).
+  box.onclick = (e) => {
+    const btn = e.target.closest("button[data-remove]");
+    if (!btn) return;
+    tr2_removeTicker(btn.dataset.remove);
+    tr2_renderChips();
+    tr2_renderAllCharts();
+  };
+}
+
+// Picker: input + dropdown com badges T/E. Reusa CSS .exclusion-suggestions.
+function tr2_initPicker() {
+  const input = document.getElementById("tr2-picker");
+  const sugBox = document.getElementById("tr2-suggestions");
+
+  const compute = () => {
+    if (!TR2_INDEX) return { tickHits: [], emissHits: [] };
+    const q = input.value.trim().toLowerCase();
+    if (!q) return { tickHits: [], emissHits: [] };
+    const tickHits = [];
+    for (const t of TR2_INDEX.tickers) {
+      if (TR2_SELECTED.has(t.c)) continue;
+      if (t.c.toLowerCase().includes(q) ||
+          (t.issuer && t.issuer.toLowerCase().includes(q))) {
+        tickHits.push(t);
+        if (tickHits.length >= 8) break;
+      }
+    }
+    const emissHits = [];
+    for (const e of TR2_INDEX.emissores) {
+      if (e.name.toLowerCase().includes(q)) {
+        emissHits.push(e);
+        if (emissHits.length >= 8) break;
+      }
+    }
+    return { tickHits, emissHits };
+  };
+
+  const renderSug = (res) => {
+    if (!res || (!res.tickHits.length && !res.emissHits.length)) {
+      sugBox.classList.add("hide");
+      sugBox.innerHTML = "";
+      return;
+    }
+    const parts = [];
+    for (const e of res.emissHits) {
+      parts.push(
+        `<div class="ex-sug" data-kind="emiss" data-value="${escapeAttr(e.name)}">` +
+        `<span class="ex-sug-tag e">E</span>` +
+        `<span>${escapeHtml(e.name)}</span>` +
+        `<span class="ex-sug-meta">(${e.count} ${e.count === 1 ? "papel" : "papéis"})</span>` +
+        `</div>`
+      );
+    }
+    for (const t of res.tickHits) {
+      const grp = TR2_INDEXER_MAP ? (TR2_INDEXER_MAP.get(t.c) || "OUTRO") : "OUTRO";
+      parts.push(
+        `<div class="ex-sug" data-kind="ticker" data-value="${escapeAttr(t.c)}" data-issuer="${escapeAttr(t.issuer)}">` +
+        `<span class="ex-sug-tag t">T</span>` +
+        `<span class="ex-sug-code">${escapeHtml(t.c)}</span>` +
+        `<span class="ex-sug-meta">${escapeHtml(grp)} · ${escapeHtml(t.issuer)}</span>` +
+        `</div>`
+      );
+    }
+    sugBox.innerHTML = parts.join("");
+    sugBox.classList.remove("hide");
+  };
+
+  input.addEventListener("input", () => renderSug(compute()));
+  input.addEventListener("focus", () => {
+    if (input.value.trim().length >= 1) renderSug(compute());
+  });
+  input.addEventListener("blur", () => {
+    setTimeout(() => sugBox.classList.add("hide"), 150);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { sugBox.classList.add("hide"); return; }
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const res = compute();
+    if (res.emissHits.length) tr2_pickEmissor(res.emissHits[0].name);
+    else if (res.tickHits.length) tr2_pickTicker(res.tickHits[0].c, res.tickHits[0].issuer);
+    input.value = "";
+    sugBox.classList.add("hide");
+  });
+  sugBox.addEventListener("mousedown", (e) => {
+    const row = e.target.closest(".ex-sug");
+    if (!row) return;
+    e.preventDefault();
+    if (row.dataset.kind === "emiss") tr2_pickEmissor(row.dataset.value);
+    else tr2_pickTicker(row.dataset.value, row.dataset.issuer || "");
+    input.value = "";
+    sugBox.classList.add("hide");
+  });
+}
+
+function tr2_pickTicker(ticker, issuer) {
+  tr2_addTicker(ticker, issuer);
+  tr2_renderChips();
+  tr2_renderAllCharts();
+}
+
+function tr2_pickEmissor(name) {
+  if (!TR2_INDEX) return;
+  const e = TR2_INDEX.emissores.find(x => x.name === name);
+  if (!e) return;
+  for (const t of e.tickers) {
+    const meta = TR2_INDEX.tickers.find(x => x.c === t);
+    tr2_addTicker(t, meta ? meta.issuer : name);
+  }
+  tr2_renderChips();
+  tr2_renderAllCharts();
+}
+
+function tr2_renderEmptyState(divId, msg) {
+  Plotly.purge(divId);
+  document.getElementById(divId).innerHTML =
+    `<div class="empty">${escapeHtml(msg)}</div>`;
+}
+
+function tr2_selectedByGroup() {
+  const out = { CDI: [], IPCA: [], OTHER: [] };
+  for (const v of TR2_SELECTED.values()) {
+    const g = TR2_INDEXER_MAP ? (TR2_INDEXER_MAP.get(v.ticker) || "OUTRO") : "OUTRO";
+    if (g === "CDI") out.CDI.push(v);
+    else if (g === "IPCA") out.IPCA.push(v);
+    else out.OTHER.push(v);
+  }
+  return out;
+}
+
+function tr2_calcVolByBucket(rows, ticker, granularity) {
+  // Agrega financeiro por bucket (sem filtrar por rate). Reusa parser de
+  // timestamp e bucketizacao de Trades B3.
+  const acc = new Map();
+  for (const r of rows) {
+    if (r.ticker !== ticker) continue;
+    if (typeof r.vol !== "number" || !(r.vol > 0)) continue;
+    const ts = trd_parseTradeTimestamp(r.date, r.time);
+    if (!ts) continue;
+    const bucketTs = trd_bucketTimestamp(ts, granularity);
+    const key = bucketTs.getTime();
+    let cur = acc.get(key);
+    if (!cur) { cur = { ts: bucketTs, vol: 0, n: 0 }; acc.set(key, cur); }
+    cur.vol += r.vol;
+    cur.n += 1;
+  }
+  const out = [];
+  for (const [, v] of acc) out.push(v);
+  out.sort((a, b) => a.ts - b.ts);
+  return out;
+}
+
+function tr2_renderAllCharts() {
+  if (!TR2_RANGE_ROWS) return;
+  const grouped = tr2_selectedByGroup();
+
+  // Aviso: papeis Pre/Outros selecionados sao mostrados nos chips mas nao
+  // aparecem em chart (nao se encaixam em CDI/IPCA).
+  const noticeEl = document.getElementById("tr2-notice");
+  if (grouped.OTHER.length) {
+    const n = grouped.OTHER.length;
+    noticeEl.textContent =
+      `${n} papel${n === 1 ? "" : "eis"} Pré-fixado(s) / Outro(s) (não exibido${n === 1 ? "" : "s"} nos charts).`;
+    noticeEl.classList.remove("hide");
+  } else {
+    noticeEl.classList.add("hide");
+  }
+
+  const granularity = trd_pickGranularity(TR2_RANGE_NDAYS);
+  for (const grp of TR2_GROUPS) {
+    tr2_renderLineChart(grp, grouped[grp], granularity);
+    tr2_renderStackedBarChart(grp, grouped[grp], granularity);
+  }
+}
+
+function tr2_renderLineChart(group, selected, granularity) {
+  const divId = TR2_DOM[group].line;
+  if (!selected.length) {
+    tr2_renderEmptyState(divId, `Não há informação a ser exibida (sem ticker ${group} selecionado).`);
+    return;
+  }
+  const traces = [];
+  for (const sel of selected) {
+    const series = trd_calcVwapByBucket(TR2_RANGE_ROWS, sel.ticker, granularity);
+    if (!series.length) continue;
+    traces.push({
+      type: "scatter", mode: "lines+markers",
+      name: sel.ticker,
+      x: series.map(p => p.ts.getTime()),
+      y: series.map(p => p.vwap),
+      line: { color: sel.color, width: 2 },
+      marker: { color: sel.color, size: 6 },
+      customdata: series.map(p => [p.label, trd_fmtMoneyShort(p.vol), p.n]),
+      hovertemplate:
+        `<b>${sel.ticker}</b><br>%{customdata[0]}<br>VWAP: %{y:.2f}%` +
+        `<br>Vol: %{customdata[1]}<br>N: %{customdata[2]}<extra></extra>`,
+    });
+  }
+  if (!traces.length) {
+    tr2_renderEmptyState(divId, `Sem trades com taxa para os papéis ${group} selecionados.`);
+    return;
+  }
+  const base = PLOTLY_LAYOUT();
+  const layout = Object.assign({}, base, {
+    margin: { t: 30, r: 140, b: 50, l: 60 },
+    showlegend: true,
+    legend: { x: 1.02, y: 1, xanchor: "left", yanchor: "top",
+              bgcolor: "rgba(0,0,0,0)", font: { size: 11 } },
+    xaxis: Object.assign({}, base.xaxis, {
+      type: "date", tickformat: TRD_BUCKET_TICKFORMAT[granularity],
+    }),
+    yaxis: Object.assign({}, base.yaxis, {
+      tickformat: ".2f", ticksuffix: "%",
+    }),
+  });
+  Plotly.newPlot(divId, traces, layout, PLOTLY_CONFIG);
+}
+
+function tr2_renderStackedBarChart(group, selected, granularity) {
+  const divId = TR2_DOM[group].bar;
+  if (!selected.length) {
+    tr2_renderEmptyState(divId, `Não há informação a ser exibida (sem ticker ${group} selecionado).`);
+    return;
+  }
+  const traces = [];
+  for (const sel of selected) {
+    const series = tr2_calcVolByBucket(TR2_RANGE_ROWS, sel.ticker, granularity);
+    if (!series.length) continue;
+    traces.push({
+      type: "bar",
+      name: sel.ticker,
+      x: series.map(p => p.ts.getTime()),
+      y: series.map(p => p.vol),
+      marker: { color: sel.color },
+      customdata: series.map(p => [trd_fmtMoneyShort(p.vol), p.n]),
+      hovertemplate:
+        `<b>${sel.ticker}</b><br>Vol: %{customdata[0]}<br>N: %{customdata[1]}<extra></extra>`,
+    });
+  }
+  if (!traces.length) {
+    tr2_renderEmptyState(divId, `Sem volume para os papéis ${group} selecionados.`);
+    return;
+  }
+  const base = PLOTLY_LAYOUT();
+  const layout = Object.assign({}, base, {
+    margin: { t: 30, r: 140, b: 50, l: 60 },
+    barmode: "stack",
+    showlegend: true,
+    legend: { x: 1.02, y: 1, xanchor: "left", yanchor: "top",
+              bgcolor: "rgba(0,0,0,0)", font: { size: 11 } },
+    xaxis: Object.assign({}, base.xaxis, {
+      type: "date", tickformat: TRD_BUCKET_TICKFORMAT[granularity],
+    }),
+    yaxis: Object.assign({}, base.yaxis, {
+      tickformat: "~s", separatethousands: true,
+    }),
+  });
+  Plotly.newPlot(divId, traces, layout, PLOTLY_CONFIG);
 }
 
 // DOMContentLoaded garante que os scripts <head defer> (Tabulator, Plotly,
