@@ -3,12 +3,12 @@ name: B3 Trades
 # Coleta trades de renda fixa (DEB/CRA/CRI/CFF/COE) da B3 e regenera
 # index.html. Roda na infra do GitHub (egress liberado pra arquivos.b3.com.br),
 # committa de volta ao repo e dispensa execucao local.
+#
+# Sem schedule: o disparo diario eh feito pela routine ANBIMA Debentures
+# Diario do Claude.ai (que ja chama python fetch_b3_trades.py). Este workflow
+# fica apenas com workflow_dispatch para backfill on-demand pela UI Actions.
 
 on:
-  schedule:
-    # 02:00 UTC ter-sab = 23:00 BRT seg-sex (dias uteis BR).
-    # Janela acompanha o pipeline ANBIMA das 23h BRT.
-    - cron: '0 2 * * 2-6'
   workflow_dispatch:
     inputs:
       mode:
