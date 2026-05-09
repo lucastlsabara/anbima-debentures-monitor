@@ -183,6 +183,38 @@ Negra 20/nov).
 Re-rodar a pipeline para uma data já capturada é idempotente: o
 `history/<YYYY-MM-DD>.json` é sobrescrito com o mesmo conteúdo determinístico.
 
+## Aba Trades B3
+
+Pipeline independente do core ANBIMA. Coleta trades de renda fixa (DEB / CRA /
+CRI / CFF / COE) do endpoint público da B3 e exibe na aba **Trades B3** do
+dashboard.
+
+```bash
+# 1. backfill inicial (dias úteis entre 2026-04-24 e hoje, idempotente)
+python3 backfill_b3_trades.py
+
+# 1a. range customizado
+python3 backfill_b3_trades.py 2026-04-24 2026-05-01
+
+# 2. fetch incremental de 1 dia (último dia útil B3 por padrão)
+python3 fetch_b3_trades.py
+python3 fetch_b3_trades.py 2026-05-08
+
+# 3. se ajustar a lógica em sectors.py, reaplica a classificação
+#    em todos os snapshots já gravados (idempotente, sem rede)
+python3 recompute_sectors.py
+```
+
+Saídas em `data/b3_trades/`: um JSON colunar minificado por dia útil
+(`{YYYY-MM-DD}.json`) + `manifest.json` com índice de datas, totais e
+filenames. A aba carrega o manifest no boot, faz fetch lazy dos dias do
+range escolhido e cacheia em memória durante a sessão.
+
+Setor das debêntures (`instrument == "DEB"`) é resolvido via
+`sectors.classify(ticker, issuer)`; para os demais instrumentos o setor é
+literalmente `"Outros"`. Mudanças em `sectors.py` só refletem nos snapshots
+existentes após rodar `recompute_sectors.py`.
+
 ## Convenção
 
 - **252 dias úteis = 1 ano** (convenção ANBIMA da ETTJ)

@@ -78,14 +78,15 @@ def _post_page(date_iso: str, page: int) -> dict:
 def _row_from_array(arr: list) -> list:
     instrument = arr[2]
     issuer = arr[3]
+    ticker = arr[4]
     if instrument == "DEB":
-        setor = sectors.clean_emissor(issuer)
+        setor = sectors.classify(ticker, issuer)
     else:
         setor = "Outros"
     return [
         instrument,
         issuer,
-        arr[4],
+        ticker,
         setor,
         arr[5],
         arr[6],
