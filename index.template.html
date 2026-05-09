@@ -340,6 +340,33 @@
   .tabulator .tabulator-row:hover { background:#22293a !important; }
   .tabulator .tabulator-cell.pos { color:var(--pos); }
   .tabulator .tabulator-cell.neg { color:var(--neg); }
+  /* Aba Trades B3 */
+  .trd-status { color:var(--muted); font-size:11.5px; margin-left:8px; }
+  .trd-spinner {
+    display:inline-block; width:12px; height:12px; margin-right:6px;
+    border:2px solid var(--border-strong); border-top-color:var(--accent);
+    border-radius:50%; animation:trd-spin 0.8s linear infinite;
+    vertical-align:-2px;
+  }
+  @keyframes trd-spin { to { transform: rotate(360deg); } }
+  .trd-top10 { width:100%; border-collapse:collapse; }
+  .trd-top10 th, .trd-top10 td {
+    padding:6px 10px; border-bottom:1px solid var(--border);
+    font-size:12px; text-align:left;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .trd-top10 th {
+    color:var(--muted); font-weight:500; font-size:10.5px;
+    text-transform:uppercase; letter-spacing:.06em;
+  }
+  .trd-top10 td.num, .trd-top10 th.num {
+    text-align:right; font-variant-numeric:tabular-nums;
+  }
+  .trd-top10 th:nth-child(1), .trd-top10 td:nth-child(1) { width:18%; }
+  .trd-top10 th:nth-child(2), .trd-top10 td:nth-child(2) { width:48%; }
+  .trd-top10 th:nth-child(3), .trd-top10 td:nth-child(3) { width:20%; }
+  .trd-top10 th:nth-child(4), .trd-top10 td:nth-child(4) { width:14%; }
+  .tabulator .tabulator-row.trd-big { font-weight:600; color:#e6edf7; }
 </style>
 </head>
 <body>
@@ -354,6 +381,7 @@
   <a href="#/heatmap" data-tab="heatmap">Debêntures: Setor × Prazo</a>
   <a href="#/dispersao" data-tab="dispersao">Debêntures: Gráfico</a>
   <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
+  <a href="#/trades-b3" data-tab="trades-b3">Trades B3</a>
 </nav>
 
 <main>
@@ -591,6 +619,44 @@
   </div>
 </section>
 
+<!-- ===================== Tab: Trades B3 ===================== -->
+<section id="tab-trades-b3" class="tab hide">
+  <div class="panel">
+    <div class="controls">
+      <label>De:
+        <input type="text" id="trd-date-ini" placeholder="DD-MM-YYYY">
+      </label>
+      <label>Até:
+        <input type="text" id="trd-date-fim" placeholder="DD-MM-YYYY">
+      </label>
+      <button id="trd-apply" type="button">Aplicar</button>
+      <span id="trd-status" class="trd-status"></span>
+    </div>
+  </div>
+  <div id="trd-empty" class="empty hide"></div>
+  <div id="trd-error" class="empty hide">
+    <div id="trd-error-msg"></div>
+    <button id="trd-retry" type="button" class="play-btn" style="margin-top:10px">Tentar novamente</button>
+  </div>
+  <div id="trd-content">
+    <div class="grid-kpi" id="trd-kpi-row"></div>
+    <div class="grid-2x2">
+      <div class="panel">
+        <h2>Top 10 papéis por volume</h2>
+        <div id="trd-top10"></div>
+      </div>
+      <div class="panel">
+        <h2>Volume diário</h2>
+        <div id="trd-chart-daily" class="chart"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Trades</h2>
+      <div id="trd-table"></div>
+    </div>
+  </div>
+</section>
+
 </main>
 
 <footer>
@@ -742,7 +808,7 @@ function adaptiveTextColor(bgHex) {
 /* ============================================================
  *  hash routing
  * ============================================================ */
-const TABS = ["visao","dispersao","movimentacoes","heatmap","titulos-publicos"];
+const TABS = ["visao","dispersao","movimentacoes","heatmap","titulos-publicos","trades-b3"];
 const loaded = new Set();
 
 // Aba "Curvas Históricas" foi consolidada em "Títulos Públicos" — redireciona
@@ -798,6 +864,7 @@ async function renderTab(name) {
   if (name === "movimentacoes") return renderMovimentacoes();
   if (name === "heatmap") return renderHeatmap();
   if (name === "titulos-publicos") return renderTitulosPublicos();
+  if (name === "trades-b3") return renderTradesB3();
 }
 
 /* ============================================================
@@ -3165,6 +3232,342 @@ function refreshTpView() {
     const rows = all.filter(r => r.tipo === tipo);
     TP_TABLES[tipo].replaceData(rows);
   }
+}
+
+/* ============================================================
+ *  Tab 6 — Trades B3
+ * ============================================================ */
+let TRD_MANIFEST = null;
+let TRD_FP_INI = null, TRD_FP_FIM = null;
+let TRD_DATE_INI = null, TRD_DATE_FIM = null;
+let TRD_TABLE = null;
+const TRD_DAY_CACHE = new Map();   // date -> {columns, rows, ...}
+const TRD_COLUMNS = [
+  "instrument","issuer","ticker","setor","qtd","price","vol",
+  "rate","origin","time","trade_code","isin","settlement_dt","situation",
+];
+
+function trd_setStatus(text, busy) {
+  const el = document.getElementById("trd-status");
+  if (!el) return;
+  el.innerHTML = busy ? '<span class="trd-spinner"></span>' + escapeHtml(text || "") : escapeHtml(text || "");
+}
+
+function trd_showEmpty(msg) {
+  document.getElementById("trd-content").classList.add("hide");
+  document.getElementById("trd-error").classList.add("hide");
+  const e = document.getElementById("trd-empty");
+  e.textContent = msg;
+  e.classList.remove("hide");
+}
+
+function trd_showError(msg) {
+  document.getElementById("trd-content").classList.add("hide");
+  document.getElementById("trd-empty").classList.add("hide");
+  document.getElementById("trd-error-msg").textContent = msg;
+  document.getElementById("trd-error").classList.remove("hide");
+}
+
+function trd_showContent() {
+  document.getElementById("trd-empty").classList.add("hide");
+  document.getElementById("trd-error").classList.add("hide");
+  document.getElementById("trd-content").classList.remove("hide");
+}
+
+function trd_fmtMoneyShort(v) {
+  if (v == null || isNaN(v)) return "—";
+  const abs = Math.abs(v);
+  if (abs >= 1e9) return (v / 1e9).toLocaleString("pt-BR", { maximumFractionDigits: 2 }) + " Bi";
+  if (abs >= 1e6) return (v / 1e6).toLocaleString("pt-BR", { maximumFractionDigits: 2 }) + " MM";
+  if (abs >= 1e3) return (v / 1e3).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + " k";
+  return v.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
+}
+
+function trd_fmtMoneyFull(v) {
+  if (v == null || isNaN(v)) return "—";
+  return "R$ " + v.toLocaleString("pt-BR", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+}
+
+function trd_fmtIntBR(n) {
+  if (n == null || isNaN(n)) return "—";
+  return Math.round(n).toLocaleString("pt-BR");
+}
+
+function trd_fmtRate(v) {
+  if (v == null || isNaN(v)) return "—";
+  return v.toLocaleString("pt-BR", {
+    minimumFractionDigits: 4, maximumFractionDigits: 4,
+  }) + "%";
+}
+
+async function renderTradesB3() {
+  document.getElementById("trd-apply").addEventListener("click", () => trd_onApply());
+  document.getElementById("trd-retry").addEventListener("click", () => trd_load());
+
+  trd_setStatus("Carregando manifest…", true);
+  try {
+    TRD_MANIFEST = await loadJSON("data/b3_trades/manifest.json");
+  } catch (e) {
+    console.error("[trades-b3] manifest", e);
+    trd_setStatus("");
+    trd_showEmpty("Sem dados ainda. Rode backfill_b3_trades.py.");
+    return;
+  }
+  trd_setStatus("");
+
+  const dates = (TRD_MANIFEST.dates || []).map(e => e.date);
+  if (!dates.length) {
+    trd_showEmpty("Sem dados ainda. Rode backfill_b3_trades.py.");
+    return;
+  }
+
+  const latest = TRD_MANIFEST.latest_date || dates[dates.length - 1];
+  const earliest = TRD_MANIFEST.earliest_date || dates[0];
+  TRD_DATE_INI = latest;
+  TRD_DATE_FIM = latest;
+
+  if (TRD_FP_INI) TRD_FP_INI.destroy();
+  if (TRD_FP_FIM) TRD_FP_FIM.destroy();
+  TRD_FP_INI = flatpickr("#trd-date-ini", {
+    dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
+    enable: dates, defaultDate: TRD_DATE_INI, minDate: earliest, maxDate: latest,
+    onChange: (_, d) => { if (d) TRD_DATE_INI = d; },
+  });
+  TRD_FP_FIM = flatpickr("#trd-date-fim", {
+    dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
+    enable: dates, defaultDate: TRD_DATE_FIM, minDate: earliest, maxDate: latest,
+    onChange: (_, d) => { if (d) TRD_DATE_FIM = d; },
+  });
+
+  await trd_load();
+}
+
+function trd_onApply() {
+  if (!TRD_DATE_INI || !TRD_DATE_FIM) return;
+  if (TRD_DATE_INI > TRD_DATE_FIM) {
+    const tmp = TRD_DATE_INI; TRD_DATE_INI = TRD_DATE_FIM; TRD_DATE_FIM = tmp;
+  }
+  trd_load();
+}
+
+function trd_datesInRange() {
+  const out = [];
+  for (const e of (TRD_MANIFEST.dates || [])) {
+    if (e.date >= TRD_DATE_INI && e.date <= TRD_DATE_FIM) out.push(e);
+  }
+  return out;
+}
+
+async function trd_load() {
+  const dateEntries = trd_datesInRange();
+  if (!dateEntries.length) {
+    trd_showEmpty("0 trades neste período.");
+    return;
+  }
+  trd_setStatus(`Carregando ${dateEntries.length} dia(s)…`, true);
+  document.getElementById("trd-content").classList.add("hide");
+  document.getElementById("trd-empty").classList.add("hide");
+  document.getElementById("trd-error").classList.add("hide");
+
+  let payloads;
+  try {
+    payloads = await Promise.all(dateEntries.map(e => trd_fetchDay(e)));
+  } catch (err) {
+    console.error("[trades-b3] fetch", err);
+    trd_setStatus("");
+    trd_showError("Falha ao carregar dados: " + err.message);
+    return;
+  }
+  trd_setStatus("");
+
+  const allRows = [];
+  const dailyVol = [];   // [{date, vol}]
+  for (const p of payloads) {
+    let vol = 0;
+    for (const r of p.rows) {
+      const obj = trd_rowToObj(r, p.date);
+      allRows.push(obj);
+      if (typeof obj.vol === "number") vol += obj.vol;
+    }
+    dailyVol.push({ date: p.date, vol });
+  }
+
+  if (!allRows.length) {
+    trd_showEmpty("0 trades neste período.");
+    return;
+  }
+
+  trd_showContent();
+  trd_renderKpis(allRows);
+  trd_renderTop10(allRows);
+  trd_renderDailyChart(dailyVol);
+  trd_renderTable(allRows);
+}
+
+async function trd_fetchDay(entry) {
+  if (TRD_DAY_CACHE.has(entry.date)) return TRD_DAY_CACHE.get(entry.date);
+  const path = "data/b3_trades/" + entry.filename;
+  const url = BUILD_VERSION ? path + "?v=" + BUILD_VERSION : path;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(entry.date + " HTTP " + r.status);
+  const j = await r.json();
+  TRD_DAY_CACHE.set(entry.date, j);
+  return j;
+}
+
+function trd_rowToObj(arr, date) {
+  const obj = { date };
+  for (let i = 0; i < TRD_COLUMNS.length; i++) obj[TRD_COLUMNS[i]] = arr[i];
+  return obj;
+}
+
+function trd_renderKpis(rows) {
+  let vol = 0;
+  const tickers = new Set(), issuers = new Set();
+  for (const r of rows) {
+    if (typeof r.vol === "number") vol += r.vol;
+    if (r.ticker) tickers.add(r.ticker);
+    if (r.issuer) issuers.add(r.issuer);
+  }
+  const cards = [
+    { label: "Volume total", val: trd_fmtMoneyShort(vol), hint: trd_fmtMoneyFull(vol) },
+    { label: "Trades", val: trd_fmtIntBR(rows.length) },
+    { label: "Tickers únicos", val: trd_fmtIntBR(tickers.size) },
+    { label: "Emissores únicos", val: trd_fmtIntBR(issuers.size) },
+  ];
+  const html = cards.map(c => `
+    <div class="kpi">
+      <div class="label">${escapeHtml(c.label)}</div>
+      <div class="val">${escapeHtml(c.val)}</div>
+      ${c.hint ? `<div class="hint">${escapeHtml(c.hint)}</div>` : ""}
+    </div>`).join("");
+  document.getElementById("trd-kpi-row").innerHTML = html;
+}
+
+function trd_renderTop10(rows) {
+  const agg = new Map();   // ticker -> {ticker, issuer, vol, n}
+  for (const r of rows) {
+    if (!r.ticker) continue;
+    let cur = agg.get(r.ticker);
+    if (!cur) {
+      cur = { ticker: r.ticker, issuer: r.issuer || "", vol: 0, n: 0 };
+      agg.set(r.ticker, cur);
+    }
+    if (typeof r.vol === "number") cur.vol += r.vol;
+    cur.n += 1;
+  }
+  const top = [...agg.values()].sort((a, b) => b.vol - a.vol).slice(0, 10);
+  const head = `
+    <thead><tr>
+      <th>Ticker</th><th>Emissor</th>
+      <th class="num">Volume (R$)</th><th class="num">Trades</th>
+    </tr></thead>`;
+  const body = top.map(r => `
+    <tr>
+      <td>${escapeHtml(r.ticker)}</td>
+      <td>${escapeHtml(r.issuer)}</td>
+      <td class="num">${escapeHtml(trd_fmtMoneyShort(r.vol))}</td>
+      <td class="num">${escapeHtml(trd_fmtIntBR(r.n))}</td>
+    </tr>`).join("");
+  document.getElementById("trd-top10").innerHTML =
+    `<table class="trd-top10">${head}<tbody>${body}</tbody></table>`;
+}
+
+function trd_renderDailyChart(daily) {
+  const xs = daily.map(d => brDate(d.date));
+  const ys = daily.map(d => d.vol);
+  const trace = {
+    type: "bar", x: xs, y: ys,
+    marker: { color: cssVar("--accent") },
+    hovertemplate: "%{x}<br>%{customdata}<extra></extra>",
+    customdata: ys.map(trd_fmtMoneyFull),
+  };
+  const layout = Object.assign({}, PLOTLY_LAYOUT(), {
+    yaxis: Object.assign({}, PLOTLY_LAYOUT().yaxis, {
+      tickformat: "~s", separatethousands: true,
+    }),
+  });
+  Plotly.newPlot("trd-chart-daily", [trace], layout, PLOTLY_CONFIG);
+}
+
+function trd_renderTable(rows) {
+  const _set = (key) => {
+    const s = new Set();
+    for (const r of rows) if (r[key]) s.add(r[key]);
+    return ["", ...[...s].sort()];
+  };
+  const instrumentOpts = _set("instrument");
+  const setorOpts = _set("setor");
+  const originOpts = _set("origin");
+  const situationOpts = _set("situation");
+
+  if (TRD_TABLE) { TRD_TABLE.destroy(); TRD_TABLE = null; }
+
+  TRD_TABLE = new Tabulator("#trd-table", {
+    data: rows,
+    layout: "fitDataStretch",
+    resizableColumns: true,
+    height: "70vh",
+    pagination: true,
+    paginationSize: 50,
+    paginationSizeSelector: [25, 50, 100, 250],
+    initialSort: [{ column: "vol", dir: "desc" }],
+    rowFormatter: row => {
+      const v = row.getData().vol;
+      if (typeof v === "number" && v >= 1_000_000) {
+        row.getElement().classList.add("trd-big");
+      }
+    },
+    columns: [
+      { title: "Data", field: "date", width: 100,
+        formatter: c => brDate(c.getValue()) },
+      { title: "Hora", field: "time", width: 70 },
+      { title: "Inst.", field: "instrument", width: 70,
+        headerFilter: "list",
+        headerFilterParams: { values: instrumentOpts, clearable: true },
+        headerFilterFunc: "=" },
+      { title: "Ticker", field: "ticker", width: 110,
+        headerFilter: "input" },
+      { title: "Emissor", field: "issuer", minWidth: 200,
+        headerFilter: "input" },
+      { title: "Setor", field: "setor", width: 160,
+        headerFilter: "list",
+        headerFilterParams: { values: setorOpts, clearable: true },
+        headerFilterFunc: "=" },
+      { title: "Qtd", field: "qtd", width: 90, hozAlign: "right",
+        formatter: c => trd_fmtIntBR(c.getValue()) },
+      { title: "Preço", field: "price", width: 110, hozAlign: "right",
+        formatter: c => {
+          const v = c.getValue();
+          if (v == null) return "—";
+          return v.toLocaleString("pt-BR",
+            { minimumFractionDigits: 2, maximumFractionDigits: 6 });
+        } },
+      { title: "Vol (R$)", field: "vol", width: 130, hozAlign: "right",
+        formatter: c => {
+          const v = c.getValue();
+          if (v == null) return "—";
+          return v.toLocaleString("pt-BR",
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        } },
+      { title: "Taxa", field: "rate", width: 110, hozAlign: "right",
+        formatter: c => trd_fmtRate(c.getValue()) },
+      { title: "Origem", field: "origin", width: 170,
+        headerFilter: "list",
+        headerFilterParams: { values: originOpts, clearable: true },
+        headerFilterFunc: "=" },
+      { title: "Cód. Trade", field: "trade_code", width: 120 },
+      { title: "ISIN", field: "isin", width: 130 },
+      { title: "Liquidação", field: "settlement_dt", width: 110,
+        formatter: c => c.getValue() ? brDate(c.getValue()) : "—" },
+      { title: "Situação", field: "situation", width: 110,
+        headerFilter: "list",
+        headerFilterParams: { values: situationOpts, clearable: true },
+        headerFilterFunc: "=" },
+    ],
+  });
 }
 
 // DOMContentLoaded garante que os scripts <head defer> (Tabulator, Plotly,
