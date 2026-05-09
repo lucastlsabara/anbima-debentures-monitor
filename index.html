@@ -368,22 +368,29 @@
   .trd-top10 th:nth-child(4), .trd-top10 td:nth-child(4) { width:14%; }
   .tabulator .tabulator-row.trd-big { font-weight:600; color:#e6edf7; }
   .trd-evol-sub {
-    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
-    margin:-2px 0 10px;
+    display:flex; align-items:center; justify-content:space-between;
+    gap:14px; flex-wrap:wrap; margin:-2px 0 10px;
   }
-  .trd-evol-picker-label {
-    color:var(--muted); font-size:12px;
-    display:flex; align-items:center; gap:6px;
+  .trd-evol-pk {
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
   }
-  .trd-evol-picker-label input {
+  .trd-evol-pk-label { color:var(--muted); font-size:12px; }
+  .trd-evol-pk-wrap { position:relative; min-width:280px; }
+  .trd-evol-pk-wrap input {
     background:var(--surface2); color:var(--fg);
     border:1px solid var(--border-strong); border-radius:4px;
-    padding:5px 9px; font-size:12.5px; font-family:inherit;
-    min-width:160px;
+    padding:6px 10px; font-size:12.5px; font-family:inherit;
+    width:280px;
   }
-  .trd-evol-picker-label input:focus { outline:none; border-color:var(--accent); }
+  .trd-evol-pk-wrap input:focus { outline:none; border-color:var(--accent); }
+  /* dropdown de sugestoes reusa .exclusion-suggestions / .ex-sug do template */
+  .trd-evol-pk-sug { min-width:280px; max-width:520px; }
+  .trd-evol-pk-chip { display:flex; align-items:center; gap:6px; }
   .trd-evol-bucket {
     color:var(--muted); font-size:11.5px; font-variant-numeric:tabular-nums;
+  }
+  .trd-evol-title {
+    color:var(--muted); font-size:11.5px; margin:-4px 0 6px;
   }
   .trd-evol-chart { width:100%; min-height:360px; }
 </style>
@@ -672,13 +679,19 @@
     <div class="panel trd-evol-card">
       <h2>Evolução da Taxa por Papel</h2>
       <div class="trd-evol-sub">
-        <label class="trd-evol-picker-label">Ticker:
-          <input type="text" id="trd-evol-picker" list="trd-evol-tickers"
-                 placeholder="ex: GGBRA7" autocomplete="off">
-          <datalist id="trd-evol-tickers"></datalist>
-        </label>
+        <div class="trd-evol-pk">
+          <label class="trd-evol-pk-label" for="trd-evol-picker">Buscar:</label>
+          <div class="trd-evol-pk-wrap">
+            <input type="text" id="trd-evol-picker" autocomplete="off"
+                   placeholder="ticker ou emissor (ex: GGBRA7, Gerdau)">
+            <div class="exclusion-suggestions hide trd-evol-pk-sug"
+                 id="trd-evol-suggestions"></div>
+          </div>
+          <div class="trd-evol-pk-chip" id="trd-evol-chip"></div>
+        </div>
         <span id="trd-evol-bucket" class="trd-evol-bucket"></span>
       </div>
+      <div class="trd-evol-title" id="trd-evol-title"></div>
       <div id="trd-evol-msg" class="empty hide"></div>
       <div id="trd-evol-chart" class="trd-evol-chart"></div>
     </div>
@@ -3275,7 +3288,10 @@ let TRD_DATE_INI = null, TRD_DATE_FIM = null;
 let TRD_TABLE = null;
 let TRD_RANGE_ROWS = null;          // rows do range carregado (referencia)
 let TRD_RANGE_NDAYS = 0;            // # dias uteis no range (define bucket)
-let TRD_TICKER_PICKER_VALUE = "";   // selecao preservada entre re-renders
+let TRD_EVOL_INDEX = null;          // {tickers:[{c,issuer,vol}], emissores:[{name,count,vol}]}
+// Selecao do picker; persiste entre re-renders (ate o usuario remover ou
+// trocar de range pra um onde o item nao existe mais).
+let TRD_EVOL_SELECTION = null;      // {type:'t'|'e', value:string} | null
 const TRD_DAY_CACHE = new Map();   // date -> {columns, rows, ...}
 const TRD_COLUMNS = [
   "instrument","issuer","ticker","setor","qtd","price","vol",
@@ -3371,21 +3387,7 @@ function trd_numericFilter(term, value) {
 async function renderTradesB3() {
   document.getElementById("trd-apply").addEventListener("click", () => trd_onApply());
   document.getElementById("trd-retry").addEventListener("click", () => trd_load());
-  // 'change' (Enter ou blur) cobre selecao via datalist sem disparar a cada
-  // tecla; complementa com debounce no 'input' para responder a digitacao.
-  const _picker = document.getElementById("trd-evol-picker");
-  let _pickerTimer = null;
-  _picker.addEventListener("change", () => {
-    TRD_TICKER_PICKER_VALUE = _picker.value.trim();
-    trd_renderTickerChart(TRD_TICKER_PICKER_VALUE);
-  });
-  _picker.addEventListener("input", () => {
-    if (_pickerTimer) clearTimeout(_pickerTimer);
-    _pickerTimer = setTimeout(() => {
-      TRD_TICKER_PICKER_VALUE = _picker.value.trim();
-      trd_renderTickerChart(TRD_TICKER_PICKER_VALUE);
-    }, 250);
-  });
+  trd_initEvolPicker();
 
   trd_setStatus("Carregando manifest…", true);
   try {
@@ -3487,7 +3489,7 @@ async function trd_load() {
   trd_renderKpis(allRows);
   trd_renderTop10(allRows);
   trd_renderDailyChart(dailyVol);
-  trd_renderTickerChart();
+  trd_renderEvolChart();
   trd_renderTable(allRows);
 }
 
@@ -3677,35 +3679,199 @@ function trd_calcVwapByBucket(rows, ticker, granularity) {
   return out;
 }
 
-// Lista de tickers no range, ordenada por volume total desc.
-function trd_buildTickerList(rows) {
-  const agg = new Map();
+// Indice (tickers + emissores) com volume agregado e contagem de papeis.
+// Tickers ordenados por volume desc; emissores idem, com count de tickers
+// distintos com pelo menos 1 trade no range.
+function trd_buildEvolIndex(rows) {
+  const tk = new Map();   // ticker -> {c, issuer, vol}
+  const em = new Map();   // emissor -> {name, tickers:Set, vol}
   for (const r of rows) {
     if (!r.ticker) continue;
     const v = (typeof r.vol === "number") ? r.vol : 0;
-    agg.set(r.ticker, (agg.get(r.ticker) || 0) + v);
+    let curT = tk.get(r.ticker);
+    if (!curT) {
+      curT = { c: r.ticker, issuer: r.issuer || "", vol: 0 };
+      tk.set(r.ticker, curT);
+    }
+    curT.vol += v;
+    const issuer = r.issuer || "";
+    if (issuer) {
+      let curE = em.get(issuer);
+      if (!curE) {
+        curE = { name: issuer, tickers: new Set(), vol: 0 };
+        em.set(issuer, curE);
+      }
+      curE.tickers.add(r.ticker);
+      curE.vol += v;
+    }
   }
-  return [...agg.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]);
+  const tickers = [...tk.values()].sort((a, b) => b.vol - a.vol);
+  const emissores = [...em.values()]
+    .map(e => ({ name: e.name, count: e.tickers.size, vol: e.vol }))
+    .sort((a, b) => b.vol - a.vol);
+  return { tickers, emissores };
 }
 
-function trd_renderTickerChart(requestedTicker) {
+const TRD_EVOL_MAX_PER_KIND = 8;
+
+function trd_searchPickerOptions(query) {
+  if (!TRD_EVOL_INDEX) return { tickHits: [], emissHits: [] };
+  const q = (query || "").trim().toLowerCase();
+  if (!q) return { tickHits: [], emissHits: [] };
+  const tickHits = [];
+  for (const t of TRD_EVOL_INDEX.tickers) {
+    if (t.c.toLowerCase().includes(q) ||
+        (t.issuer && t.issuer.toLowerCase().includes(q))) {
+      tickHits.push(t);
+      if (tickHits.length >= TRD_EVOL_MAX_PER_KIND) break;
+    }
+  }
+  const emissHits = [];
+  for (const e of TRD_EVOL_INDEX.emissores) {
+    if (e.name.toLowerCase().includes(q)) {
+      emissHits.push(e);
+      if (emissHits.length >= TRD_EVOL_MAX_PER_KIND) break;
+    }
+  }
+  return { tickHits, emissHits };
+}
+
+function trd_renderPickerSug(res) {
+  const sugBox = document.getElementById("trd-evol-suggestions");
+  if (!res || (!res.tickHits.length && !res.emissHits.length)) {
+    sugBox.classList.add("hide");
+    sugBox.innerHTML = "";
+    return;
+  }
+  const parts = [];
+  // Emissores primeiro (match no nome eh menos ambiguo); tickers depois.
+  for (const e of res.emissHits) {
+    parts.push(
+      `<div class="ex-sug" data-kind="emiss" data-value="${escapeAttr(e.name)}">` +
+      `<span class="ex-sug-tag e">E</span>` +
+      `<span>${escapeHtml(e.name)}</span>` +
+      `<span class="ex-sug-meta">(${e.count} ${e.count === 1 ? "papel" : "papéis"})</span>` +
+      `</div>`
+    );
+  }
+  for (const t of res.tickHits) {
+    parts.push(
+      `<div class="ex-sug" data-kind="ticker" data-value="${escapeAttr(t.c)}">` +
+      `<span class="ex-sug-tag t">T</span>` +
+      `<span class="ex-sug-code">${escapeHtml(t.c)}</span>` +
+      (t.issuer ? `<span class="ex-sug-meta">${escapeHtml(t.issuer)}</span>` : "") +
+      `</div>`
+    );
+  }
+  sugBox.innerHTML = parts.join("");
+  sugBox.classList.remove("hide");
+}
+
+function trd_renderEvolChip() {
+  const chipBox = document.getElementById("trd-evol-chip");
+  const sel = TRD_EVOL_SELECTION;
+  if (!sel) { chipBox.innerHTML = ""; return; }
+  const cls = sel.type === "t" ? "is-ticker" : "is-emiss";
+  const prefix = sel.type === "t" ? "T:" : "E:";
+  chipBox.innerHTML =
+    `<span class="ex-chip ${cls}">` +
+    `<span class="ex-chip-prefix">${prefix}</span>${escapeHtml(sel.value)}` +
+    `<button type="button" data-remove aria-label="Remover">×</button>` +
+    `</span>`;
+}
+
+function trd_initEvolPicker() {
+  const input = document.getElementById("trd-evol-picker");
+  const sugBox = document.getElementById("trd-evol-suggestions");
+  const chipBox = document.getElementById("trd-evol-chip");
+
+  input.addEventListener("input", () => {
+    trd_renderPickerSug(trd_searchPickerOptions(input.value));
+  });
+  input.addEventListener("focus", () => {
+    if (input.value.trim().length >= 1)
+      trd_renderPickerSug(trd_searchPickerOptions(input.value));
+  });
+  input.addEventListener("blur", () => {
+    setTimeout(() => sugBox.classList.add("hide"), 150);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      sugBox.classList.add("hide");
+      return;
+    }
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const res = trd_searchPickerOptions(input.value);
+    if (res.emissHits.length) trd_handlePickerSelect("e", res.emissHits[0].name);
+    else if (res.tickHits.length) trd_handlePickerSelect("t", res.tickHits[0].c);
+  });
+  sugBox.addEventListener("mousedown", (e) => {
+    const row = e.target.closest(".ex-sug");
+    if (!row) return;
+    e.preventDefault();
+    const kind = row.dataset.kind === "emiss" ? "e" : "t";
+    trd_handlePickerSelect(kind, row.dataset.value);
+  });
+  chipBox.addEventListener("click", (e) => {
+    if (!e.target.closest("button[data-remove]")) return;
+    trd_handleChipRemove();
+  });
+}
+
+function trd_handlePickerSelect(type, value) {
+  if (!value) return;
+  TRD_EVOL_SELECTION = { type, value };
+  const input = document.getElementById("trd-evol-picker");
+  const sugBox = document.getElementById("trd-evol-suggestions");
+  input.value = "";
+  sugBox.classList.add("hide");
+  sugBox.innerHTML = "";
+  trd_renderEvolChart();
+}
+
+function trd_handleChipRemove() {
+  TRD_EVOL_SELECTION = null;   // proximo render aplica default top1
+  trd_renderEvolChart();
+}
+
+// Resolve selecao corrente para uma lista de tickers a plotar:
+//   ticker -> [ticker]; emissor -> todos tickers daquele emissor no range.
+// Inclui label do header e classe do prefixo.
+function trd_resolveEvolSelection() {
+  const idx = TRD_EVOL_INDEX;
+  if (!idx || (!idx.tickers.length && !idx.emissores.length)) return null;
+  // 1) selecao explicita ainda valida no novo range
+  if (TRD_EVOL_SELECTION) {
+    const sel = TRD_EVOL_SELECTION;
+    if (sel.type === "t") {
+      const t = idx.tickers.find(x => x.c === sel.value);
+      if (t) return { type: "t", value: sel.value,
+                      tickers: [sel.value], headerText: sel.value };
+    } else {
+      const e = idx.emissores.find(x => x.name === sel.value);
+      if (e) {
+        const ts = idx.tickers
+          .filter(t => (t.issuer || "") === sel.value)
+          .map(t => t.c);
+        return { type: "e", value: sel.value, tickers: ts,
+                 headerText: `${sel.value} — ${ts.length} ${ts.length === 1 ? "papel" : "papéis"}` };
+      }
+    }
+    // selecao virou stale; cai no default
+    TRD_EVOL_SELECTION = null;
+  }
+  // 2) default: ticker top1 do range (mais volumoso)
+  const top = idx.tickers[0];
+  if (!top) return null;
+  TRD_EVOL_SELECTION = { type: "t", value: top.c };
+  return { type: "t", value: top.c, tickers: [top.c], headerText: top.c };
+}
+
+function trd_renderEvolChart() {
   if (!TRD_RANGE_ROWS || !TRD_RANGE_ROWS.length) return;
 
-  const tickers = trd_buildTickerList(TRD_RANGE_ROWS);
-  const dl = document.getElementById("trd-evol-tickers");
-  dl.innerHTML = tickers.map(t => `<option value="${escapeAttr(t)}">`).join("");
-
-  // Resolve ticker: requested -> preservado entre re-renders -> top1.
-  const tickerSet = new Set(tickers);
-  let ticker = (requestedTicker || "").trim();
-  if (!ticker || !tickerSet.has(ticker)) {
-    ticker = tickerSet.has(TRD_TICKER_PICKER_VALUE)
-      ? TRD_TICKER_PICKER_VALUE
-      : (tickers[0] || "");
-  }
-  TRD_TICKER_PICKER_VALUE = ticker;
-  const pickerEl = document.getElementById("trd-evol-picker");
-  if (pickerEl.value !== ticker) pickerEl.value = ticker;
+  TRD_EVOL_INDEX = trd_buildEvolIndex(TRD_RANGE_ROWS);
 
   const granularity = trd_pickGranularity(TRD_RANGE_NDAYS);
   document.getElementById("trd-evol-bucket").textContent =
@@ -3713,49 +3879,65 @@ function trd_renderTickerChart(requestedTicker) {
 
   const msgEl = document.getElementById("trd-evol-msg");
   const chartEl = document.getElementById("trd-evol-chart");
+  const titleEl = document.getElementById("trd-evol-title");
 
-  if (!ticker) {
+  const sel = trd_resolveEvolSelection();
+  trd_renderEvolChip();
+
+  if (!sel) {
+    titleEl.textContent = "";
     msgEl.textContent = "Sem papéis no período.";
     msgEl.classList.remove("hide");
     chartEl.innerHTML = "";
     return;
   }
+  titleEl.textContent = sel.headerText;
 
-  const series = trd_calcVwapByBucket(TRD_RANGE_ROWS, ticker, granularity);
-  if (!series.length) {
-    msgEl.textContent = `Sem trades com taxa para ${ticker} no período.`;
+  const seriesByTicker = sel.tickers.map(t => ({
+    ticker: t,
+    series: trd_calcVwapByBucket(TRD_RANGE_ROWS, t, granularity),
+  })).filter(s => s.series.length > 0);
+
+  if (!seriesByTicker.length) {
+    const subj = sel.type === "t" ? sel.value : sel.value;
+    msgEl.textContent = `Sem trades com taxa para ${subj} no período.`;
     msgEl.classList.remove("hide");
     chartEl.innerHTML = "";
     return;
   }
   msgEl.classList.add("hide");
 
-  const xs = series.map(s => s.label);
-  const ys = series.map(s => s.vwap);
-  const customdata = series.map(s => [trd_fmtMoneyShort(s.vol), s.n]);
+  const traces = seriesByTicker.map((s, idx) => {
+    const color = sel.type === "t" ? cssVar("--accent") : PALETTE_QUAL[idx % PALETTE_QUAL.length];
+    return {
+      type: "scatter", mode: "lines+markers",
+      name: s.ticker,
+      x: s.series.map(p => p.label),
+      y: s.series.map(p => p.vwap),
+      line: { color, width: 2 },
+      marker: { color, size: 6 },
+      customdata: s.series.map(p => [trd_fmtMoneyShort(p.vol), p.n]),
+      hovertemplate:
+        `<b>${s.ticker}</b><br>%{x}<br>VWAP: %{y:.4f}%` +
+        `<br>Vol: %{customdata[0]}<br>N: %{customdata[1]}<extra></extra>`,
+    };
+  });
 
-  const trace = {
-    type: "scatter", mode: "lines+markers",
-    x: xs, y: ys,
-    line: { color: cssVar("--accent"), width: 2 },
-    marker: { color: cssVar("--accent"), size: 6 },
-    customdata,
-    hovertemplate:
-      "%{x}<br>VWAP: %{y:.4f}%<br>Vol: %{customdata[0]}<br>N: %{customdata[1]}" +
-      "<extra></extra>",
-  };
   const base = PLOTLY_LAYOUT();
+  const showLegend = sel.type === "e";
   const layout = Object.assign({}, base, {
-    margin: { t: 30, r: 20, b: 50, l: 60 },
-    showlegend: false,
+    margin: { t: 30, r: showLegend ? 140 : 20, b: 50, l: 60 },
+    showlegend: showLegend,
+    legend: showLegend
+      ? { x: 1.02, y: 1, xanchor: "left", yanchor: "top",
+          bgcolor: "rgba(0,0,0,0)", font: { size: 11 } }
+      : undefined,
     xaxis: Object.assign({}, base.xaxis, { type: "category" }),
     yaxis: Object.assign({}, base.yaxis, {
       tickformat: ".4f", ticksuffix: "%",
     }),
-    title: { text: ticker, font: { size: 12, color: cssVar("--muted") },
-             x: 0, xanchor: "left" },
   });
-  Plotly.newPlot("trd-evol-chart", [trace], layout, PLOTLY_CONFIG);
+  Plotly.newPlot("trd-evol-chart", traces, layout, PLOTLY_CONFIG);
 }
 
 function trd_renderTable(rows) {
