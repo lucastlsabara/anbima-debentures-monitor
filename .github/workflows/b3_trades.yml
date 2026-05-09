@@ -1,0 +1,113 @@
+name: B3 Trades
+
+# Coleta trades de renda fixa (DEB/CRA/CRI/CFF/COE) da B3 e regenera
+# index.html. Roda na infra do GitHub (egress liberado pra arquivos.b3.com.br),
+# committa de volta ao repo e dispensa execucao local.
+
+on:
+  schedule:
+    # 02:00 UTC ter-sab = 23:00 BRT seg-sex (dias uteis BR).
+    # Janela acompanha o pipeline ANBIMA das 23h BRT.
+    - cron: '0 2 * * 2-6'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'fetch_day (1 dia) ou backfill (range)'
+        type: choice
+        required: true
+        default: fetch_day
+        options:
+          - fetch_day
+          - backfill
+      start_date:
+        description: 'YYYY-MM-DD (apenas para mode=backfill)'
+        required: false
+        default: ''
+      end_date:
+        description: 'YYYY-MM-DD (apenas para mode=backfill)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  run-b3-trades:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          # requirements.txt cobre requests + holidays + pytz (b3_calendar)
+          # + numpy/scipy/pandas (compute_spreads usado por build_dashboard).
+          pip install -r requirements.txt
+
+      - name: Resolve mode
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            MODE=fetch_day
+          else
+            MODE='${{ inputs.mode }}'
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "Modo selecionado: $MODE"
+
+      - name: Validate backfill inputs
+        if: steps.mode.outputs.mode == 'backfill'
+        run: |
+          START='${{ inputs.start_date }}'
+          END='${{ inputs.end_date }}'
+          if [ -z "$START" ] || [ -z "$END" ]; then
+            echo "::error::mode=backfill exige start_date e end_date (YYYY-MM-DD)"
+            exit 1
+          fi
+          if ! date -d "$START" >/dev/null 2>&1 || ! date -d "$END" >/dev/null 2>&1; then
+            echo "::error::Datas invalidas: start_date=$START end_date=$END"
+            exit 1
+          fi
+          echo "Backfill range: $START -> $END"
+
+      - name: Run fetch_day
+        if: steps.mode.outputs.mode == 'fetch_day'
+        run: |
+          echo "Rodando fetch_b3_trades.py (default: ultimo dia util B3)"
+          python fetch_b3_trades.py
+
+      - name: Run backfill
+        if: steps.mode.outputs.mode == 'backfill'
+        run: |
+          echo "Rodando backfill_b3_trades.py ${{ inputs.start_date }} ${{ inputs.end_date }}"
+          python backfill_b3_trades.py '${{ inputs.start_date }}' '${{ inputs.end_date }}'
+
+      - name: Rebuild dashboard
+        run: |
+          echo "Regenerando index.html com BUILD_VERSION atualizado"
+          python build_dashboard.py
+
+      - name: Commit & push
+        env:
+          MODE: ${{ steps.mode.outputs.mode }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/b3_trades/ index.html
+          if git diff --cached --quiet; then
+            echo "Sem mudanca em data/b3_trades/ ou index.html — pulando commit."
+            exit 0
+          fi
+          DATE_TAG=$(date -u +%Y-%m-%d)
+          git commit -m "data: b3 trades update ${DATE_TAG} (workflow ${MODE})"
+          git push
