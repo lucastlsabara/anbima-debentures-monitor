@@ -3302,6 +3302,37 @@ function trd_fmtRate(v) {
   }) + "%";
 }
 
+// headerFilter helpers (substring case-insensitive, e numerico com
+// operadores >, <, >=, <=). Definidos uma vez para reuso entre colunas.
+function trd_likeCI(term, value) {
+  if (term == null || term === "") return true;
+  const s = (value == null ? "" : String(value)).toLowerCase();
+  return s.includes(String(term).toLowerCase());
+}
+
+function trd_numericFilter(term, value) {
+  if (term == null || term === "") return true;
+  const s = String(term).trim();
+  const m = s.match(/^(>=|<=|>|<)\s*(-?\d+(?:[.,]\d+)?)$/);
+  if (m) {
+    if (value == null) return false;
+    const op = m[1];
+    const ref = parseFloat(m[2].replace(",", "."));
+    const v = Number(value);
+    if (Number.isNaN(v)) return false;
+    if (op === ">") return v > ref;
+    if (op === "<") return v < ref;
+    if (op === ">=") return v >= ref;
+    if (op === "<=") return v <= ref;
+  }
+  // Sem operador: tenta igualdade numerica; se o termo nao parsear como
+  // numero, nao filtra (passa todas as linhas).
+  const ref = parseFloat(s.replace(",", "."));
+  if (Number.isNaN(ref)) return true;
+  if (value == null) return false;
+  return Number(value) === ref;
+}
+
 async function renderTradesB3() {
   document.getElementById("trd-apply").addEventListener("click", () => trd_onApply());
   document.getElementById("trd-retry").addEventListener("click", () => trd_load());
@@ -3500,8 +3531,6 @@ function trd_renderTable(rows) {
   };
   const instrumentOpts = _set("instrument");
   const setorOpts = _set("setor");
-  const originOpts = _set("origin");
-  const situationOpts = _set("situation");
 
   if (TRD_TABLE) { TRD_TABLE.destroy(); TRD_TABLE = null; }
 
@@ -3522,8 +3551,11 @@ function trd_renderTable(rows) {
     },
     columns: [
       { title: "Data", field: "date", width: 100,
-        formatter: c => brDate(c.getValue()) },
-      { title: "Hora", field: "time", width: 70 },
+        formatter: c => brDate(c.getValue()),
+        headerFilter: "input", headerFilterFunc: trd_likeCI,
+        headerFilterPlaceholder: "AAAA-MM" },
+      { title: "Hora", field: "time", width: 70,
+        headerFilter: "input", headerFilterFunc: trd_likeCI },
       { title: "Inst.", field: "instrument", width: 70,
         headerFilter: "list",
         headerFilterParams: { values: instrumentOpts, clearable: true },
@@ -3537,35 +3569,43 @@ function trd_renderTable(rows) {
         headerFilterParams: { values: setorOpts, clearable: true },
         headerFilterFunc: "=" },
       { title: "Qtd", field: "qtd", width: 90, hozAlign: "right",
-        formatter: c => trd_fmtIntBR(c.getValue()) },
+        formatter: c => trd_fmtIntBR(c.getValue()),
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: ">100" },
       { title: "Preço", field: "price", width: 110, hozAlign: "right",
         formatter: c => {
           const v = c.getValue();
           if (v == null) return "—";
           return v.toLocaleString("pt-BR",
             { minimumFractionDigits: 2, maximumFractionDigits: 6 });
-        } },
+        },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: ">1000" },
       { title: "Vol (R$)", field: "vol", width: 130, hozAlign: "right",
         formatter: c => {
           const v = c.getValue();
           if (v == null) return "—";
           return v.toLocaleString("pt-BR",
             { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        } },
+        },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: ">1000000" },
       { title: "Taxa", field: "rate", width: 110, hozAlign: "right",
-        formatter: c => trd_fmtRate(c.getValue()) },
+        formatter: c => trd_fmtRate(c.getValue()),
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: ">5" },
       { title: "Origem", field: "origin", width: 170,
-        headerFilter: "list",
-        headerFilterParams: { values: originOpts, clearable: true },
-        headerFilterFunc: "=" },
-      { title: "Cód. Trade", field: "trade_code", width: 120 },
-      { title: "ISIN", field: "isin", width: 130 },
+        headerFilter: "input", headerFilterFunc: trd_likeCI },
+      { title: "Cód. Trade", field: "trade_code", width: 120,
+        headerFilter: "input", headerFilterFunc: trd_likeCI },
+      { title: "ISIN", field: "isin", width: 130,
+        headerFilter: "input", headerFilterFunc: trd_likeCI },
       { title: "Liquidação", field: "settlement_dt", width: 110,
-        formatter: c => c.getValue() ? brDate(c.getValue()) : "—" },
+        formatter: c => c.getValue() ? brDate(c.getValue()) : "—",
+        headerFilter: "input", headerFilterFunc: trd_likeCI,
+        headerFilterPlaceholder: "AAAA-MM" },
       { title: "Situação", field: "situation", width: 110,
-        headerFilter: "list",
-        headerFilterParams: { values: situationOpts, clearable: true },
-        headerFilterFunc: "=" },
+        headerFilter: "input", headerFilterFunc: trd_likeCI },
     ],
   });
 }
