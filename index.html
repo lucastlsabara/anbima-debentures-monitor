@@ -447,12 +447,20 @@
     font-weight:600; font-size:12.5px; margin-right:4px;
     letter-spacing:0.02em;
   }
-  .tr2-chip-group-cdi   .tr2-chip-group-label { color:#5a9bff; }
-  .tr2-chip-group-ipca  .tr2-chip-group-label { color:#3aa66c; }
-  .tr2-chip-group-other .tr2-chip-group-label { color:var(--muted); }
+  .tr2-chip-group-cdi    .tr2-chip-group-label { color:#5a9bff; }
+  .tr2-chip-group-pctcdi .tr2-chip-group-label { color:#2dd4bf; }
+  .tr2-chip-group-ipca   .tr2-chip-group-label { color:#3aa66c; }
+  .tr2-chip-group-pre    .tr2-chip-group-label { color:#f59e0b; }
+  .tr2-chip-group-outros .tr2-chip-group-label { color:#94a3b8; }
   .tr2-notice {
     color:var(--warn); font-size:11.5px; margin-top:8px;
   }
+  .tr2-cat-row { margin-bottom:10px; }
+  .trd-idx-cdi    { color:#5a9bff; font-weight:600; }
+  .trd-idx-pctcdi { color:#2dd4bf; font-weight:600; }
+  .trd-idx-ipca   { color:#3aa66c; font-weight:600; }
+  .trd-idx-pre    { color:#f59e0b; font-weight:600; }
+  .trd-idx-outros { color:#94a3b8; font-weight:600; }
 </style>
 </head>
 <body>
@@ -716,7 +724,6 @@
       <label>Até:
         <input type="text" id="trd-date-fim" placeholder="DD-MM-YYYY">
       </label>
-      <button id="trd-apply" type="button">Aplicar</button>
       <span id="trd-status" class="trd-status"></span>
     </div>
   </div>
@@ -777,7 +784,6 @@
       <label>Até:
         <input type="text" id="tr2-date-fim" placeholder="DD-MM-YYYY">
       </label>
-      <button id="tr2-apply" type="button">Aplicar</button>
       <span id="tr2-status" class="trd-status"></span>
     </div>
     <div class="controls tr2-search-row">
@@ -798,26 +804,7 @@
     <button id="tr2-retry" type="button" class="play-btn" style="margin-top:10px">Tentar novamente</button>
   </div>
   <div id="tr2-content">
-    <div class="grid-2x2">
-      <div class="panel">
-        <h2>Taxa VWAP — CDI</h2>
-        <div id="tr2-line-cdi" class="chart"></div>
-      </div>
-      <div class="panel">
-        <h2>Taxa VWAP — IPCA</h2>
-        <div id="tr2-line-ipca" class="chart"></div>
-      </div>
-    </div>
-    <div class="grid-2x2">
-      <div class="panel">
-        <h2>Volume R$ por bucket — CDI</h2>
-        <div id="tr2-bar-cdi" class="chart"></div>
-      </div>
-      <div class="panel">
-        <h2>Volume R$ por bucket — IPCA</h2>
-        <div id="tr2-bar-ipca" class="chart"></div>
-      </div>
-    </div>
+    <div id="tr2-charts"></div>
   </div>
 </section>
 
@@ -3408,6 +3395,7 @@ let TRD_DATE_INI = null, TRD_DATE_FIM = null;
 let TRD_TABLE = null;
 let TRD_RANGE_ROWS = null;          // rows do range carregado (referencia)
 let TRD_RANGE_NDAYS = 0;            // # dias uteis no range (define bucket)
+let TRD_INDEXER_MAP = null;         // ticker -> 'CDI'|'%CDI'|'IPCA'|'PRE'|'OUTROS'
 let TRD_EVOL_INDEX = null;          // {tickers:[{c,issuer,vol}], emissores:[{name,count,vol}]}
 // Selecao do picker; persiste entre re-renders (ate o usuario remover ou
 // trocar de range pra um onde o item nao existe mais).
@@ -3509,7 +3497,6 @@ function trd_numericFilter(term, value) {
 }
 
 async function renderTradesB3() {
-  document.getElementById("trd-apply").addEventListener("click", () => trd_onApply());
   document.getElementById("trd-retry").addEventListener("click", () => trd_load());
   trd_initEvolPicker();
 
@@ -3540,23 +3527,34 @@ async function renderTradesB3() {
   TRD_FP_INI = flatpickr("#trd-date-ini", {
     dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
     enable: dates, defaultDate: TRD_DATE_INI, minDate: earliest, maxDate: latest,
-    onChange: (_, d) => { if (d) TRD_DATE_INI = d; },
+    onChange: (_, d) => {
+      if (d) TRD_DATE_INI = d;
+      trd_scheduleRecalc();
+    },
   });
   TRD_FP_FIM = flatpickr("#trd-date-fim", {
     dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
     enable: dates, defaultDate: TRD_DATE_FIM, minDate: earliest, maxDate: latest,
-    onChange: (_, d) => { if (d) TRD_DATE_FIM = d; },
+    onChange: (_, d) => {
+      if (d) TRD_DATE_FIM = d;
+      trd_scheduleRecalc();
+    },
   });
 
   await trd_load();
 }
 
-function trd_onApply() {
-  if (!TRD_DATE_INI || !TRD_DATE_FIM) return;
-  if (TRD_DATE_INI > TRD_DATE_FIM) {
-    const tmp = TRD_DATE_INI; TRD_DATE_INI = TRD_DATE_FIM; TRD_DATE_FIM = tmp;
-  }
-  trd_load();
+let TRD_RECALC_TIMER = null;
+function trd_scheduleRecalc() {
+  if (TRD_RECALC_TIMER) clearTimeout(TRD_RECALC_TIMER);
+  TRD_RECALC_TIMER = setTimeout(() => {
+    TRD_RECALC_TIMER = null;
+    if (!TRD_DATE_INI || !TRD_DATE_FIM) return;
+    if (TRD_DATE_INI > TRD_DATE_FIM) {
+      const tmp = TRD_DATE_INI; TRD_DATE_INI = TRD_DATE_FIM; TRD_DATE_FIM = tmp;
+    }
+    trd_load();
+  }, 300);
 }
 
 function trd_datesInRange() {
@@ -3608,6 +3606,15 @@ async function trd_load() {
 
   TRD_RANGE_ROWS = allRows;
   TRD_RANGE_NDAYS = dateEntries.length;
+
+  // Indexer map (CDI/%CDI/IPCA/PRE/OUTROS) compartilhado com a aba Trades.
+  // Reusa ANBIMA + B3 Registry; falha em construir nao bloqueia o resto.
+  try {
+    TRD_INDEXER_MAP = await tr2_buildIndexerMap(dateEntries.map(e => e.date));
+  } catch (err) {
+    console.warn("[trades-b3] buildIndexerMap falhou", err);
+    TRD_INDEXER_MAP = new Map();
+  }
 
   trd_showContent();
   trd_renderKpis(allRows);
@@ -3708,10 +3715,28 @@ function trd_renderDailyChart(daily) {
 const TRD_BUCKET_LABEL = {
   hour: "hora", day: "dia", week: "semana", month: "mês",
 };
-// d3-format strings usados no eixo X do chart (Plotly date axis).
-const TRD_BUCKET_TICKFORMAT = {
-  hour: "%d-%m %H:%M", day: "%d-%m", week: "%d-%m", month: "%b %Y",
-};
+// Conta dias uteis aproximados (FDS only; nao consulta calendario B3 com
+// feriados). Suficiente pra threshold visual do eixo X.
+function trd_countBusinessDays(iniIso, fimIso) {
+  if (!iniIso || !fimIso) return 0;
+  const [yi, mi, di] = iniIso.split("-").map(Number);
+  const [yf, mf, df] = fimIso.split("-").map(Number);
+  const ini = new Date(yi, mi - 1, di);
+  const fim = new Date(yf, mf - 1, df);
+  if (ini > fim) return 0;
+  let n = 0;
+  for (const d = new Date(ini); d <= fim; d.setDate(d.getDate() + 1)) {
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) n++;
+  }
+  return n;
+}
+
+// Helper compartilhado: tickformat (d3-time-format) do eixo X dos charts
+// temporais. <=2 dias uteis -> "DD/MM HHh"; >2 -> "DD/MM".
+function trd_xAxisTickformat(iniIso, fimIso) {
+  return trd_countBusinessDays(iniIso, fimIso) <= 2 ? "%d/%m %-Hh" : "%d/%m";
+}
 // Threshold pra distinguir indexador aditivo (IPCA+/CDI+/Pre, rate ~5-15%)
 // de %CDI (rate ~95-115%). Usado pra ocultar outliers no modo emissor.
 const TRD_OUTLIER_RATE_THRESHOLD = 50;
@@ -4152,7 +4177,7 @@ function trd_renderEvolChart() {
       : undefined,
     xaxis: Object.assign({}, base.xaxis, {
       type: "date",
-      tickformat: TRD_BUCKET_TICKFORMAT[granularity],
+      tickformat: trd_xAxisTickformat(TRD_DATE_INI, TRD_DATE_FIM),
     }),
     yaxis: Object.assign({}, base.yaxis, {
       tickformat: ".4f", ticksuffix: "%",
@@ -4167,6 +4192,15 @@ function trd_handleOutlierToggle() {
 }
 
 function trd_renderTable(rows) {
+  // Anota cada row com o grupo do indexador (CDI/%CDI/IPCA/PRE/OUTROS).
+  // Mutacao in-place: rows e' o mesmo TRD_RANGE_ROWS ja consumido por
+  // KPIs/charts e a coluna nao quebra nenhum consumidor.
+  const idxMap = TRD_INDEXER_MAP || new Map();
+  for (const r of rows) {
+    if (r.ticker && r.indexador == null) {
+      r.indexador = idxMap.get(r.ticker) || "OUTROS";
+    }
+  }
   const _set = (key) => {
     const s = new Set();
     for (const r of rows) if (r[key]) s.add(r[key]);
@@ -4207,6 +4241,20 @@ function trd_renderTable(rows) {
         headerFilter: "input" },
       { title: "Emissor", field: "issuer", minWidth: 200,
         headerFilter: "input" },
+      { title: "Indexador", field: "indexador", width: 110,
+        headerFilter: "list",
+        headerFilterParams: {
+          values: ["", "CDI", "%CDI", "IPCA", "PRE", "OUTROS"],
+          clearable: true,
+        },
+        headerFilterFunc: "=",
+        formatter: c => {
+          const g = c.getValue();
+          if (!g) return "—";
+          const meta = (typeof TR2_GROUP_META !== "undefined") ? TR2_GROUP_META[g] : null;
+          const slug = meta ? meta.slug : "outros";
+          return `<span class="trd-idx-${slug}">${escapeHtml(g)}</span>`;
+        } },
       { title: "Setor", field: "setor", width: 160,
         headerFilter: "list",
         headerFilterParams: { values: setorOpts, clearable: true },
@@ -4262,37 +4310,52 @@ let TR2_FP_INI = null, TR2_FP_FIM = null;
 let TR2_DATE_INI = null, TR2_DATE_FIM = null;
 let TR2_RANGE_ROWS = null;
 let TR2_RANGE_NDAYS = 0;
-let TR2_INDEXER_MAP = null;            // ticker -> 'CDI'|'IPCA'|'PRE'|'OUTRO'
+let TR2_INDEXER_MAP = null;            // ticker -> 'CDI'|'%CDI'|'IPCA'|'PRE'|'OUTROS'
 let TR2_INDEX = null;                  // {tickers, emissores}
 const TR2_SELECTED = new Map();        // ticker -> {ticker, issuer, color}
 let TR2_INITED = false;
+let TR2_RECALC_TIMER = null;
 
-const TR2_GROUPS = ["CDI", "IPCA"];
-const TR2_DOM = {
-  CDI:  { line: "tr2-line-cdi",  bar: "tr2-bar-cdi"  },
-  IPCA: { line: "tr2-line-ipca", bar: "tr2-bar-ipca" },
+// Ordem fixa das categorias na UI (chips e charts).
+const TR2_GROUPS = ["CDI", "%CDI", "IPCA", "PRE", "OUTROS"];
+const TR2_GROUP_META = {
+  "CDI":    { slug: "cdi",    label: "CDI",    color: "#5a9bff" },
+  "%CDI":   { slug: "pctcdi", label: "%CDI",   color: "#2dd4bf" },
+  "IPCA":   { slug: "ipca",   label: "IPCA",   color: "#3aa66c" },
+  "PRE":    { slug: "pre",    label: "PRE",    color: "#f59e0b" },
+  "OUTROS": { slug: "outros", label: "Outros", color: "#94a3b8" },
 };
 
-// Mapeamento ANBIMA indexador_grupo -> grupo agregado.
-const TR2_ANBIMA_MAP = {
-  "DI+": "CDI", "%DI": "CDI",
-  "IPCA+": "IPCA",
-  "Prefixado": "PRE",
-};
+// Normaliza string pra comparacao: strip de acentos + uppercase + trim.
+function _tr2_norm(s) {
+  return String(s == null ? "" : s)
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .trim().toUpperCase();
+}
+
+// Mapeamento ANBIMA indexador_grupo -> grupo agregado (5 categorias).
+// %DI vai pra %CDI (distinto de DI+/DI puro). ANBIMA prioritario sobre B3
+// Registry, que nao distingue %DI.
+function tr2_classifyAnbimaGroup(grp) {
+  if (!grp) return "OUTROS";
+  const n = _tr2_norm(grp);
+  if (n === "DI+") return "CDI";
+  if (n === "%DI") return "%CDI";
+  if (n === "IPCA+" || n === "IPCA") return "IPCA";
+  if (n === "PREFIXADO" || n === "PRE") return "PRE";
+  return "OUTROS";
+}
 
 // Mapeamento B3 InstrumentRegistration indexer -> grupo agregado.
+// B3 nao tem flag pra %DI: ticker so no Registry vai sempre pra CDI mesmo
+// que IndexerPercentage != 100 (evita inferencia ambigua).
 function tr2_classifyB3Indexer(raw) {
-  if (!raw) return "OUTRO";
-  const s = String(raw).trim().toUpperCase();
+  if (!raw) return "OUTROS";
+  const s = _tr2_norm(raw);
   if (s === "DI") return "CDI";
   if (s === "IPCA" || s === "IPCA VCP") return "IPCA";
   if (s === "PREFIXADO" || s === "PRE") return "PRE";
-  return "OUTRO";
-}
-
-function tr2_classifyAnbimaGroup(grp) {
-  if (!grp) return "OUTRO";
-  return TR2_ANBIMA_MAP[grp] || "OUTRO";
+  return "OUTROS";
 }
 
 function tr2_setStatus(text, busy) {
@@ -4320,7 +4383,6 @@ function tr2_showError(msg) {
 
 async function renderTrades() {
   if (!TR2_INITED) {
-    document.getElementById("tr2-apply").addEventListener("click", () => tr2_onApply());
     document.getElementById("tr2-retry").addEventListener("click", () => tr2_load());
     document.getElementById("tr2-clear").addEventListener("click", () => tr2_clearAllChips());
     tr2_initPicker();
@@ -4360,23 +4422,35 @@ async function renderTrades() {
   TR2_FP_INI = flatpickr("#tr2-date-ini", {
     dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
     enable: dates, defaultDate: TR2_DATE_INI, minDate: earliest, maxDate: latest,
-    onChange: (_, d) => { if (d) TR2_DATE_INI = d; },
+    onChange: (_, d) => {
+      if (d) TR2_DATE_INI = d;
+      tr2_scheduleRecalc();
+    },
   });
   TR2_FP_FIM = flatpickr("#tr2-date-fim", {
     dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
     enable: dates, defaultDate: TR2_DATE_FIM, minDate: earliest, maxDate: latest,
-    onChange: (_, d) => { if (d) TR2_DATE_FIM = d; },
+    onChange: (_, d) => {
+      if (d) TR2_DATE_FIM = d;
+      tr2_scheduleRecalc();
+    },
   });
 
   await tr2_load();
 }
 
-function tr2_onApply() {
-  if (!TR2_DATE_INI || !TR2_DATE_FIM) return;
-  if (TR2_DATE_INI > TR2_DATE_FIM) {
-    const tmp = TR2_DATE_INI; TR2_DATE_INI = TR2_DATE_FIM; TR2_DATE_FIM = tmp;
-  }
-  tr2_load();
+// Auto-recalc com debounce de 300ms apos mudanca de range. Listener direto
+// no flatpickr substitui o antigo botao Aplicar (ja removido do HTML).
+function tr2_scheduleRecalc() {
+  if (TR2_RECALC_TIMER) clearTimeout(TR2_RECALC_TIMER);
+  TR2_RECALC_TIMER = setTimeout(() => {
+    TR2_RECALC_TIMER = null;
+    if (!TR2_DATE_INI || !TR2_DATE_FIM) return;
+    if (TR2_DATE_INI > TR2_DATE_FIM) {
+      const tmp = TR2_DATE_INI; TR2_DATE_INI = TR2_DATE_FIM; TR2_DATE_FIM = tmp;
+    }
+    tr2_load();
+  }, 300);
 }
 
 function tr2_datesInRange(manifest) {
@@ -4426,6 +4500,13 @@ async function tr2_buildIndexerMap(rangeDates) {
   //    (range estreito, snapshot B3 do dia anterior), fallback pra data mais
   //    recente do manifest. Preenche tickers ainda nao mapeados pelo ANBIMA
   //    (CRA/CRI/CFF/COE/LF/LIG etc).
+  // Lazy-load do manifest pra permitir uso a partir da aba Trades B3 (que
+  // nao chama renderTrades).
+  if (TR2_INSTR_MANIFEST === null) {
+    try {
+      TR2_INSTR_MANIFEST = await loadJSON("data/b3_instruments/manifest.json");
+    } catch (_) { TR2_INSTR_MANIFEST = { dates: [] }; }
+  }
   const instrDates = (TR2_INSTR_MANIFEST && Array.isArray(TR2_INSTR_MANIFEST.dates))
     ? TR2_INSTR_MANIFEST.dates.slice().sort()
     : [];
@@ -4536,7 +4617,7 @@ function tr2_buildIndex(rows) {
     let curT = tk.get(r.ticker);
     if (!curT) {
       curT = { c: r.ticker, issuer: r.issuer || "", vol: 0,
-               group: TR2_INDEXER_MAP.get(r.ticker) || "OUTRO" };
+               group: TR2_INDEXER_MAP.get(r.ticker) || "OUTROS" };
       tk.set(r.ticker, curT);
     }
     curT.vol += v;
@@ -4592,24 +4673,19 @@ function tr2_renderChips() {
   }
   if (TR2_SELECTED.size >= 2) clearBtn.classList.remove("hide");
   else clearBtn.classList.add("hide");
-  const buckets = { CDI: [], IPCA: [], OTHER: [] };
+  const buckets = {};
+  for (const g of TR2_GROUPS) buckets[g] = [];
   for (const v of TR2_SELECTED.values()) {
-    const grp = TR2_INDEXER_MAP ? (TR2_INDEXER_MAP.get(v.ticker) || "OUTRO") : "OUTRO";
-    if (grp === "CDI") buckets.CDI.push(v);
-    else if (grp === "IPCA") buckets.IPCA.push(v);
-    else buckets.OTHER.push(v);
+    const grp = TR2_INDEXER_MAP ? (TR2_INDEXER_MAP.get(v.ticker) || "OUTROS") : "OUTROS";
+    (buckets[grp] || buckets["OUTROS"]).push(v);
   }
-  const order = [
-    { key: "CDI",   cls: "tr2-chip-group-cdi",   label: "CDI:" },
-    { key: "IPCA",  cls: "tr2-chip-group-ipca",  label: "IPCA:" },
-    { key: "OTHER", cls: "tr2-chip-group-other", label: "Outros:" },
-  ];
   const html = [];
-  for (const g of order) {
-    const list = buckets[g.key];
+  for (const g of TR2_GROUPS) {
+    const list = buckets[g];
     if (!list.length) continue;
-    html.push(`<div class="tr2-chip-group ${g.cls}">`);
-    html.push(`<span class="tr2-chip-group-label">${g.label}</span>`);
+    const meta = TR2_GROUP_META[g];
+    html.push(`<div class="tr2-chip-group tr2-chip-group-${meta.slug}">`);
+    html.push(`<span class="tr2-chip-group-label">${escapeHtml(meta.label)}:</span>`);
     for (const v of list) {
       html.push(
         `<span class="ex-chip is-ticker" style="border-color:${v.color}">` +
@@ -4676,7 +4752,7 @@ function tr2_initPicker() {
       );
     }
     for (const t of res.tickHits) {
-      const grp = TR2_INDEXER_MAP ? (TR2_INDEXER_MAP.get(t.c) || "OUTRO") : "OUTRO";
+      const grp = TR2_INDEXER_MAP ? (TR2_INDEXER_MAP.get(t.c) || "OUTROS") : "OUTROS";
       parts.push(
         `<div class="ex-sug" data-kind="ticker" data-value="${escapeAttr(t.c)}" data-issuer="${escapeAttr(t.issuer)}">` +
         `<span class="ex-sug-tag t">T</span>` +
@@ -4742,12 +4818,11 @@ function tr2_renderEmptyState(divId, msg) {
 }
 
 function tr2_selectedByGroup() {
-  const out = { CDI: [], IPCA: [], OTHER: [] };
+  const out = {};
+  for (const g of TR2_GROUPS) out[g] = [];
   for (const v of TR2_SELECTED.values()) {
-    const g = TR2_INDEXER_MAP ? (TR2_INDEXER_MAP.get(v.ticker) || "OUTRO") : "OUTRO";
-    if (g === "CDI") out.CDI.push(v);
-    else if (g === "IPCA") out.IPCA.push(v);
-    else out.OTHER.push(v);
+    const g = TR2_INDEXER_MAP ? (TR2_INDEXER_MAP.get(v.ticker) || "OUTROS") : "OUTROS";
+    (out[g] || out["OUTROS"]).push(v);
   }
   return out;
 }
@@ -4776,6 +4851,7 @@ function tr2_calcVolByBucket(rows, ticker, granularity) {
 
 function tr2_renderAllCharts() {
   if (!TR2_RANGE_ROWS) return;
+  const chartsBox = document.getElementById("tr2-charts");
   if (!TR2_SELECTED.size) {
     document.getElementById("tr2-content").classList.add("hide");
     document.getElementById("tr2-error").classList.add("hide");
@@ -4783,38 +4859,50 @@ function tr2_renderAllCharts() {
     const e = document.getElementById("tr2-empty");
     e.textContent = "Selecione um papel no campo Buscar para visualizar os gráficos.";
     e.classList.remove("hide");
+    chartsBox.innerHTML = "";
     return;
   }
   document.getElementById("tr2-empty").classList.add("hide");
   document.getElementById("tr2-error").classList.add("hide");
+  document.getElementById("tr2-notice").classList.add("hide");
   document.getElementById("tr2-content").classList.remove("hide");
   const grouped = tr2_selectedByGroup();
 
-  // Aviso: papeis Pre/Outros selecionados sao mostrados nos chips mas nao
-  // aparecem em chart (nao se encaixam em CDI/IPCA).
-  const noticeEl = document.getElementById("tr2-notice");
-  if (grouped.OTHER.length) {
-    const n = grouped.OTHER.length;
-    noticeEl.textContent =
-      `${n} papel${n === 1 ? "" : "eis"} Pré-fixado(s) / Outro(s) (não exibido${n === 1 ? "" : "s"} nos charts).`;
-    noticeEl.classList.remove("hide");
-  } else {
-    noticeEl.classList.add("hide");
-  }
-
+  // Renderiza apenas categorias com tickers selecionados, em ordem fixa.
+  // Cada categoria ocupa 1 linha com 2 charts (TAXA VWAP + VOLUME R$).
   const granularity = trd_pickGranularity(TR2_RANGE_NDAYS);
+  const tickformat = trd_xAxisTickformat(TR2_DATE_INI, TR2_DATE_FIM);
+
+  const html = [];
+  const renderQueue = [];
   for (const grp of TR2_GROUPS) {
-    tr2_renderLineChart(grp, grouped[grp], granularity);
-    tr2_renderStackedBarChart(grp, grouped[grp], granularity);
+    if (!grouped[grp].length) continue;
+    const meta = TR2_GROUP_META[grp];
+    const lineId = `tr2-line-${meta.slug}`;
+    const barId = `tr2-bar-${meta.slug}`;
+    html.push(
+      `<div class="grid-2x2 tr2-cat-row">` +
+        `<div class="panel">` +
+          `<h2>Taxa VWAP — ${escapeHtml(meta.label)}</h2>` +
+          `<div id="${lineId}" class="chart"></div>` +
+        `</div>` +
+        `<div class="panel">` +
+          `<h2>Volume R$ por bucket — ${escapeHtml(meta.label)}</h2>` +
+          `<div id="${barId}" class="chart"></div>` +
+        `</div>` +
+      `</div>`
+    );
+    renderQueue.push({ grp, lineId, barId, selected: grouped[grp] });
+  }
+  chartsBox.innerHTML = html.join("");
+
+  for (const item of renderQueue) {
+    tr2_renderLineChart(item.grp, item.selected, granularity, tickformat, item.lineId);
+    tr2_renderStackedBarChart(item.grp, item.selected, granularity, tickformat, item.barId);
   }
 }
 
-function tr2_renderLineChart(group, selected, granularity) {
-  const divId = TR2_DOM[group].line;
-  if (!selected.length) {
-    tr2_renderEmptyState(divId, `Não há informação a ser exibida (sem ticker ${group} selecionado).`);
-    return;
-  }
+function tr2_renderLineChart(group, selected, granularity, tickformat, divId) {
   const traces = [];
   for (const sel of selected) {
     const series = trd_calcVwapByBucket(TR2_RANGE_ROWS, sel.ticker, granularity);
@@ -4833,7 +4921,7 @@ function tr2_renderLineChart(group, selected, granularity) {
     });
   }
   if (!traces.length) {
-    tr2_renderEmptyState(divId, `Sem trades com taxa para os papéis ${group} selecionados.`);
+    tr2_renderEmptyState(divId, `Sem trades com taxa para os papéis ${group} no período.`);
     return;
   }
   const base = PLOTLY_LAYOUT();
@@ -4843,7 +4931,7 @@ function tr2_renderLineChart(group, selected, granularity) {
     legend: { x: 1.02, y: 1, xanchor: "left", yanchor: "top",
               bgcolor: "rgba(0,0,0,0)", font: { size: 11 } },
     xaxis: Object.assign({}, base.xaxis, {
-      type: "date", tickformat: TRD_BUCKET_TICKFORMAT[granularity],
+      type: "date", tickformat,
     }),
     yaxis: Object.assign({}, base.yaxis, {
       tickformat: ".2f", ticksuffix: "%",
@@ -4852,12 +4940,7 @@ function tr2_renderLineChart(group, selected, granularity) {
   Plotly.newPlot(divId, traces, layout, PLOTLY_CONFIG);
 }
 
-function tr2_renderStackedBarChart(group, selected, granularity) {
-  const divId = TR2_DOM[group].bar;
-  if (!selected.length) {
-    tr2_renderEmptyState(divId, `Não há informação a ser exibida (sem ticker ${group} selecionado).`);
-    return;
-  }
+function tr2_renderStackedBarChart(group, selected, granularity, tickformat, divId) {
   const traces = [];
   for (const sel of selected) {
     const series = tr2_calcVolByBucket(TR2_RANGE_ROWS, sel.ticker, granularity);
@@ -4874,7 +4957,7 @@ function tr2_renderStackedBarChart(group, selected, granularity) {
     });
   }
   if (!traces.length) {
-    tr2_renderEmptyState(divId, `Sem volume para os papéis ${group} selecionados.`);
+    tr2_renderEmptyState(divId, `Sem volume para os papéis ${group} no período.`);
     return;
   }
   const base = PLOTLY_LAYOUT();
@@ -4885,7 +4968,7 @@ function tr2_renderStackedBarChart(group, selected, granularity) {
     legend: { x: 1.02, y: 1, xanchor: "left", yanchor: "top",
               bgcolor: "rgba(0,0,0,0)", font: { size: 11 } },
     xaxis: Object.assign({}, base.xaxis, {
-      type: "date", tickformat: TRD_BUCKET_TICKFORMAT[granularity],
+      type: "date", tickformat,
     }),
     yaxis: Object.assign({}, base.yaxis, {
       tickformat: "~s", separatethousands: true,
