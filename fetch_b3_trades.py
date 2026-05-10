@@ -264,11 +264,15 @@ def _update_manifest(date_iso: str, n_trades: int, vol_brl: float, filename: str
 
 
 def _last_n_b3_business_days(n: int, today: date | None = None) -> list[date]:
-    """N ultimos dias uteis B3 estritamente anteriores a `today`, ordem ascendente."""
+    """N ultimos dias uteis B3, ordem ascendente.
+
+    Inclui `today` se for dia util B3 (padrao ANBIMA: [HOJE, D-1, ...]);
+    caso contrario (FDS/feriado), retorna N dias uteis estritamente anteriores.
+    """
     if today is None:
         today = today_brt()
     out: list[date] = []
-    d = today - timedelta(days=1)
+    d = today if is_b3_business_day(today) else today - timedelta(days=1)
     while len(out) < n:
         if is_b3_business_day(d):
             out.append(d)
