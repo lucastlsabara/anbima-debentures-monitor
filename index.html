@@ -404,12 +404,12 @@
   .trd-evol-link:hover { opacity:.85; }
   .trd-evol-chart { width:100%; min-height:360px; }
   /* Aba Trades (multi-indexador) */
-  .tr2-toolbar { row-gap:8px; }
-  .tr2-pk {
-    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
-    margin-left:auto;
+  .tr2-toolbar { row-gap:8px; margin-bottom:6px; }
+  .tr2-search-row { margin-bottom:10px; align-items:center; }
+  .tr2-pk-label-strong {
+    color:var(--fg) !important;
+    font-size:0.95rem; font-weight:600;
   }
-  .tr2-pk-label { color:var(--muted); font-size:12px; }
   .tr2-pk-wrap { position:relative; min-width:280px; }
   .tr2-pk-wrap input {
     background:var(--surface2); color:var(--fg);
@@ -419,17 +419,37 @@
   }
   .tr2-pk-wrap input:focus { outline:none; border-color:var(--accent); }
   .tr2-pk-sug { min-width:280px; max-width:520px; }
+  .tr2-pk-wrap-wide { flex:1 1 auto; min-width:280px; }
+  .tr2-pk-wrap-wide input {
+    width:100%;
+    padding:8px 12px; font-size:13px;
+  }
+  .tr2-pk-wrap-wide input:focus {
+    border-color:var(--accent);
+    box-shadow:0 0 0 1px var(--accent);
+  }
   .tr2-clear {
     background:var(--surface2); color:var(--fg);
     border:1px solid var(--border-strong); border-radius:4px;
     padding:5px 10px; font-size:11.5px; font-family:inherit;
-    cursor:pointer;
+    cursor:pointer; margin-left:auto;
   }
   .tr2-clear:hover { border-color:var(--accent); }
   .tr2-chips {
-    display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;
+    display:flex; flex-wrap:wrap; gap:18px; row-gap:8px;
+    align-items:center; margin-top:6px;
   }
   .tr2-chips:empty { display:none; }
+  .tr2-chip-group {
+    display:flex; flex-wrap:wrap; gap:6px; align-items:center;
+  }
+  .tr2-chip-group-label {
+    font-weight:600; font-size:12.5px; margin-right:4px;
+    letter-spacing:0.02em;
+  }
+  .tr2-chip-group-cdi   .tr2-chip-group-label { color:#5a9bff; }
+  .tr2-chip-group-ipca  .tr2-chip-group-label { color:#3aa66c; }
+  .tr2-chip-group-other .tr2-chip-group-label { color:var(--muted); }
   .tr2-notice {
     color:var(--warn); font-size:11.5px; margin-top:8px;
   }
@@ -759,15 +779,15 @@
       </label>
       <button id="tr2-apply" type="button">Aplicar</button>
       <span id="tr2-status" class="trd-status"></span>
-      <div class="tr2-pk">
-        <label class="tr2-pk-label" for="tr2-picker">Buscar:</label>
-        <div class="tr2-pk-wrap">
-          <input type="text" id="tr2-picker" autocomplete="off"
-                 placeholder="ticker ou emissor (ex: GGBRA7, Gerdau)">
-          <div class="exclusion-suggestions hide tr2-pk-sug" id="tr2-suggestions"></div>
-        </div>
-        <button type="button" id="tr2-clear" class="tr2-clear hide">Limpar tudo</button>
+    </div>
+    <div class="controls tr2-search-row">
+      <label class="tr2-pk-label-strong" for="tr2-picker">Buscar papel:</label>
+      <div class="tr2-pk-wrap tr2-pk-wrap-wide">
+        <input type="text" id="tr2-picker" autocomplete="off"
+               placeholder="ticker ou emissor (ex: GGBRA7, Gerdau)">
+        <div class="exclusion-suggestions hide tr2-pk-sug" id="tr2-suggestions"></div>
       </div>
+      <button type="button" id="tr2-clear" class="tr2-clear hide">Limpar tudo</button>
     </div>
     <div class="tr2-chips" id="tr2-chips"></div>
     <div class="tr2-notice hide" id="tr2-notice"></div>
@@ -4298,12 +4318,6 @@ function tr2_showError(msg) {
   document.getElementById("tr2-error").classList.remove("hide");
 }
 
-function tr2_showContent() {
-  document.getElementById("tr2-empty").classList.add("hide");
-  document.getElementById("tr2-error").classList.add("hide");
-  document.getElementById("tr2-content").classList.remove("hide");
-}
-
 async function renderTrades() {
   if (!TR2_INITED) {
     document.getElementById("tr2-apply").addEventListener("click", () => tr2_onApply());
@@ -4497,11 +4511,8 @@ async function tr2_load() {
 
   TR2_INDEXER_MAP = await tr2_buildIndexerMap(dateEntries.map(e => e.date));
   TR2_INDEX = tr2_buildIndex(allRows);
-  // Selecao default: top 1 ticker CDI + top 1 ticker IPCA, se houver.
-  if (!TR2_SELECTED.size) tr2_pickDefaults();
 
   tr2_setStatus("");
-  tr2_showContent();
   tr2_renderChips();
   tr2_renderAllCharts();
 }
@@ -4548,14 +4559,6 @@ function tr2_buildIndex(rows) {
   return { tickers, emissores };
 }
 
-function tr2_pickDefaults() {
-  if (!TR2_INDEX) return;
-  for (const grp of TR2_GROUPS) {
-    const top = TR2_INDEX.tickers.find(t => t.group === grp);
-    if (top) tr2_addTicker(top.c, top.issuer);
-  }
-}
-
 function tr2_colorForIndex(idx) {
   return PALETTE_QUAL[idx % PALETTE_QUAL.length];
 }
@@ -4589,16 +4592,33 @@ function tr2_renderChips() {
   }
   if (TR2_SELECTED.size >= 2) clearBtn.classList.remove("hide");
   else clearBtn.classList.add("hide");
-  const html = [];
+  const buckets = { CDI: [], IPCA: [], OTHER: [] };
   for (const v of TR2_SELECTED.values()) {
     const grp = TR2_INDEXER_MAP ? (TR2_INDEXER_MAP.get(v.ticker) || "OUTRO") : "OUTRO";
-    html.push(
-      `<span class="ex-chip is-ticker" style="border-color:${v.color}">` +
-      `<span class="ex-chip-prefix" style="color:${v.color}">${escapeHtml(grp)}:</span>` +
-      `${escapeHtml(v.ticker)}` +
-      `<button type="button" data-remove="${escapeAttr(v.ticker)}" aria-label="Remover">×</button>` +
-      `</span>`
-    );
+    if (grp === "CDI") buckets.CDI.push(v);
+    else if (grp === "IPCA") buckets.IPCA.push(v);
+    else buckets.OTHER.push(v);
+  }
+  const order = [
+    { key: "CDI",   cls: "tr2-chip-group-cdi",   label: "CDI:" },
+    { key: "IPCA",  cls: "tr2-chip-group-ipca",  label: "IPCA:" },
+    { key: "OTHER", cls: "tr2-chip-group-other", label: "Outros:" },
+  ];
+  const html = [];
+  for (const g of order) {
+    const list = buckets[g.key];
+    if (!list.length) continue;
+    html.push(`<div class="tr2-chip-group ${g.cls}">`);
+    html.push(`<span class="tr2-chip-group-label">${g.label}</span>`);
+    for (const v of list) {
+      html.push(
+        `<span class="ex-chip is-ticker" style="border-color:${v.color}">` +
+        `${escapeHtml(v.ticker)}` +
+        `<button type="button" data-remove="${escapeAttr(v.ticker)}" aria-label="Remover">×</button>` +
+        `</span>`
+      );
+    }
+    html.push(`</div>`);
   }
   box.innerHTML = html.join("");
   // Single delegated listener (rebind a cada render — innerHTML zera).
@@ -4756,6 +4776,18 @@ function tr2_calcVolByBucket(rows, ticker, granularity) {
 
 function tr2_renderAllCharts() {
   if (!TR2_RANGE_ROWS) return;
+  if (!TR2_SELECTED.size) {
+    document.getElementById("tr2-content").classList.add("hide");
+    document.getElementById("tr2-error").classList.add("hide");
+    document.getElementById("tr2-notice").classList.add("hide");
+    const e = document.getElementById("tr2-empty");
+    e.textContent = "Selecione um papel no campo Buscar para visualizar os gráficos.";
+    e.classList.remove("hide");
+    return;
+  }
+  document.getElementById("tr2-empty").classList.add("hide");
+  document.getElementById("tr2-error").classList.add("hide");
+  document.getElementById("tr2-content").classList.remove("hide");
   const grouped = tr2_selectedByGroup();
 
   // Aviso: papeis Pre/Outros selecionados sao mostrados nos chips mas nao
