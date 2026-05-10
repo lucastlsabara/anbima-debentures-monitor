@@ -455,7 +455,8 @@
   .tr2-notice {
     color:var(--warn); font-size:11.5px; margin-top:8px;
   }
-  .tr2-cat-row { margin-bottom:10px; }
+  #tr2-charts { display:flex; flex-direction:column; gap:10px; margin-bottom:10px; }
+  .tr2-cat-row { margin-bottom:0; }
   .trd-idx-cdi    { color:#5a9bff; font-weight:600; }
   .trd-idx-pctcdi { color:#2dd4bf; font-weight:600; }
   .trd-idx-ipca   { color:#3aa66c; font-weight:600; }
@@ -805,6 +806,10 @@
   </div>
   <div id="tr2-content">
     <div id="tr2-charts"></div>
+    <div class="panel" id="tr2-table-panel">
+      <h2>Trades</h2>
+      <div id="tr2-table"></div>
+    </div>
   </div>
 </section>
 
@@ -4191,16 +4196,10 @@ function trd_handleOutlierToggle() {
   trd_renderEvolChart();
 }
 
-function trd_renderTable(rows) {
-  // Anota cada row com o grupo do indexador (CDI/%CDI/IPCA/PRE/OUTROS).
-  // Mutacao in-place: rows e' o mesmo TRD_RANGE_ROWS ja consumido por
-  // KPIs/charts e a coluna nao quebra nenhum consumidor.
-  const idxMap = TRD_INDEXER_MAP || new Map();
-  for (const r of rows) {
-    if (r.ticker && r.indexador == null) {
-      r.indexador = idxMap.get(r.ticker) || "OUTROS";
-    }
-  }
+function _trd_buildTradesTable(containerId, rows) {
+  // Factory compartilhada entre a aba "Trades B3" e a aba "Trades"
+  // (versao filtrada por tickers selecionados). Espera que rows ja venham
+  // anotadas com `indexador` (CDI/%CDI/IPCA/PRE/OUTROS).
   const _set = (key) => {
     const s = new Set();
     for (const r of rows) if (r[key]) s.add(r[key]);
@@ -4209,9 +4208,7 @@ function trd_renderTable(rows) {
   const instrumentOpts = _set("instrument");
   const setorOpts = _set("setor");
 
-  if (TRD_TABLE) { TRD_TABLE.destroy(); TRD_TABLE = null; }
-
-  TRD_TABLE = new Tabulator("#trd-table", {
+  return new Tabulator(containerId, {
     data: rows,
     layout: "fitDataStretch",
     resizableColumns: true,
@@ -4301,6 +4298,23 @@ function trd_renderTable(rows) {
   });
 }
 
+function _trd_annotateIndexer(rows, idxMap) {
+  for (const r of rows) {
+    if (r.ticker && r.indexador == null) {
+      r.indexador = idxMap.get(r.ticker) || "OUTROS";
+    }
+  }
+}
+
+function trd_renderTable(rows) {
+  // Anota cada row com o grupo do indexador (CDI/%CDI/IPCA/PRE/OUTROS).
+  // Mutacao in-place: rows e' o mesmo TRD_RANGE_ROWS ja consumido por
+  // KPIs/charts e a coluna nao quebra nenhum consumidor.
+  _trd_annotateIndexer(rows, TRD_INDEXER_MAP || new Map());
+  if (TRD_TABLE) { TRD_TABLE.destroy(); TRD_TABLE = null; }
+  TRD_TABLE = _trd_buildTradesTable("#trd-table", rows);
+}
+
 /* ============================================================
  *  Tab 7 — Trades (multi-indexador, separa CDI vs IPCA)
  * ============================================================ */
@@ -4315,6 +4329,7 @@ let TR2_INDEX = null;                  // {tickers, emissores}
 const TR2_SELECTED = new Map();        // ticker -> {ticker, issuer, color}
 let TR2_INITED = false;
 let TR2_RECALC_TIMER = null;
+let TR2_TABLE = null;
 
 // Ordem fixa das categorias na UI (chips e charts).
 const TR2_GROUPS = ["CDI", "%CDI", "IPCA", "PRE", "OUTROS"];
@@ -4852,6 +4867,7 @@ function tr2_calcVolByBucket(rows, ticker, granularity) {
 function tr2_renderAllCharts() {
   if (!TR2_RANGE_ROWS) return;
   const chartsBox = document.getElementById("tr2-charts");
+  const tablePanel = document.getElementById("tr2-table-panel");
   if (!TR2_SELECTED.size) {
     document.getElementById("tr2-content").classList.add("hide");
     document.getElementById("tr2-error").classList.add("hide");
@@ -4860,16 +4876,19 @@ function tr2_renderAllCharts() {
     e.textContent = "Selecione um papel no campo Buscar para visualizar os gráficos.";
     e.classList.remove("hide");
     chartsBox.innerHTML = "";
+    if (TR2_TABLE) { TR2_TABLE.destroy(); TR2_TABLE = null; }
+    if (tablePanel) tablePanel.classList.add("hide");
     return;
   }
   document.getElementById("tr2-empty").classList.add("hide");
   document.getElementById("tr2-error").classList.add("hide");
   document.getElementById("tr2-notice").classList.add("hide");
   document.getElementById("tr2-content").classList.remove("hide");
+  if (tablePanel) tablePanel.classList.remove("hide");
   const grouped = tr2_selectedByGroup();
 
   // Renderiza apenas categorias com tickers selecionados, em ordem fixa.
-  // Cada categoria ocupa 1 linha com 2 charts (TAXA VWAP + VOLUME R$).
+  // Cada categoria ocupa 1 linha com o chart de VOLUME R$ em largura completa.
   const granularity = trd_pickGranularity(TR2_RANGE_NDAYS);
   const tickformat = trd_xAxisTickformat(TR2_DATE_INI, TR2_DATE_FIM);
 
@@ -4878,66 +4897,31 @@ function tr2_renderAllCharts() {
   for (const grp of TR2_GROUPS) {
     if (!grouped[grp].length) continue;
     const meta = TR2_GROUP_META[grp];
-    const lineId = `tr2-line-${meta.slug}`;
     const barId = `tr2-bar-${meta.slug}`;
     html.push(
-      `<div class="grid-2x2 tr2-cat-row">` +
-        `<div class="panel">` +
-          `<h2>Taxa VWAP — ${escapeHtml(meta.label)}</h2>` +
-          `<div id="${lineId}" class="chart"></div>` +
-        `</div>` +
-        `<div class="panel">` +
-          `<h2>Volume R$ por bucket — ${escapeHtml(meta.label)}</h2>` +
-          `<div id="${barId}" class="chart"></div>` +
-        `</div>` +
+      `<div class="panel tr2-cat-row">` +
+        `<h2>Volume R$ por bucket — ${escapeHtml(meta.label)}</h2>` +
+        `<div id="${barId}" class="chart"></div>` +
       `</div>`
     );
-    renderQueue.push({ grp, lineId, barId, selected: grouped[grp] });
+    renderQueue.push({ grp, barId, selected: grouped[grp] });
   }
   chartsBox.innerHTML = html.join("");
 
   for (const item of renderQueue) {
-    tr2_renderLineChart(item.grp, item.selected, granularity, tickformat, item.lineId);
     tr2_renderStackedBarChart(item.grp, item.selected, granularity, tickformat, item.barId);
   }
+
+  tr2_renderTable();
 }
 
-function tr2_renderLineChart(group, selected, granularity, tickformat, divId) {
-  const traces = [];
-  for (const sel of selected) {
-    const series = trd_calcVwapByBucket(TR2_RANGE_ROWS, sel.ticker, granularity);
-    if (!series.length) continue;
-    traces.push({
-      type: "scatter", mode: "lines+markers",
-      name: sel.ticker,
-      x: series.map(p => p.ts.getTime()),
-      y: series.map(p => p.vwap),
-      line: { color: sel.color, width: 2 },
-      marker: { color: sel.color, size: 6 },
-      customdata: series.map(p => [p.label, trd_fmtMoneyShort(p.vol), p.n]),
-      hovertemplate:
-        `<b>${sel.ticker}</b><br>%{customdata[0]}<br>VWAP: %{y:.2f}%` +
-        `<br>Vol: %{customdata[1]}<br>N: %{customdata[2]}<extra></extra>`,
-    });
-  }
-  if (!traces.length) {
-    tr2_renderEmptyState(divId, `Sem trades com taxa para os papéis ${group} no período.`);
-    return;
-  }
-  const base = PLOTLY_LAYOUT();
-  const layout = Object.assign({}, base, {
-    margin: { t: 30, r: 140, b: 50, l: 60 },
-    showlegend: true,
-    legend: { x: 1.02, y: 1, xanchor: "left", yanchor: "top",
-              bgcolor: "rgba(0,0,0,0)", font: { size: 11 } },
-    xaxis: Object.assign({}, base.xaxis, {
-      type: "date", tickformat,
-    }),
-    yaxis: Object.assign({}, base.yaxis, {
-      tickformat: ".2f", ticksuffix: "%",
-    }),
-  });
-  Plotly.newPlot(divId, traces, layout, PLOTLY_CONFIG);
+function tr2_renderTable() {
+  // Tabela compartilhada com a aba "Trades B3", filtrada pelos tickers
+  // selecionados em TR2_SELECTED.
+  const filtered = TR2_RANGE_ROWS.filter(r => TR2_SELECTED.has(r.ticker));
+  _trd_annotateIndexer(filtered, TR2_INDEXER_MAP || new Map());
+  if (TR2_TABLE) { TR2_TABLE.destroy(); TR2_TABLE = null; }
+  TR2_TABLE = _trd_buildTradesTable("#tr2-table", filtered);
 }
 
 function tr2_renderStackedBarChart(group, selected, granularity, tickformat, divId) {
