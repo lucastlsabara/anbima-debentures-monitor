@@ -4393,13 +4393,8 @@ async function tr2_buildIndexerMap(rangeDates) {
 
   // 1) Snapshot ANBIMA mais recente DENTRO do range. Cobre apenas DEB com
   //    rate aditivo (IPCA+/CDI+) e %DI/Pre. Prioritario por ser oficial.
-  const anbimaCandidates = [];
-  for (const d of rangeDates) {
-    const url = `history/${d}.json`;
-    anbimaCandidates.push(d);
-  }
-  for (let i = anbimaCandidates.length - 1; i >= 0; i--) {
-    const d = anbimaCandidates[i];
+  for (let i = rangeDates.length - 1; i >= 0; i--) {
+    const d = rangeDates[i];
     try {
       const url = BUILD_VERSION ? `history/${d}.json?v=${BUILD_VERSION}` : `history/${d}.json`;
       const r = await fetch(url);
@@ -4412,33 +4407,45 @@ async function tr2_buildIndexerMap(rangeDates) {
     } catch (_) { /* tenta proximo */ }
   }
 
-  // 2) Snapshot B3 InstrumentRegistration mais recente dentro do range.
-  //    Preenche tickers ainda nao mapeados (CRA/CRI/CFF/COE etc).
-  if (TR2_INSTR_MANIFEST && TR2_INSTR_MANIFEST.dates) {
-    const instr = TR2_INSTR_MANIFEST.dates
-      .filter(e => e.date >= TR2_DATE_INI && e.date <= TR2_DATE_FIM)
-      .sort((a, b) => a.date.localeCompare(b.date));
-    if (instr.length) {
-      const e = instr[instr.length - 1];
-      try {
-        const url = BUILD_VERSION
-          ? `data/b3_instruments/${e.filename}?v=${BUILD_VERSION}`
-          : `data/b3_instruments/${e.filename}`;
-        const r = await fetch(url);
-        if (r.ok) {
-          const snap = await r.json();
-          const cols = snap.columns || [];
-          const iTicker = cols.indexOf("ticker");
-          const iIndexer = cols.indexOf("indexer");
+  // 2) Snapshot B3 InstrumentRegistration. Manifest schema: {dates: ["YYYY-MM-DD", ...]}.
+  //    Pega a data mais recente do manifest DENTRO do range; se nenhuma bater
+  //    (range estreito, snapshot B3 do dia anterior), fallback pra data mais
+  //    recente do manifest. Preenche tickers ainda nao mapeados pelo ANBIMA
+  //    (CRA/CRI/CFF/COE/LF/LIG etc).
+  const instrDates = (TR2_INSTR_MANIFEST && Array.isArray(TR2_INSTR_MANIFEST.dates))
+    ? TR2_INSTR_MANIFEST.dates.slice().sort()
+    : [];
+  if (instrDates.length) {
+    const rangeSet = new Set(rangeDates);
+    let pick = null;
+    for (let i = instrDates.length - 1; i >= 0; i--) {
+      if (rangeSet.has(instrDates[i])) { pick = instrDates[i]; break; }
+    }
+    if (!pick) pick = instrDates[instrDates.length - 1];
+    try {
+      const url = BUILD_VERSION
+        ? `data/b3_instruments/${pick}.json?v=${BUILD_VERSION}`
+        : `data/b3_instruments/${pick}.json`;
+      const r = await fetch(url);
+      if (r.ok) {
+        const snap = await r.json();
+        const cols = snap.columns || [];
+        const iTicker = cols.indexOf("ticker");
+        const iIndexer = cols.indexOf("indexer");
+        if (iTicker >= 0 && iIndexer >= 0) {
           for (const row of (snap.rows || [])) {
             const t = row[iTicker];
             if (!t || map.has(t)) continue;
             map.set(t, tr2_classifyB3Indexer(row[iIndexer]));
           }
+        } else {
+          console.warn("[trades] b3_instruments schema inesperado (sem ticker/indexer)");
         }
-      } catch (err) {
-        console.warn("[trades] falha ao ler b3_instruments", err);
+      } else {
+        console.warn("[trades] b3_instruments HTTP " + r.status + " em " + pick);
       }
+    } catch (err) {
+      console.warn("[trades] falha ao ler b3_instruments", err);
     }
   }
 
