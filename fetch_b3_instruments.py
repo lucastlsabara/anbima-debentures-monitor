@@ -47,6 +47,9 @@ REQUEST_HEADERS = {
 DATA_DIR = Path(__file__).parent / "data" / "b3_instruments"
 MANIFEST_PATH = DATA_DIR / "manifest.json"
 
+B3_TRADES_DIR = Path(__file__).parent / "data" / "b3_trades"
+B3_TRADES_MANIFEST = B3_TRADES_DIR / "manifest.json"
+
 COLUMNS = [
     "ticker", "isin", "issuer", "instType",
     "indexer", "indexerPct", "additionalFee", "maturity",
@@ -82,6 +85,63 @@ def _post_page(date_iso: str, page: int) -> dict:
 
 def _row_from_array(arr: list) -> list:
     return [arr[i] if i < len(arr) else None for i in _COL_IDX]
+
+
+def _load_traded_tickers() -> set[str] | None:
+    """Le tickers unicos a partir de data/b3_trades/.
+
+    Retorna:
+      None  -> manifest ausente/corrompido (fallback: salvar cadastro completo)
+      set() -> manifest existe mas sem dias (salvar arquivo vazio)
+      set   -> universo de tickers a manter
+    """
+    if not B3_TRADES_MANIFEST.exists():
+        print(
+            "AVISO: data/b3_trades/manifest.json nao encontrado — "
+            "salvando cadastro COMPLETO (fallback)."
+        )
+        return None
+
+    try:
+        manifest = json.loads(B3_TRADES_MANIFEST.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(
+            f"AVISO: manifest de b3_trades corrompido ({exc}) — "
+            "salvando cadastro COMPLETO (fallback)."
+        )
+        return None
+
+    entries = manifest.get("dates") or []
+    if not entries:
+        print("AVISO: manifest de b3_trades sem dias — salvando arquivo vazio.")
+        return set()
+
+    tickers: set[str] = set()
+    for entry in entries:
+        filename = entry.get("filename")
+        if not filename:
+            continue
+        path = B3_TRADES_DIR / filename
+        if not path.exists():
+            print(f"  AVISO: {filename} listado no manifest mas ausente — pulando.")
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            print(f"  AVISO: {filename} corrompido ({exc}) — pulando.")
+            continue
+        cols = data.get("columns") or []
+        try:
+            ticker_idx = cols.index("ticker")
+        except ValueError:
+            print(f"  AVISO: {filename} sem coluna 'ticker' — pulando.")
+            continue
+        for row in data.get("rows") or []:
+            if ticker_idx < len(row):
+                t = row[ticker_idx]
+                if t:
+                    tickers.add(t)
+    return tickers
 
 
 def fetch_day(date_iso: str) -> dict:
@@ -123,20 +183,49 @@ def fetch_day(date_iso: str) -> dict:
         resp = _post_page(date_iso, page)
         _ingest_values((resp.get("table") or {}).get("values"))
 
+    n_total = len(rows)
+    traded = _load_traded_tickers()
+    if traded is None:
+        filtered_rows = rows
+    elif not traded:
+        filtered_rows = []
+    else:
+        ticker_idx = COLUMNS.index("ticker")
+        filtered_rows = [r for r in rows if r[ticker_idx] in traded]
+
     payload = {
         "date": date_iso,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "last_b3_update": last_b3_update,
         "columns": COLUMNS,
-        "rows": rows,
-        "total_records": len(rows),
+        "rows": filtered_rows,
+        "total_records": len(filtered_rows),
         "n_pages_fetched": max(page_count, 1),
     }
 
-    out_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-    size_mb = out_path.stat().st_size / (1024 * 1024)
+    payload_str = json.dumps(payload, separators=(",", ":"))
+    out_path.write_text(payload_str, encoding="utf-8")
+    size_kb = len(payload_str.encode("utf-8")) / 1024
 
-    print(f"OK: {len(rows):,} registros, {size_mb:.2f} MB".replace(",", "."))
+    if traded is None:
+        size_mb = size_kb / 1024
+        print(
+            f"OK: {len(filtered_rows):,} registros, {size_mb:.2f} MB "
+            "(sem filtro — manifest b3_trades ausente)".replace(",", ".")
+        )
+    elif not traded:
+        print(
+            f"Filtrado: 0/{n_total:,} registros "
+            f"(manifest b3_trades vazio, {size_kb:.0f} KB)".replace(",", ".")
+        )
+    else:
+        pct = len(filtered_rows) / len(traded) * 100
+        print(
+            f"Filtrado: {len(filtered_rows):,}/{n_total:,} registros "
+            f"({pct:.1f}% cobertura, {size_kb:.0f} KB)".replace(",", ".")
+        )
+
+    rows = filtered_rows
 
     _update_manifest(date_iso, len(rows), out_path.name)
 
