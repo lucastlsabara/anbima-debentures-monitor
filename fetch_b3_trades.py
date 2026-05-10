@@ -1,12 +1,24 @@
-"""Fetch de trades de renda fixa da B3 (DEB/CRA/CRI/CFF/COE) para um dia.
+"""Fetch de trades de renda fixa da B3 (DEB/CRA/CRI/CFF/COE).
 
 Endpoint publico nao documentado:
   POST https://arquivos.b3.com.br/bdi/table/Trade/{ini}/{fim}/{page}/{page_size}
 Headers: Content-Type: application/json
 Body: {}
 
+Modo padrao (sem args): always-refresh dos ultimos 5 dias uteis B3.
+  - Cada dia e SEMPRE re-baixado para capturar correcoes retroativas
+    (cancelamento de trades, ajuste de precos no Boletim Diario).
+  - Escrita atomica via .json.tmp + rename: arquivo nunca corrompe.
+  - Se conteudo (rows + last_b3_update) bate com o ja persistido,
+    nao reescreve - git fica idempotente.
+  - 403/404 (FDS/feriado/dia ainda nao publicado) e tolerado.
+  - Falha real (rede/timeout apos retry 3x) preserva arquivo existente.
+
+Modo unitario (CLI: python fetch_b3_trades.py YYYY-MM-DD): busca apenas
+esse dia (utilitario para inspecao manual).
+
 Persiste data/b3_trades/{YYYY-MM-DD}.json em formato colunar minificado e
-atualiza data/b3_trades/manifest.json. Idempotente por dia.
+atualiza data/b3_trades/manifest.json.
 """
 
 from __future__ import annotations
@@ -14,13 +26,13 @@ from __future__ import annotations
 import json
 import sys
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
 
 import sectors
-from b3_calendar import last_b3_business_day, today_brt
+from b3_calendar import is_b3_business_day, today_brt
 
 
 B3_URL = "https://arquivos.b3.com.br/bdi/table/Trade/{ini}/{fim}/{page}/{page_size}"
@@ -28,6 +40,8 @@ PAGE_SIZE = 500
 TIMEOUT = 60
 MAX_RETRIES = 3
 SLEEP_BETWEEN_PAGES = 0.2
+SLEEP_BETWEEN_DAYS = 1.0
+REFRESH_WINDOW_DAYS = 5
 
 REQUEST_HEADERS = {
     "Content-Type": "application/json",
@@ -50,6 +64,10 @@ COLUMNS = [
 ]
 
 
+class B3UnavailableError(Exception):
+    """B3 retornou 403/404: dia em FDS/feriado/ainda nao publicado."""
+
+
 def _post_page(date_iso: str, page: int) -> dict:
     url = B3_URL.format(ini=date_iso, fim=date_iso, page=page, page_size=PAGE_SIZE)
     last_exc: Exception | None = None
@@ -61,10 +79,14 @@ def _post_page(date_iso: str, page: int) -> dict:
                 json={},
                 timeout=TIMEOUT,
             )
+            if r.status_code in (403, 404):
+                raise B3UnavailableError(f"HTTP {r.status_code}")
             if r.status_code >= 500:
                 raise requests.HTTPError(f"HTTP {r.status_code}")
             r.raise_for_status()
             return r.json()
+        except B3UnavailableError:
+            raise
         except (requests.Timeout, requests.HTTPError, requests.ConnectionError) as exc:
             last_exc = exc
             if attempt == MAX_RETRIES - 1:
@@ -101,16 +123,47 @@ def _row_from_array(arr: list) -> list:
     ]
 
 
-def fetch_day(date_iso: str) -> dict:
-    """Busca trades de UM dia, persiste arquivo + atualiza manifest."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+def _is_equivalent(existing_path: Path, new_payload: dict) -> bool:
+    """True se conteudo persistido equivale ao novo (ignorando fetched_at)."""
+    try:
+        existing = json.loads(existing_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    if existing.get("last_b3_update") != new_payload.get("last_b3_update"):
+        return False
+    if existing.get("rows") != new_payload.get("rows"):
+        return False
+    return True
 
-    first = _post_page(date_iso, 1)
+
+def fetch_day(date_iso: str) -> dict:
+    """Busca trades de UM dia.
+
+    Retorna dict com `status` em {'updated', 'unchanged', 'unavailable'}.
+    'updated': arquivo escrito (novo ou conteudo diferente do anterior).
+    'unchanged': B3 retornou conteudo equivalente ao ja persistido OU
+                 retornou 403/404 (mantem arquivo existente, se houver).
+    'unavailable' e tratado como 'unchanged' do ponto de vista do log.
+
+    Levanta RuntimeError se houver falha de rede apos os retries
+    (chamador deve capturar e contar como falha sem alterar arquivo).
+    """
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = DATA_DIR / f"{date_iso}.json"
+
+    try:
+        first = _post_page(date_iso, 1)
+    except B3UnavailableError as exc:
+        print(
+            f"[{date_iso}] {exc} - esperado em FDS/feriado/dia ainda nao publicado, pulando"
+        )
+        return {"date": date_iso, "status": "unavailable"}
+
     table = first.get("table") or {}
     page_count = int(table.get("pageCount") or 0)
     last_b3_update = first.get("lastUpdateDate")
 
-    print(f"Buscando {date_iso} - {page_count} pagina(s)...")
+    print(f"[{date_iso}] {page_count} pagina(s)")
 
     rows: list[list] = []
     instruments_count: dict[str, int] = {}
@@ -149,19 +202,29 @@ def fetch_day(date_iso: str) -> dict:
         },
     }
 
-    out_path = DATA_DIR / f"{date_iso}.json"
-    out_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    if out_path.exists() and _is_equivalent(out_path, payload):
+        print(f"[{date_iso}] B3 igual ao ja existente, mantendo arquivo")
+        return {
+            "date": date_iso,
+            "status": "unchanged",
+            "n_trades": len(rows),
+            "vol_brl": vol_total,
+        }
+
+    tmp_path = out_path.parent / f"{date_iso}.json.tmp"
+    tmp_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    tmp_path.replace(out_path)
     size_mb = out_path.stat().st_size / (1024 * 1024)
 
-    print(f"OK: {len(rows):,} trades, {size_mb:.2f} MB".replace(",", "."))
+    print(f"[{date_iso}] OK: {len(rows):,} trades, {size_mb:.2f} MB".replace(",", "."))
 
     _update_manifest(date_iso, len(rows), vol_total, out_path.name)
 
     return {
         "date": date_iso,
+        "status": "updated",
         "n_trades": len(rows),
         "vol_brl": vol_total,
-        "status": "ok",
     }
 
 
@@ -200,18 +263,69 @@ def _update_manifest(date_iso: str, n_trades: int, vol_brl: float, filename: str
     )
 
 
-def _resolve_default_date() -> str:
-    return last_b3_business_day(today_brt()).isoformat()
+def _last_n_b3_business_days(n: int, today: date | None = None) -> list[date]:
+    """N ultimos dias uteis B3 estritamente anteriores a `today`, ordem ascendente."""
+    if today is None:
+        today = today_brt()
+    out: list[date] = []
+    d = today - timedelta(days=1)
+    while len(out) < n:
+        if is_b3_business_day(d):
+            out.append(d)
+        d -= timedelta(days=1)
+    return list(reversed(out))
+
+
+def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS) -> int:
+    """Always-refresh dos ultimos N dias uteis B3. Retorna exit code."""
+    days = _last_n_b3_business_days(n)
+    print(
+        f"Always-refresh dos ultimos {len(days)} dias uteis B3: "
+        f"{days[0]} a {days[-1]}"
+    )
+
+    updated = 0
+    unchanged = 0
+    failed = 0
+
+    for i, d in enumerate(days):
+        date_iso = d.isoformat()
+        try:
+            result = fetch_day(date_iso)
+            status = result["status"]
+            if status == "updated":
+                updated += 1
+            else:
+                unchanged += 1
+        except Exception as exc:
+            print(
+                f"[{date_iso}] FALHA apos retries: {exc} - "
+                f"mantendo arquivo existente (se houver)"
+            )
+            failed += 1
+        if i < len(days) - 1:
+            time.sleep(SLEEP_BETWEEN_DAYS)
+
+    print()
+    print(
+        f"Resumo: {updated} atualizado(s), {unchanged} inalterado(s) "
+        f"(B3 igual ao ja existente ou indisponivel), {failed} falha(s)"
+    )
+
+    return 0 if failed < len(days) else 1
 
 
 def main(argv: list[str]) -> int:
     if len(argv) >= 2:
         date_iso = argv[1]
         date.fromisoformat(date_iso)
-    else:
-        date_iso = _resolve_default_date()
-    fetch_day(date_iso)
-    return 0
+        try:
+            fetch_day(date_iso)
+        except Exception as exc:
+            print(f"FALHA: {exc}")
+            return 1
+        return 0
+    return refresh_recent_days()
 
 
 if __name__ == "__main__":
