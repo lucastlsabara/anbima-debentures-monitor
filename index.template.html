@@ -3707,8 +3707,18 @@ function trd_renderDailyChart(daily) {
     hovertemplate: "%{x}<br>%{customdata}<extra></extra>",
     customdata: ys.map(trd_fmtMoneyFull),
   };
-  const layout = Object.assign({}, PLOTLY_LAYOUT(), {
-    yaxis: Object.assign({}, PLOTLY_LAYOUT().yaxis, {
+  // Eixo X "category" com categoryarray = ordem cronologica do daily
+  // garante zero buracos de FDS/feriado (so dias com dado aparecem).
+  const base = PLOTLY_LAYOUT();
+  const layout = Object.assign({}, base, {
+    xaxis: Object.assign({}, base.xaxis, {
+      type: "category",
+      categoryorder: "array",
+      categoryarray: xs,
+      tickangle: -25,
+      nticks: Math.min(20, xs.length),
+    }),
+    yaxis: Object.assign({}, base.yaxis, {
       tickformat: "~s", separatethousands: true,
     }),
   });
@@ -3802,6 +3812,23 @@ function trd_bucketLabel(ts, granularity) {
   if (granularity === "week") return `Sem ${dd}-${mm}`;
   // month
   return `${TRD_MES_ABBR[ts.getMonth()]}-${String(ts.getFullYear()).slice(2)}`;
+}
+
+// Label do tick do eixo X (categoria) — usado quando o eixo X eh do tipo
+// "category" para eliminar buracos de FDS/feriado. Formato espelha
+// trd_xAxisTickformat: "DD/MM HHh" para hour, "DD/MM" para day/week,
+// "MMM-AA" para month.
+function trd_bucketTickLabel(ts, granularity) {
+  const dd = String(ts.getDate()).padStart(2, "0");
+  const mm = String(ts.getMonth() + 1).padStart(2, "0");
+  if (granularity === "hour") {
+    const hh = String(ts.getHours()).padStart(2, "0");
+    return `${dd}/${mm} ${hh}h`;
+  }
+  if (granularity === "month") {
+    return `${TRD_MES_ABBR[ts.getMonth()]}-${String(ts.getFullYear()).slice(2)}`;
+  }
+  return `${dd}/${mm}`;
 }
 
 // Calcula VWAP por bucket para um ticker. Pula trades com rate==null,
@@ -4150,12 +4177,24 @@ function trd_renderEvolChart() {
   }
   msgEl.classList.add("hide");
 
+  // Eixo X em "category" para eliminar buracos de FDS/feriado: so categorias
+  // com bucket real aparecem. categoryarray = uniao ordenada cronologicamente
+  // dos buckets de todas as series visiveis.
+  const tickLabelByTs = new Map();
+  for (const s of filtered.visible) {
+    for (const p of s.series) {
+      const key = p.ts.getTime();
+      if (!tickLabelByTs.has(key)) {
+        tickLabelByTs.set(key, trd_bucketTickLabel(p.ts, granularity));
+      }
+    }
+  }
+  const sortedTs = Array.from(tickLabelByTs.keys()).sort((a, b) => a - b);
+  const categoryarray = sortedTs.map(ts => tickLabelByTs.get(ts));
+
   const traces = filtered.visible.map((s, idx) => {
     const color = sel.type === "t" ? cssVar("--accent") : PALETTE_QUAL[idx % PALETTE_QUAL.length];
-    // X = ms epoch UTC do bucket (consistente com bucket calculado em local
-    // time; Plotly trata como Date e ordena cronologicamente). customdata
-    // carrega o label pt-BR pre-formatado para o hover.
-    const xs = s.series.map(p => p.ts.getTime());
+    const xs = s.series.map(p => tickLabelByTs.get(p.ts.getTime()));
     const ys = s.series.map(p => p.vwap);
     const customdata = s.series.map(p => [p.label, trd_fmtMoneyShort(p.vol), p.n]);
     return {
@@ -4174,15 +4213,18 @@ function trd_renderEvolChart() {
   const base = PLOTLY_LAYOUT();
   const showLegend = sel.type === "e";
   const layout = Object.assign({}, base, {
-    margin: { t: 30, r: showLegend ? 140 : 20, b: 50, l: 60 },
+    margin: { t: 30, r: showLegend ? 140 : 20, b: 60, l: 60 },
     showlegend: showLegend,
     legend: showLegend
       ? { x: 1.02, y: 1, xanchor: "left", yanchor: "top",
           bgcolor: "rgba(0,0,0,0)", font: { size: 11 } }
       : undefined,
     xaxis: Object.assign({}, base.xaxis, {
-      type: "date",
-      tickformat: trd_xAxisTickformat(TRD_DATE_INI, TRD_DATE_FIM),
+      type: "category",
+      categoryorder: "array",
+      categoryarray,
+      tickangle: -25,
+      nticks: Math.min(20, categoryarray.length),
     }),
     yaxis: Object.assign({}, base.yaxis, {
       tickformat: ".4f", ticksuffix: "%",
@@ -4885,32 +4927,17 @@ function tr2_renderAllCharts() {
   document.getElementById("tr2-notice").classList.add("hide");
   document.getElementById("tr2-content").classList.remove("hide");
   if (tablePanel) tablePanel.classList.remove("hide");
-  const grouped = tr2_selectedByGroup();
 
-  // Renderiza apenas categorias com tickers selecionados, em ordem fixa.
-  // Cada categoria ocupa 1 linha com o chart de VOLUME R$ em largura completa.
+  // 1 unico chart de Volume R$ por bucket: todos os tickers selecionados
+  // (de qualquer indexador) aparecem empilhados. Cor = cor do indexador.
   const granularity = trd_pickGranularity(TR2_RANGE_NDAYS);
-  const tickformat = trd_xAxisTickformat(TR2_DATE_INI, TR2_DATE_FIM);
-
-  const html = [];
-  const renderQueue = [];
-  for (const grp of TR2_GROUPS) {
-    if (!grouped[grp].length) continue;
-    const meta = TR2_GROUP_META[grp];
-    const barId = `tr2-bar-${meta.slug}`;
-    html.push(
-      `<div class="panel tr2-cat-row">` +
-        `<h2>Volume R$ por bucket — ${escapeHtml(meta.label)}</h2>` +
-        `<div id="${barId}" class="chart"></div>` +
-      `</div>`
-    );
-    renderQueue.push({ grp, barId, selected: grouped[grp] });
-  }
-  chartsBox.innerHTML = html.join("");
-
-  for (const item of renderQueue) {
-    tr2_renderStackedBarChart(item.grp, item.selected, granularity, tickformat, item.barId);
-  }
+  const barId = "tr2-bar-all";
+  chartsBox.innerHTML =
+    `<div class="panel tr2-cat-row">` +
+      `<h2>Volume R$ por bucket</h2>` +
+      `<div id="${barId}" class="chart"></div>` +
+    `</div>`;
+  tr2_renderUnifiedStackedBarChart(granularity, barId);
 
   tr2_renderTable();
 }
@@ -4924,35 +4951,67 @@ function tr2_renderTable() {
   TR2_TABLE = _trd_buildTradesTable("#tr2-table", filtered);
 }
 
-function tr2_renderStackedBarChart(group, selected, granularity, tickformat, divId) {
-  const traces = [];
-  for (const sel of selected) {
+function tr2_renderUnifiedStackedBarChart(granularity, divId) {
+  // Ordena selecionados por indexador (CDI -> %CDI -> IPCA -> PRE -> OUTROS)
+  // e dentro do grupo por ticker — empilhamento visualmente agrupado por cor.
+  const grouped = tr2_selectedByGroup();
+  const orderedSelected = [];
+  for (const grp of TR2_GROUPS) {
+    const arr = grouped[grp].slice().sort((a, b) => a.ticker.localeCompare(b.ticker));
+    for (const v of arr) orderedSelected.push({ sel: v, grp });
+  }
+
+  // Coleta labels de bucket cronologicamente ordenados (categorias do eixo X).
+  // Eixo "category" elimina buracos de FDS/feriado automaticamente.
+  const labelByTs = new Map();
+  const built = [];
+  for (const { sel, grp } of orderedSelected) {
     const series = tr2_calcVolByBucket(TR2_RANGE_ROWS, sel.ticker, granularity);
     if (!series.length) continue;
-    traces.push({
+    for (const p of series) {
+      const key = p.ts.getTime();
+      if (!labelByTs.has(key)) {
+        labelByTs.set(key, trd_bucketTickLabel(p.ts, granularity));
+      }
+    }
+    built.push({ sel, grp, series });
+  }
+
+  if (!built.length) {
+    tr2_renderEmptyState(divId, "Sem volume para os papéis selecionados no período.");
+    return;
+  }
+
+  const sortedTs = Array.from(labelByTs.keys()).sort((a, b) => a - b);
+  const categoryarray = sortedTs.map(ts => labelByTs.get(ts));
+
+  const traces = built.map(({ sel, grp, series }) => {
+    const color = (TR2_GROUP_META[grp] || TR2_GROUP_META["OUTROS"]).color;
+    return {
       type: "bar",
       name: sel.ticker,
-      x: series.map(p => p.ts.getTime()),
+      x: series.map(p => labelByTs.get(p.ts.getTime())),
       y: series.map(p => p.vol),
-      marker: { color: sel.color },
+      marker: { color },
       customdata: series.map(p => [trd_fmtMoneyShort(p.vol), p.n]),
       hovertemplate:
         `<b>${sel.ticker}</b><br>Vol: %{customdata[0]}<br>N: %{customdata[1]}<extra></extra>`,
-    });
-  }
-  if (!traces.length) {
-    tr2_renderEmptyState(divId, `Sem volume para os papéis ${group} no período.`);
-    return;
-  }
+    };
+  });
+
   const base = PLOTLY_LAYOUT();
   const layout = Object.assign({}, base, {
-    margin: { t: 30, r: 140, b: 50, l: 60 },
+    margin: { t: 30, r: 140, b: 60, l: 60 },
     barmode: "stack",
     showlegend: true,
     legend: { x: 1.02, y: 1, xanchor: "left", yanchor: "top",
               bgcolor: "rgba(0,0,0,0)", font: { size: 11 } },
     xaxis: Object.assign({}, base.xaxis, {
-      type: "date", tickformat,
+      type: "category",
+      categoryorder: "array",
+      categoryarray,
+      tickangle: -25,
+      nticks: Math.min(20, categoryarray.length),
     }),
     yaxis: Object.assign({}, base.yaxis, {
       tickformat: "~s", separatethousands: true,
