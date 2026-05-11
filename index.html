@@ -1338,6 +1338,13 @@ function vg_renderKpis(rows, rangeRows) {
 
 function _vg_computeDoD(rangeRows) {
   if (!rangeRows || !rangeRows.length) return null;
+  // Badge so quando intervalo == 1 dia util B3 (D vs D-1 em OVERVIEW.dates).
+  // Sex vs Seg = 1 dia util, mostra. Sex vs Qua = 2 dias uteis, oculta.
+  if (!VIS_DATE_ATUAL || !VIS_DATE_ANTERIOR) return null;
+  const allDates = (OVERVIEW && OVERVIEW.dates) || [];
+  const iA = allDates.indexOf(VIS_DATE_ATUAL);
+  const iB = allDates.indexOf(VIS_DATE_ANTERIOR);
+  if (iA < 0 || iB < 0 || iA - iB !== 1) return null;
   const byDate = new Map();   // date -> { vol, n }
   for (const r of rangeRows) {
     if (!r.date) continue;
@@ -3961,6 +3968,9 @@ let TR2_RANGE_ROWS = null;
 let TR2_RANGE_NDAYS = 0;
 let TR2_INDEX = null;                  // {tickers, emissores}
 const TR2_SELECTED = new Map();        // ticker -> {ticker, issuer, color}
+// Emissores adicionados explicitamente via tr2_pickEmissor. Persistem ao mudar
+// o range, mesmo que nem todos os tickers do emissor existam no novo range.
+const TR2_SELECTED_ISSUERS = new Set();
 let TR2_INITED = false;
 let TR2_RECALC_TIMER = null;
 let TR2_TABLE = null;
@@ -4205,6 +4215,7 @@ function tr2_removeTicker(ticker) {
 
 function tr2_clearAllChips() {
   TR2_SELECTED.clear();
+  TR2_SELECTED_ISSUERS.clear();
   tr2_renderChips();
   tr2_renderAllCharts();
 }
@@ -4228,12 +4239,13 @@ function tr2_fullySelectedIssuers() {
 function tr2_renderChips() {
   const box = document.getElementById("tr2-chips");
   const clearBtn = document.getElementById("tr2-clear");
-  if (!TR2_SELECTED.size) {
+  if (!TR2_SELECTED.size && !TR2_SELECTED_ISSUERS.size) {
     box.innerHTML = "";
     clearBtn.classList.add("hide");
     return;
   }
-  if (TR2_SELECTED.size >= 2) clearBtn.classList.remove("hide");
+  const totalChips = TR2_SELECTED.size + TR2_SELECTED_ISSUERS.size;
+  if (totalChips >= 2) clearBtn.classList.remove("hide");
   else clearBtn.classList.add("hide");
 
   // Agrupa tickers selecionados por emissor preservando ordem de selecao.
@@ -4245,6 +4257,11 @@ function tr2_renderChips() {
     if (!issuerBuckets.has(issuer)) issuerBuckets.set(issuer, []);
     issuerBuckets.get(issuer).push(v);
   }
+  // Emissores explicitos sem tickers no range corrente ainda recebem bucket
+  // (chip agregador "vazio") — mantem o emissor visivel apos mudar o range.
+  for (const issuer of TR2_SELECTED_ISSUERS) {
+    if (!issuerBuckets.has(issuer)) issuerBuckets.set(issuer, []);
+  }
 
   // Layout: todos os chips de emissor primeiro, divisor sutil, depois todos
   // os chips de ticker individuais. Ordem dos emissores e dos tickers segue
@@ -4253,7 +4270,7 @@ function tr2_renderChips() {
   const issuerChips = [];
   const tickerChips = [];
   for (const [issuer, list] of issuerBuckets) {
-    if (fullIssuers.has(issuer)) {
+    if (fullIssuers.has(issuer) || TR2_SELECTED_ISSUERS.has(issuer)) {
       issuerChips.push(
         `<span class="ex-chip is-issuer-all" data-issuer="${escapeAttr(issuer)}">` +
         `${escapeHtml(issuer)}` +
@@ -4285,6 +4302,7 @@ function tr2_renderChips() {
       // Remove TODOS os tickers do emissor presentes em TR2_SELECTED,
       // independente de TR2_INDEX do range corrente — garante que mudancas
       // de range nao orfanem tickers ao remover o chip agregador.
+      TR2_SELECTED_ISSUERS.delete(issuer);
       const toDelete = [];
       for (const [t, v] of TR2_SELECTED) {
         if ((v.issuer || "") === issuer) toDelete.push(t);
@@ -4399,6 +4417,7 @@ function tr2_pickEmissor(name) {
   if (!TR2_INDEX) return;
   const e = TR2_INDEX.emissores.find(x => x.name === name);
   if (!e) return;
+  TR2_SELECTED_ISSUERS.add(name);
   for (const t of e.tickers) {
     const meta = TR2_INDEX.tickers.find(x => x.c === t);
     tr2_addTicker(t, meta ? meta.issuer : name);
