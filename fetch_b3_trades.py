@@ -5,20 +5,28 @@ Endpoint publico nao documentado:
 Headers: Content-Type: application/json
 Body: {}
 
-Modo padrao (sem args): always-refresh dos ultimos 5 dias uteis B3.
-  - Cada dia e SEMPRE re-baixado para capturar correcoes retroativas
-    (cancelamento de trades, ajuste de precos no Boletim Diario).
-  - Escrita atomica via .json.tmp + rename: arquivo nunca corrompe.
-  - Se conteudo (rows + last_b3_update) bate com o ja persistido,
-    nao reescreve - git fica idempotente.
-  - 403/404 (FDS/feriado/dia ainda nao publicado) e tolerado.
-  - Falha real (rede/timeout apos retry 3x) preserva arquivo existente.
+Modo padrao (sem args): forca versao fresca dos 5 dias uteis B3 mais recentes
+(HOJE se dia util + D-1..D-4). Para cada dia:
+  1. Busca trades via API B3 (com retry).
+  2. Em caso de sucesso: DELETA o arquivo data/b3_trades/<data>.json se existir
+     e ESCREVE a nova versao (atomico via .tmp + rename).
+  3. Em caso de erro (rede/timeout apos retry, 5xx): NAO toca no arquivo
+     existente. Preserva versao anterior. Contabiliza falha.
+  4. 403/404 (FDS/feriado/dia ainda nao publicado): pula sem alterar arquivo.
 
-Modo unitario (CLI: python fetch_b3_trades.py YYYY-MM-DD): busca apenas
-esse dia (utilitario para inspecao manual).
+Exit code != 0 se QUALQUER dia falhar (mas todos sao tentados antes do
+return). NUNCA gera dados sinteticos ou fallback — se a B3 nao responde,
+o arquivo existente eh preservado e o exit code reflete a falha.
+
+Historico antigo (>5 dias uteis) NUNCA eh tocado por este script. Para
+backfill manual, use backfill_b3_trades.py.
+
+Modo unitario (CLI: python fetch_b3_trades.py YYYY-MM-DD): mesmo padrao
+delete+write para um unico dia (utilitario de inspecao manual).
 
 Persiste data/b3_trades/{YYYY-MM-DD}.json em formato colunar minificado e
-atualiza data/b3_trades/manifest.json.
+atualiza data/b3_trades/manifest.json incrementalmente (apenas as entradas
+dos dias da janela sao sobrescritas; manifest preserva historico completo).
 """
 
 from __future__ import annotations
@@ -123,30 +131,17 @@ def _row_from_array(arr: list) -> list:
     ]
 
 
-def _is_equivalent(existing_path: Path, new_payload: dict) -> bool:
-    """True se conteudo persistido equivale ao novo (ignorando fetched_at)."""
-    try:
-        existing = json.loads(existing_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return False
-    if existing.get("last_b3_update") != new_payload.get("last_b3_update"):
-        return False
-    if existing.get("rows") != new_payload.get("rows"):
-        return False
-    return True
-
-
 def fetch_day(date_iso: str) -> dict:
-    """Busca trades de UM dia.
+    """Busca trades de UM dia e escreve delete+write atomico.
 
-    Retorna dict com `status` em {'updated', 'unchanged', 'unavailable'}.
-    'updated': arquivo escrito (novo ou conteudo diferente do anterior).
-    'unchanged': B3 retornou conteudo equivalente ao ja persistido OU
-                 retornou 403/404 (mantem arquivo existente, se houver).
-    'unavailable' e tratado como 'unchanged' do ponto de vista do log.
+    Retorna dict com `status` em {'updated', 'unavailable'}.
+    'updated': arquivo escrito (delete + write feitos com sucesso).
+    'unavailable': B3 retornou 403/404 (FDS/feriado/dia nao publicado) —
+                   arquivo existente preservado.
 
     Levanta RuntimeError se houver falha de rede apos os retries
-    (chamador deve capturar e contar como falha sem alterar arquivo).
+    (chamador deve capturar e contar como falha sem alterar arquivo —
+    arquivo existente eh preservado pois delete so ocorre apos sucesso).
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     out_path = DATA_DIR / f"{date_iso}.json"
@@ -202,17 +197,13 @@ def fetch_day(date_iso: str) -> dict:
         },
     }
 
-    if out_path.exists() and _is_equivalent(out_path, payload):
-        print(f"[{date_iso}] B3 igual ao ja existente, mantendo arquivo")
-        return {
-            "date": date_iso,
-            "status": "unchanged",
-            "n_trades": len(rows),
-            "vol_brl": vol_total,
-        }
-
+    # Delete + write atomico: so deletamos APOS sucesso confirmado da API.
+    # Escrita via .tmp + rename garante que nunca ha estado intermediario
+    # inconsistente no disco.
     tmp_path = out_path.parent / f"{date_iso}.json.tmp"
     tmp_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    if out_path.exists():
+        out_path.unlink()
     tmp_path.replace(out_path)
     size_mb = out_path.stat().st_size / (1024 * 1024)
 
@@ -281,26 +272,29 @@ def _last_n_b3_business_days(n: int, today: date | None = None) -> list[date]:
 
 
 def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS) -> int:
-    """Always-refresh dos ultimos N dias uteis B3. Retorna exit code."""
+    """Forca versao fresca dos N dias uteis B3 mais recentes.
+
+    Tenta todos os dias antes de retornar. Exit code != 0 se QUALQUER dia
+    falhar (falha de rede apos retry; 403/404 nao conta como falha).
+    """
     days = _last_n_b3_business_days(n)
     print(
-        f"Always-refresh dos ultimos {len(days)} dias uteis B3: "
+        f"Refresh dos ultimos {len(days)} dias uteis B3: "
         f"{days[0]} a {days[-1]}"
     )
 
     updated = 0
-    unchanged = 0
+    unavailable = 0
     failed = 0
 
     for i, d in enumerate(days):
         date_iso = d.isoformat()
         try:
             result = fetch_day(date_iso)
-            status = result["status"]
-            if status == "updated":
+            if result["status"] == "updated":
                 updated += 1
             else:
-                unchanged += 1
+                unavailable += 1
         except Exception as exc:
             print(
                 f"[{date_iso}] FALHA apos retries: {exc} - "
@@ -312,11 +306,11 @@ def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS) -> int:
 
     print()
     print(
-        f"Resumo: {updated} atualizado(s), {unchanged} inalterado(s) "
-        f"(B3 igual ao ja existente ou indisponivel), {failed} falha(s)"
+        f"Resumo: {updated} atualizado(s), {unavailable} indisponivel(eis) "
+        f"(FDS/feriado/nao publicado), {failed} falha(s)"
     )
 
-    return 0 if failed < len(days) else 1
+    return 0 if failed == 0 else 1
 
 
 def main(argv: list[str]) -> int:
