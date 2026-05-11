@@ -349,23 +349,26 @@
     vertical-align:-2px;
   }
   @keyframes trd-spin { to { transform: rotate(360deg); } }
-  .trd-top10 { width:100%; border-collapse:collapse; }
-  .trd-top10 th, .trd-top10 td {
+  .vg-top-table { width:100%; border-collapse:collapse; }
+  .vg-top-table th, .vg-top-table td {
     padding:6px 10px; border-bottom:1px solid var(--border);
     font-size:12px; text-align:left;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   }
-  .trd-top10 th {
+  .vg-top-table th {
     color:var(--muted); font-weight:500; font-size:10.5px;
     text-transform:uppercase; letter-spacing:.06em;
   }
-  .trd-top10 td.num, .trd-top10 th.num {
+  .vg-top-table td.num, .vg-top-table th.num {
     text-align:right; font-variant-numeric:tabular-nums;
   }
-  .trd-top10 th:nth-child(1), .trd-top10 td:nth-child(1) { width:18%; }
-  .trd-top10 th:nth-child(2), .trd-top10 td:nth-child(2) { width:48%; }
-  .trd-top10 th:nth-child(3), .trd-top10 td:nth-child(3) { width:20%; }
-  .trd-top10 th:nth-child(4), .trd-top10 td:nth-child(4) { width:14%; }
+  .vg-top-papeis th:nth-child(1), .vg-top-papeis td:nth-child(1) { width:18%; }
+  .vg-top-papeis th:nth-child(2), .vg-top-papeis td:nth-child(2) { width:48%; }
+  .vg-top-papeis th:nth-child(3), .vg-top-papeis td:nth-child(3) { width:20%; }
+  .vg-top-papeis th:nth-child(4), .vg-top-papeis td:nth-child(4) { width:14%; }
+  .vg-top-emissores th:nth-child(1), .vg-top-emissores td:nth-child(1) { width:60%; }
+  .vg-top-emissores th:nth-child(2), .vg-top-emissores td:nth-child(2) { width:25%; }
+  .vg-top-emissores th:nth-child(3), .vg-top-emissores td:nth-child(3) { width:15%; }
   .tabulator .tabulator-row.trd-big { font-weight:600; color:#e6edf7; }
   /* Aba Trades (multi-indexador) */
   .tr2-toolbar { row-gap:8px; margin-bottom:6px; }
@@ -440,8 +443,8 @@
   <a href="#/heatmap" data-tab="heatmap">Debêntures: Setor × Prazo</a>
   <a href="#/dispersao" data-tab="dispersao">Debêntures: Gráfico</a>
   <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
-  <a href="#/trades-b3" data-tab="trades-b3">Trades B3</a>
-  <a href="#/trades" data-tab="trades">Trades</a>
+  <a href="#/trades-b3" data-tab="trades-b3">Trades</a>
+  <a href="#/trades" data-tab="trades">Pesquisa de Trades</a>
 </nav>
 
 <main>
@@ -492,12 +495,18 @@
   </div>
   <div class="grid-kpi" id="vg-kpi-row"></div>
   <div class="panel">
-    <h2>Volume diário de debêntures</h2>
+    <h2>Volume de Debêntures Negociadas</h2>
     <div id="vg-chart-volume-deb" class="chart"></div>
   </div>
-  <div class="panel">
-    <h2>Top 10 papéis por volume</h2>
-    <div id="vg-top10"></div>
+  <div class="grid-2x2">
+    <div class="panel">
+      <h2>Top 20 emissores negociados</h2>
+      <div id="vg-top-emissores"></div>
+    </div>
+    <div class="panel">
+      <h2>Top 20 papéis negociados</h2>
+      <div id="vg-top-papeis"></div>
+    </div>
   </div>
 </section>
 
@@ -1227,18 +1236,24 @@ function renderTopMovers(tm, displayLabel, containerId) {
 // ----- Visao Geral: secao B3 (somente DEB) -----
 // Carrega trades B3 no range [VIS_DATE_ANTERIOR, VIS_DATE_ATUAL] e renderiza
 // 2 KPIs (Volume total + Trades), chart de volume diario (bar simples) e
-// Top 10 papeis. Filtros aplicados pos-load: instrumento === "DEB" e exclusao
-// de cancelados. Cache de dia compartilhado com a aba Trades B3 (TRD_DAY_CACHE).
+// 2 Top 20 (emissores + papeis). Filtros aplicados pos-load: instrumento ===
+// "DEB" e exclusao de cancelados. Cache de dia compartilhado com a aba Trades
+// (TRD_DAY_CACHE).
+// KPIs usam intervalo exclusive na Data Anterior (somente trades com date >
+// VIS_DATE_ANTERIOR). Chart e Top 20 mantem inclusive nos 2 extremos para dar
+// contexto amplo da janela analisada.
 let VG_B3_TOKEN = 0;
 async function vg_renderB3Section(dateLo, dateHi) {
   const token = ++VG_B3_TOKEN;
   const kpiEl = document.getElementById("vg-kpi-row");
   const chartEl = document.getElementById("vg-chart-volume-deb");
-  const topEl = document.getElementById("vg-top10");
+  const topPapeisEl = document.getElementById("vg-top-papeis");
+  const topEmissoresEl = document.getElementById("vg-top-emissores");
   kpiEl.innerHTML = "";
   Plotly.purge(chartEl);
   chartEl.innerHTML = '<div class="empty">Carregando…</div>';
-  topEl.innerHTML = "";
+  topPapeisEl.innerHTML = "";
+  topEmissoresEl.innerHTML = "";
 
   let manifest;
   try {
@@ -1278,17 +1293,23 @@ async function vg_renderB3Section(dateLo, dateHi) {
     chartEl.innerHTML = '<div class="empty">Sem debêntures no intervalo selecionado.</div>';
     return;
   }
-  vg_renderKpis(rows);
+  // Cards: intervalo exclusive na Data Anterior. Quando VIS_DATE_ANTERIOR esta
+  // vazio (sem range), nao filtra — equivale a comportamento anterior.
+  const kpiRows = VIS_DATE_ANTERIOR
+    ? rows.filter(r => r.date && r.date > VIS_DATE_ANTERIOR)
+    : rows;
+  vg_renderKpis(kpiRows);
   vg_renderVolumeChart(rows);
-  vg_renderTop10(rows);
+  vg_renderTopPapeis(rows);
+  vg_renderTopEmissores(rows);
 }
 
 function vg_renderKpis(rows) {
   let vol = 0;
   for (const r of rows) if (typeof r.vol === "number") vol += r.vol;
   const cards = [
-    { label: "Volume total (DEB)", val: trd_fmtMoneyShort(vol), hint: trd_fmtMoneyFull(vol) },
-    { label: "Trades (DEB)", val: trd_fmtIntBR(rows.length) },
+    { label: "Volume total negociado", val: trd_fmtMoneyShort(vol), hint: trd_fmtMoneyFull(vol) },
+    { label: "Número de trades", val: trd_fmtIntBR(rows.length) },
   ];
   document.getElementById("vg-kpi-row").innerHTML = cards.map(c => `
     <div class="kpi">
@@ -1348,19 +1369,27 @@ function vg_renderVolumeChart(rows) {
   Plotly.newPlot(div, [trace], layout, PLOTLY_CONFIG);
 }
 
-function vg_renderTop10(rows) {
+// Tie-break compartilhado: Volume R$ desc, depois numero de trades desc,
+// depois ordem alfabetica do nome (ticker ou emissor).
+function _vg_topSort(a, b) {
+  if (b.vol !== a.vol) return b.vol - a.vol;
+  if (b.n !== a.n) return b.n - a.n;
+  return a._name.localeCompare(b._name);
+}
+
+function vg_renderTopPapeis(rows) {
   const agg = new Map();
   for (const r of rows) {
     if (!r.ticker) continue;
     let cur = agg.get(r.ticker);
     if (!cur) {
-      cur = { ticker: r.ticker, issuer: r.issuer || "", vol: 0, n: 0 };
+      cur = { ticker: r.ticker, issuer: r.issuer || "", vol: 0, n: 0, _name: r.ticker };
       agg.set(r.ticker, cur);
     }
     if (typeof r.vol === "number") cur.vol += r.vol;
     cur.n += 1;
   }
-  const top = [...agg.values()].sort((a, b) => b.vol - a.vol).slice(0, 10);
+  const top = [...agg.values()].sort(_vg_topSort).slice(0, 20);
   const head = `
     <thead><tr>
       <th>Ticker</th><th>Emissor</th>
@@ -1373,8 +1402,36 @@ function vg_renderTop10(rows) {
       <td class="num">${escapeHtml(trd_fmtMoneyShort(r.vol))}</td>
       <td class="num">${escapeHtml(trd_fmtIntBR(r.n))}</td>
     </tr>`).join("");
-  document.getElementById("vg-top10").innerHTML =
-    `<table class="trd-top10">${head}<tbody>${body}</tbody></table>`;
+  document.getElementById("vg-top-papeis").innerHTML =
+    `<table class="vg-top-table vg-top-papeis">${head}<tbody>${body}</tbody></table>`;
+}
+
+function vg_renderTopEmissores(rows) {
+  const agg = new Map();
+  for (const r of rows) {
+    const issuer = r.issuer || "(sem emissor)";
+    let cur = agg.get(issuer);
+    if (!cur) {
+      cur = { issuer, vol: 0, n: 0, _name: issuer };
+      agg.set(issuer, cur);
+    }
+    if (typeof r.vol === "number") cur.vol += r.vol;
+    cur.n += 1;
+  }
+  const top = [...agg.values()].sort(_vg_topSort).slice(0, 20);
+  const head = `
+    <thead><tr>
+      <th>Emissor</th>
+      <th class="num">Volume (R$)</th><th class="num">Trades</th>
+    </tr></thead>`;
+  const body = top.map(r => `
+    <tr>
+      <td>${escapeHtml(r.issuer)}</td>
+      <td class="num">${escapeHtml(trd_fmtMoneyShort(r.vol))}</td>
+      <td class="num">${escapeHtml(trd_fmtIntBR(r.n))}</td>
+    </tr>`).join("");
+  document.getElementById("vg-top-emissores").innerHTML =
+    `<table class="vg-top-table vg-top-emissores">${head}<tbody>${body}</tbody></table>`;
 }
 
 /* ============================================================
@@ -4542,11 +4599,31 @@ function tr2_renderUnifiedStackedBarChart(granularity, divId) {
     };
   });
 
+  // Annotations com volume TOTAL por bucket (soma de todos os traces
+  // empilhados). Mesma estetica do chart "Volume de Debentures Negociadas"
+  // da Visao Geral (vg_renderVolumeChart).
+  const totalByCat = new Map();
+  for (const t of traces) {
+    for (let i = 0; i < t.x.length; i++) {
+      const cat = t.x[i];
+      const v = typeof t.y[i] === "number" ? t.y[i] : 0;
+      totalByCat.set(cat, (totalByCat.get(cat) || 0) + v);
+    }
+  }
+  const annotations = categoryarray.map(cat => ({
+    x: cat, y: totalByCat.get(cat) || 0,
+    text: trd_fmtMoneyShort(totalByCat.get(cat) || 0),
+    showarrow: false,
+    yshift: 12,
+    font: { size: 11, color: cssVar("--fg") },
+  }));
+
   const base = PLOTLY_LAYOUT();
   const layout = Object.assign({}, base, {
     margin: { t: 30, r: 140, b: 60, l: 60 },
     barmode: "stack",
     showlegend: true,
+    annotations,
     legend: { x: 1.02, y: 1, xanchor: "left", yanchor: "top",
               bgcolor: "rgba(0,0,0,0)", font: { size: 11 } },
     xaxis: Object.assign({}, base.xaxis, {
