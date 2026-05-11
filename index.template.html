@@ -370,7 +370,7 @@
   .vg-top-emissores th:nth-child(2), .vg-top-emissores td:nth-child(2) { width:25%; }
   .vg-top-emissores th:nth-child(3), .vg-top-emissores td:nth-child(3) { width:15%; }
   .tabulator .tabulator-row.trd-big { font-weight:600; color:#e6edf7; }
-  /* Aba Trades (multi-indexador) */
+  /* Aba Pesquisa de Trades */
   .tr2-toolbar { row-gap:8px; margin-bottom:6px; }
   .tr2-search-row { margin-bottom:10px; align-items:center; }
   .tr2-pk-label-strong {
@@ -403,32 +403,23 @@
   }
   .tr2-clear:hover { border-color:var(--accent); }
   .tr2-chips {
-    display:flex; flex-wrap:wrap; gap:18px; row-gap:8px;
+    display:flex; flex-wrap:wrap; gap:6px; row-gap:8px;
     align-items:center; margin-top:6px;
   }
   .tr2-chips:empty { display:none; }
-  .tr2-chip-group {
-    display:flex; flex-wrap:wrap; gap:6px; align-items:center;
+  .ex-chip.is-issuer-all {
+    border-width:2px;
+    background:var(--surface3, var(--surface2));
+    filter:brightness(0.92);
+    text-transform:uppercase;
+    font-weight:600;
+    letter-spacing:0.03em;
   }
-  .tr2-chip-group-label {
-    font-weight:600; font-size:12.5px; margin-right:4px;
-    letter-spacing:0.02em;
-  }
-  .tr2-chip-group-cdi    .tr2-chip-group-label { color:#5a9bff; }
-  .tr2-chip-group-pctcdi .tr2-chip-group-label { color:#2dd4bf; }
-  .tr2-chip-group-ipca   .tr2-chip-group-label { color:#3aa66c; }
-  .tr2-chip-group-pre    .tr2-chip-group-label { color:#f59e0b; }
-  .tr2-chip-group-outros .tr2-chip-group-label { color:#94a3b8; }
   .tr2-notice {
     color:var(--warn); font-size:11.5px; margin-top:8px;
   }
   #tr2-charts { display:flex; flex-direction:column; gap:10px; margin-bottom:10px; }
   .tr2-cat-row { margin-bottom:0; }
-  .trd-idx-cdi    { color:#5a9bff; font-weight:600; }
-  .trd-idx-pctcdi { color:#2dd4bf; font-weight:600; }
-  .trd-idx-ipca   { color:#3aa66c; font-weight:600; }
-  .trd-idx-pre    { color:#f59e0b; font-weight:600; }
-  .trd-idx-outros { color:#94a3b8; font-weight:600; }
 </style>
 </head>
 <body>
@@ -442,9 +433,9 @@
   <a href="#/movimentacoes" data-tab="movimentacoes">Debêntures: Papéis</a>
   <a href="#/heatmap" data-tab="heatmap">Debêntures: Setor × Prazo</a>
   <a href="#/dispersao" data-tab="dispersao">Debêntures: Gráfico</a>
-  <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
   <a href="#/trades-b3" data-tab="trades-b3">Trades</a>
   <a href="#/trades" data-tab="trades">Pesquisa de Trades</a>
+  <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
 </nav>
 
 <main>
@@ -713,7 +704,7 @@
   </div>
 </section>
 
-<!-- ===================== Tab: Trades (multi-indexador) ===================== -->
+<!-- ===================== Tab: Pesquisa de Trades ===================== -->
 <section id="tab-trades" class="tab hide">
   <div class="panel">
     <div class="controls tr2-toolbar">
@@ -3475,7 +3466,6 @@ let TRD_DATE_INI = null, TRD_DATE_FIM = null;
 let TRD_TABLE = null;
 let TRD_RANGE_ROWS = null;          // rows do range (apos filtro de cancelados, anotadas)
 let TRD_RANGE_NDAYS = 0;            // # dias uteis no range (define bucket)
-let TRD_INDEXER_MAP = null;         // ticker -> 'CDI'|'%CDI'|'IPCA'|'PRE'|'OUTROS'
 const TRD_DAY_CACHE = new Map();   // date -> {columns, rows, ...}
 const TRD_COLUMNS = [
   "instrument","issuer","ticker","setor","qtd","price","vol",
@@ -3682,16 +3672,6 @@ async function trd_load() {
     return;
   }
 
-  // Indexer map (CDI/%CDI/IPCA/PRE/OUTROS) compartilhado com a aba Trades.
-  // Reusa ANBIMA + B3 Registry; falha em construir nao bloqueia o resto.
-  try {
-    TRD_INDEXER_MAP = await tr2_buildIndexerMap(dateEntries.map(e => e.date));
-  } catch (err) {
-    console.warn("[trades-b3] buildIndexerMap falhou", err);
-    TRD_INDEXER_MAP = new Map();
-  }
-  _trd_annotateIndexer(allRows, TRD_INDEXER_MAP || new Map());
-
   TRD_RANGE_ROWS = allRows;
   TRD_RANGE_NDAYS = dateEntries.length;
 
@@ -3810,9 +3790,8 @@ function trd_bucketTickLabel(ts, granularity) {
 }
 
 function _trd_buildTradesTable(containerId, rows) {
-  // Factory compartilhada entre a aba "Trades B3" e a aba "Trades"
-  // (versao filtrada por tickers selecionados). Espera que rows ja venham
-  // anotadas com `indexador` (CDI/%CDI/IPCA/PRE/OUTROS).
+  // Factory compartilhada entre a aba "Trades" e a aba "Pesquisa de Trades"
+  // (versao filtrada por tickers selecionados).
   const _set = (key) => {
     const s = new Set();
     for (const r of rows) if (r[key]) s.add(r[key]);
@@ -3858,20 +3837,6 @@ function _trd_buildTradesTable(containerId, rows) {
         headerFilter: "input" },
       { title: "Emissor", field: "issuer", minWidth: 200,
         headerFilter: "input" },
-      { title: "Indexador", field: "indexador", width: 110,
-        headerFilter: "list",
-        headerFilterParams: {
-          values: ["", "CDI", "%CDI", "IPCA", "PRE", "OUTROS"],
-          clearable: true,
-        },
-        headerFilterFunc: "=",
-        formatter: c => {
-          const g = c.getValue();
-          if (!g) return "—";
-          const meta = (typeof TR2_GROUP_META !== "undefined") ? TR2_GROUP_META[g] : null;
-          const slug = meta ? meta.slug : "outros";
-          return `<span class="trd-idx-${slug}">${escapeHtml(g)}</span>`;
-        } },
       { title: "Setor", field: "setor", width: 160,
         headerFilter: "list",
         headerFilterParams: { values: setorOpts, clearable: true },
@@ -3918,77 +3883,24 @@ function _trd_buildTradesTable(containerId, rows) {
   });
 }
 
-function _trd_annotateIndexer(rows, idxMap) {
-  for (const r of rows) {
-    if (r.ticker && r.indexador == null) {
-      r.indexador = idxMap.get(r.ticker) || "OUTROS";
-    }
-  }
-}
-
 function trd_renderTable(rows) {
-  // Anotacao do indexador ja foi feita em trd_load.
   if (TRD_TABLE) { TRD_TABLE.destroy(); TRD_TABLE = null; }
   TRD_TABLE = _trd_buildTradesTable("#trd-table", rows);
 }
 
 /* ============================================================
- *  Tab 7 — Trades (multi-indexador, separa CDI vs IPCA)
+ *  Tab — Pesquisa de Trades
  * ============================================================ */
 let TR2_MANIFEST = null;
-let TR2_INSTR_MANIFEST = null;
 let TR2_FP_INI = null, TR2_FP_FIM = null;
 let TR2_DATE_INI = null, TR2_DATE_FIM = null;
 let TR2_RANGE_ROWS = null;
 let TR2_RANGE_NDAYS = 0;
-let TR2_INDEXER_MAP = null;            // ticker -> 'CDI'|'%CDI'|'IPCA'|'PRE'|'OUTROS'
 let TR2_INDEX = null;                  // {tickers, emissores}
 const TR2_SELECTED = new Map();        // ticker -> {ticker, issuer, color}
 let TR2_INITED = false;
 let TR2_RECALC_TIMER = null;
 let TR2_TABLE = null;
-
-// Ordem fixa das categorias na UI (chips e charts).
-const TR2_GROUPS = ["CDI", "%CDI", "IPCA", "PRE", "OUTROS"];
-const TR2_GROUP_META = {
-  "CDI":    { slug: "cdi",    label: "CDI",    color: "#5a9bff" },
-  "%CDI":   { slug: "pctcdi", label: "%CDI",   color: "#2dd4bf" },
-  "IPCA":   { slug: "ipca",   label: "IPCA",   color: "#3aa66c" },
-  "PRE":    { slug: "pre",    label: "PRE",    color: "#f59e0b" },
-  "OUTROS": { slug: "outros", label: "Outros", color: "#94a3b8" },
-};
-
-// Normaliza string pra comparacao: strip de acentos + uppercase + trim.
-function _tr2_norm(s) {
-  return String(s == null ? "" : s)
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .trim().toUpperCase();
-}
-
-// Mapeamento ANBIMA indexador_grupo -> grupo agregado (5 categorias).
-// %DI vai pra %CDI (distinto de DI+/DI puro). ANBIMA prioritario sobre B3
-// Registry, que nao distingue %DI.
-function tr2_classifyAnbimaGroup(grp) {
-  if (!grp) return "OUTROS";
-  const n = _tr2_norm(grp);
-  if (n === "DI+") return "CDI";
-  if (n === "%DI") return "%CDI";
-  if (n === "IPCA+" || n === "IPCA") return "IPCA";
-  if (n === "PREFIXADO" || n === "PRE") return "PRE";
-  return "OUTROS";
-}
-
-// Mapeamento B3 InstrumentRegistration indexer -> grupo agregado.
-// B3 nao tem flag pra %DI: ticker so no Registry vai sempre pra CDI mesmo
-// que IndexerPercentage != 100 (evita inferencia ambigua).
-function tr2_classifyB3Indexer(raw) {
-  if (!raw) return "OUTROS";
-  const s = _tr2_norm(raw);
-  if (s === "DI") return "CDI";
-  if (s === "IPCA" || s === "IPCA VCP") return "IPCA";
-  if (s === "PREFIXADO" || s === "PRE") return "PRE";
-  return "OUTROS";
-}
 
 function tr2_setStatus(text, busy) {
   const el = document.getElementById("tr2-status");
@@ -4029,13 +3941,6 @@ async function renderTrades() {
     tr2_setStatus("");
     tr2_showEmpty("Sem dados ainda. Rode backfill_b3_trades.py.");
     return;
-  }
-  // b3_instruments e' opcional: o fallback ANBIMA cobre debentures (DEB).
-  try {
-    TR2_INSTR_MANIFEST = await loadJSON("data/b3_instruments/manifest.json");
-  } catch (e) {
-    console.warn("[trades] manifest b3_instruments ausente; usando fallback ANBIMA only");
-    TR2_INSTR_MANIFEST = null;
   }
   tr2_setStatus("");
 
@@ -4108,77 +4013,6 @@ async function tr2_fetchTradeDay(entry) {
   return j;
 }
 
-async function tr2_buildIndexerMap(rangeDates) {
-  const map = new Map();   // ticker -> grupo
-
-  // 1) Snapshot ANBIMA mais recente DENTRO do range. Cobre apenas DEB com
-  //    rate aditivo (IPCA+/CDI+) e %DI/Pre. Prioritario por ser oficial.
-  for (let i = rangeDates.length - 1; i >= 0; i--) {
-    const d = rangeDates[i];
-    try {
-      const url = BUILD_VERSION ? `history/${d}.json?v=${BUILD_VERSION}` : `history/${d}.json`;
-      const r = await fetch(url);
-      if (!r.ok) continue;
-      const snap = await r.json();
-      for (const row of (snap.debentures || [])) {
-        if (row.codigo) map.set(row.codigo, tr2_classifyAnbimaGroup(row.indexador_grupo));
-      }
-      break;   // achou um snapshot; nao precisa olhar mais antigos
-    } catch (_) { /* tenta proximo */ }
-  }
-
-  // 2) Snapshot B3 InstrumentRegistration. Manifest schema: {dates: ["YYYY-MM-DD", ...]}.
-  //    Pega a data mais recente do manifest DENTRO do range; se nenhuma bater
-  //    (range estreito, snapshot B3 do dia anterior), fallback pra data mais
-  //    recente do manifest. Preenche tickers ainda nao mapeados pelo ANBIMA
-  //    (CRA/CRI/CFF/COE/LF/LIG etc).
-  // Lazy-load do manifest pra permitir uso a partir da aba Trades B3 (que
-  // nao chama renderTrades).
-  if (TR2_INSTR_MANIFEST === null) {
-    try {
-      TR2_INSTR_MANIFEST = await loadJSON("data/b3_instruments/manifest.json");
-    } catch (_) { TR2_INSTR_MANIFEST = { dates: [] }; }
-  }
-  const instrDates = (TR2_INSTR_MANIFEST && Array.isArray(TR2_INSTR_MANIFEST.dates))
-    ? TR2_INSTR_MANIFEST.dates.slice().sort()
-    : [];
-  if (instrDates.length) {
-    const rangeSet = new Set(rangeDates);
-    let pick = null;
-    for (let i = instrDates.length - 1; i >= 0; i--) {
-      if (rangeSet.has(instrDates[i])) { pick = instrDates[i]; break; }
-    }
-    if (!pick) pick = instrDates[instrDates.length - 1];
-    try {
-      const url = BUILD_VERSION
-        ? `data/b3_instruments/${pick}.json?v=${BUILD_VERSION}`
-        : `data/b3_instruments/${pick}.json`;
-      const r = await fetch(url);
-      if (r.ok) {
-        const snap = await r.json();
-        const cols = snap.columns || [];
-        const iTicker = cols.indexOf("ticker");
-        const iIndexer = cols.indexOf("indexer");
-        if (iTicker >= 0 && iIndexer >= 0) {
-          for (const row of (snap.rows || [])) {
-            const t = row[iTicker];
-            if (!t || map.has(t)) continue;
-            map.set(t, tr2_classifyB3Indexer(row[iIndexer]));
-          }
-        } else {
-          console.warn("[trades] b3_instruments schema inesperado (sem ticker/indexer)");
-        }
-      } else {
-        console.warn("[trades] b3_instruments HTTP " + r.status + " em " + pick);
-      }
-    } catch (err) {
-      console.warn("[trades] falha ao ler b3_instruments", err);
-    }
-  }
-
-  return map;
-}
-
 async function tr2_load() {
   const dateEntries = tr2_datesInRange(TR2_MANIFEST);
   if (!dateEntries.length) {
@@ -4224,7 +4058,6 @@ async function tr2_load() {
     return;
   }
 
-  TR2_INDEXER_MAP = await tr2_buildIndexerMap(dateEntries.map(e => e.date));
   TR2_INDEX = tr2_buildIndex(allRows);
 
   tr2_setStatus("");
@@ -4250,8 +4083,7 @@ function tr2_buildIndex(rows) {
     const v = (typeof r.vol === "number") ? r.vol : 0;
     let curT = tk.get(r.ticker);
     if (!curT) {
-      curT = { c: r.ticker, issuer: r.issuer || "", vol: 0,
-               group: TR2_INDEXER_MAP.get(r.ticker) || "OUTROS" };
+      curT = { c: r.ticker, issuer: r.issuer || "", vol: 0 };
       tk.set(r.ticker, curT);
     }
     curT.vol += v;
@@ -4297,6 +4129,22 @@ function tr2_clearAllChips() {
   tr2_renderAllCharts();
 }
 
+// Identifica emissores cuja cobertura ANBIMA do range tem >=2 tickers E
+// todos estao selecionados. Retorna Map<issuerName, string[]> (tickers).
+function tr2_fullySelectedIssuers() {
+  const out = new Map();
+  if (!TR2_INDEX || !TR2_INDEX.emissores) return out;
+  for (const e of TR2_INDEX.emissores) {
+    if (e.count < 2) continue;
+    let all = true;
+    for (const t of e.tickers) {
+      if (!TR2_SELECTED.has(t)) { all = false; break; }
+    }
+    if (all) out.set(e.name, e.tickers.slice());
+  }
+  return out;
+}
+
 function tr2_renderChips() {
   const box = document.getElementById("tr2-chips");
   const clearBtn = document.getElementById("tr2-clear");
@@ -4307,19 +4155,28 @@ function tr2_renderChips() {
   }
   if (TR2_SELECTED.size >= 2) clearBtn.classList.remove("hide");
   else clearBtn.classList.add("hide");
-  const buckets = {};
-  for (const g of TR2_GROUPS) buckets[g] = [];
+
+  // Agrupa tickers selecionados por emissor preservando ordem de selecao.
+  // Posicao do bucket = primeira vez que o emissor aparece em TR2_SELECTED.
+  // Dentro do bucket, ordem de selecao.
+  const issuerBuckets = new Map();   // issuer -> [{ticker, color}]
   for (const v of TR2_SELECTED.values()) {
-    const grp = TR2_INDEXER_MAP ? (TR2_INDEXER_MAP.get(v.ticker) || "OUTROS") : "OUTROS";
-    (buckets[grp] || buckets["OUTROS"]).push(v);
+    const issuer = v.issuer || "(sem emissor)";
+    if (!issuerBuckets.has(issuer)) issuerBuckets.set(issuer, []);
+    issuerBuckets.get(issuer).push(v);
   }
+
+  const fullIssuers = tr2_fullySelectedIssuers();
   const html = [];
-  for (const g of TR2_GROUPS) {
-    const list = buckets[g];
-    if (!list.length) continue;
-    const meta = TR2_GROUP_META[g];
-    html.push(`<div class="tr2-chip-group tr2-chip-group-${meta.slug}">`);
-    html.push(`<span class="tr2-chip-group-label">${escapeHtml(meta.label)}:</span>`);
+  for (const [issuer, list] of issuerBuckets) {
+    if (fullIssuers.has(issuer)) {
+      html.push(
+        `<span class="ex-chip is-issuer-all" data-issuer="${escapeAttr(issuer)}">` +
+        `${escapeHtml(issuer)}` +
+        `<button type="button" data-remove-issuer="${escapeAttr(issuer)}" aria-label="Remover emissor">×</button>` +
+        `</span>`
+      );
+    }
     for (const v of list) {
       html.push(
         `<span class="ex-chip is-ticker" style="border-color:${v.color}">` +
@@ -4328,11 +4185,24 @@ function tr2_renderChips() {
         `</span>`
       );
     }
-    html.push(`</div>`);
   }
   box.innerHTML = html.join("");
   // Single delegated listener (rebind a cada render — innerHTML zera).
   box.onclick = (e) => {
+    const issBtn = e.target.closest("button[data-remove-issuer]");
+    if (issBtn) {
+      const issuer = issBtn.dataset.removeIssuer;
+      const ent = TR2_INDEX && TR2_INDEX.emissores
+        ? TR2_INDEX.emissores.find(x => x.name === issuer) : null;
+      if (ent) {
+        for (const t of ent.tickers) TR2_SELECTED.delete(t);
+        let i = 0;
+        for (const v of TR2_SELECTED.values()) v.color = tr2_colorForIndex(i++);
+      }
+      tr2_renderChips();
+      tr2_renderAllCharts();
+      return;
+    }
     const btn = e.target.closest("button[data-remove]");
     if (!btn) return;
     tr2_removeTicker(btn.dataset.remove);
@@ -4386,12 +4256,11 @@ function tr2_initPicker() {
       );
     }
     for (const t of res.tickHits) {
-      const grp = TR2_INDEXER_MAP ? (TR2_INDEXER_MAP.get(t.c) || "OUTROS") : "OUTROS";
       parts.push(
         `<div class="ex-sug" data-kind="ticker" data-value="${escapeAttr(t.c)}" data-issuer="${escapeAttr(t.issuer)}">` +
         `<span class="ex-sug-tag t">T</span>` +
         `<span class="ex-sug-code">${escapeHtml(t.c)}</span>` +
-        `<span class="ex-sug-meta">${escapeHtml(grp)} · ${escapeHtml(t.issuer)}</span>` +
+        `<span class="ex-sug-meta">${escapeHtml(t.issuer)}</span>` +
         `</div>`
       );
     }
@@ -4451,16 +4320,6 @@ function tr2_renderEmptyState(divId, msg) {
     `<div class="empty">${escapeHtml(msg)}</div>`;
 }
 
-function tr2_selectedByGroup() {
-  const out = {};
-  for (const g of TR2_GROUPS) out[g] = [];
-  for (const v of TR2_SELECTED.values()) {
-    const g = TR2_INDEXER_MAP ? (TR2_INDEXER_MAP.get(v.ticker) || "OUTROS") : "OUTROS";
-    (out[g] || out["OUTROS"]).push(v);
-  }
-  return out;
-}
-
 function tr2_calcVolByBucket(rows, ticker, granularity) {
   // Agrega financeiro por bucket (sem filtrar por rate). Reusa parser de
   // timestamp e bucketizacao de Trades B3.
@@ -4506,7 +4365,7 @@ function tr2_renderAllCharts() {
   if (tablePanel) tablePanel.classList.remove("hide");
 
   // 1 unico chart de Volume R$ por bucket: todos os tickers selecionados
-  // (de qualquer indexador) aparecem empilhados. Cor = cor do indexador.
+  // aparecem empilhados. Cor por emissor.
   const granularity = trd_pickGranularity(TR2_RANGE_NDAYS);
   const barId = "tr2-bar-all";
   chartsBox.innerHTML =
@@ -4520,29 +4379,35 @@ function tr2_renderAllCharts() {
 }
 
 function tr2_renderTable() {
-  // Tabela compartilhada com a aba "Trades B3", filtrada pelos tickers
+  // Tabela compartilhada com a aba "Trades", filtrada pelos tickers
   // selecionados em TR2_SELECTED.
   const filtered = TR2_RANGE_ROWS.filter(r => TR2_SELECTED.has(r.ticker));
-  _trd_annotateIndexer(filtered, TR2_INDEXER_MAP || new Map());
   if (TR2_TABLE) { TR2_TABLE.destroy(); TR2_TABLE = null; }
   TR2_TABLE = _trd_buildTradesTable("#tr2-table", filtered);
 }
 
 function tr2_renderUnifiedStackedBarChart(granularity, divId) {
-  // Ordena selecionados por indexador (CDI -> %CDI -> IPCA -> PRE -> OUTROS)
-  // e dentro do grupo por ticker — empilhamento visualmente agrupado por cor.
-  const grouped = tr2_selectedByGroup();
+  // Ordena selecionados por emissor (ordem de primeira aparicao em
+  // TR2_SELECTED), e dentro do emissor por ticker — empilhamento agrupa
+  // visualmente tickers da mesma cor.
+  const issuerOrder = [];
+  const byIssuer = new Map();
+  for (const v of TR2_SELECTED.values()) {
+    const k = v.issuer || "(sem emissor)";
+    if (!byIssuer.has(k)) { byIssuer.set(k, []); issuerOrder.push(k); }
+    byIssuer.get(k).push(v);
+  }
   const orderedSelected = [];
-  for (const grp of TR2_GROUPS) {
-    const arr = grouped[grp].slice().sort((a, b) => a.ticker.localeCompare(b.ticker));
-    for (const v of arr) orderedSelected.push({ sel: v, grp });
+  for (const iss of issuerOrder) {
+    const arr = byIssuer.get(iss).slice().sort((a, b) => a.ticker.localeCompare(b.ticker));
+    for (const v of arr) orderedSelected.push({ sel: v });
   }
 
   // Coleta labels de bucket cronologicamente ordenados (categorias do eixo X).
   // Eixo "category" elimina buracos de FDS/feriado automaticamente.
   const labelByTs = new Map();
   const built = [];
-  for (const { sel, grp } of orderedSelected) {
+  for (const { sel } of orderedSelected) {
     const series = tr2_calcVolByBucket(TR2_RANGE_ROWS, sel.ticker, granularity);
     if (!series.length) continue;
     for (const p of series) {
@@ -4551,7 +4416,7 @@ function tr2_renderUnifiedStackedBarChart(granularity, divId) {
         labelByTs.set(key, trd_bucketTickLabel(p.ts, granularity));
       }
     }
-    built.push({ sel, grp, series });
+    built.push({ sel, series });
   }
 
   if (!built.length) {
@@ -4562,9 +4427,9 @@ function tr2_renderUnifiedStackedBarChart(granularity, divId) {
   const sortedTs = Array.from(labelByTs.keys()).sort((a, b) => a - b);
   const categoryarray = sortedTs.map(ts => labelByTs.get(ts));
 
-  // Cor por EMISSOR (nao por indexador): tickers do mesmo emissor compartilham
-  // cor. Paleta qualitativa ciclica; ordem de atribuicao segue ordem de
-  // aparicao em `built` (que ja vem agrupado por indexador -> ticker).
+  // Cor por EMISSOR: tickers do mesmo emissor compartilham cor. Paleta
+  // qualitativa ciclica; ordem de atribuicao segue ordem de aparicao em
+  // `built` (que ja vem agrupado por emissor -> ticker).
   const issuerColor = new Map();
   let cIdx = 0;
   for (const { sel } of built) {
@@ -4580,7 +4445,7 @@ function tr2_renderUnifiedStackedBarChart(granularity, divId) {
   // (hover/tooltip individual), mas showlegend=true so no primeiro trace de
   // cada emissor; restantes compartilham legendgroup (visibility toggle).
   const issuerLegendDone = new Set();
-  const traces = built.map(({ sel, grp, series }) => {
+  const traces = built.map(({ sel, series }) => {
     const issuer = sel.issuer || "(sem emissor)";
     const color = issuerColor.get(issuer);
     const isFirst = !issuerLegendDone.has(issuer);

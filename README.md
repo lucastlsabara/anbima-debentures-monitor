@@ -183,10 +183,10 @@ Negra 20/nov).
 Re-rodar a pipeline para uma data já capturada é idempotente: o
 `history/<YYYY-MM-DD>.json` é sobrescrito com o mesmo conteúdo determinístico.
 
-## Aba Trades B3
+## Aba Trades
 
 Pipeline independente do core ANBIMA. Coleta trades de renda fixa (DEB / CRA /
-CRI / CFF / COE) do endpoint público da B3 e exibe na aba **Trades B3** do
+CRI / CFF / COE) do endpoint público da B3 e exibe na aba **Trades** do
 dashboard.
 
 ```bash
@@ -215,31 +215,14 @@ Setor das debêntures (`instrument == "DEB"`) é resolvido via
 literalmente `"Outros"`. Mudanças em `sectors.py` só refletem nos snapshots
 existentes após rodar `recompute_sectors.py`.
 
-## Aba Trades (multi-indexador)
+## Aba Pesquisa de Trades
 
-Aba comparativa que separa os tickers selecionados em **CDI** vs **IPCA** e
-mostra, para cada grupo, VWAP por bucket (line) e volume R$ por bucket
-(stacked bar). Reusa os trades de `data/b3_trades/` e adiciona um segundo
-pipeline para resolver o indexador de cada ticker:
-
-```bash
-# B3 InstrumentRegistration: cobre o universo completo (DEB/CRA/CRI/...).
-# Roda diariamente como parte da routine ANBIMA Debentures Diário.
-python3 fetch_b3_instruments.py                    # default: último dia útil
-python3 fetch_b3_instruments.py 2026-05-08         # data específica
-```
-
-Saída em `data/b3_instruments/{YYYY-MM-DD}.json` (formato colunar
-minificado) + `manifest.json`. Idempotente — pula dia já existente. O
-mapping `ticker → indexador` é a união de:
-1. `history/<data>.json` (ANBIMA, prioritário, cobre debêntures via
-   `indexador_grupo`)
-2. `data/b3_instruments/<data>.json` (B3, fallback para CRA/CRI/CFF/COE
-   via campo `indexer`)
-
-Tickers Pré-fixados / Outros aparecem como chips, mas não são plotados
-nos charts CDI/IPCA — o aviso sutil do card identifica quantos foram
-ocultados.
+Aba comparativa que reúne os tickers selecionados em um único chart de
+VWAP (line) + volume R$ por bucket (stacked bar), com cor por **emissor**
+(tickers do mesmo emissor compartilham cor). Reusa os trades de
+`data/b3_trades/`. Quando todos os tickers ANBIMA de um emissor estão
+selecionados, um chip agregador do emissor aparece antes dos chips de
+ticker — clicar no X remove todos de uma vez.
 
 ## Convenção
 
