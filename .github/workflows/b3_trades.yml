@@ -4,11 +4,15 @@ name: B3 Trades
 # index.html. Roda na infra do GitHub (egress liberado pra arquivos.b3.com.br),
 # committa de volta ao repo e dispensa execucao local.
 #
-# Sem schedule: o disparo diario eh feito pela routine ANBIMA Debentures
-# Diario do Claude.ai (que ja chama python fetch_b3_trades.py). Este workflow
-# fica apenas com workflow_dispatch para backfill on-demand pela UI Actions.
+# Schedule: 02:00 UTC ter-sab = 23:00 BRT seg-sex (dias uteis BR), acompanha
+# a janela ANBIMA das 23h. A routine do Claude.ai NAO disparava este fetch
+# porque a sandbox dela bloqueia arquivos.b3.com.br por allowlist (resposta
+# 403 com header x-deny-reason: host_not_allowed). O cron foi removido em
+# #80 baseado nessa premissa errada — restaurado aqui.
 
 on:
+  schedule:
+    - cron: '0 2 * * 2-6'
   workflow_dispatch:
     inputs:
       mode:
@@ -80,17 +84,29 @@ jobs:
           fi
           echo "Backfill range: $START -> $END"
 
-      - name: Run fetch_day
+      - name: Run fetch_day (trade-by-trade)
         if: steps.mode.outputs.mode == 'fetch_day'
         run: |
-          echo "Rodando fetch_b3_trades.py (default: ultimo dia util B3)"
+          echo "Rodando fetch_b3_trades.py (5 dias uteis B3)"
           python fetch_b3_trades.py
 
-      - name: Run backfill
+      - name: Run fetch_day (consolidated)
+        if: steps.mode.outputs.mode == 'fetch_day'
+        run: |
+          echo "Rodando fetch_b3_trades_consolidated.py (5 dias uteis B3)"
+          python fetch_b3_trades_consolidated.py
+
+      - name: Run backfill (trade-by-trade)
         if: steps.mode.outputs.mode == 'backfill'
         run: |
           echo "Rodando backfill_b3_trades.py ${{ inputs.start_date }} ${{ inputs.end_date }}"
           python backfill_b3_trades.py '${{ inputs.start_date }}' '${{ inputs.end_date }}'
+
+      - name: Run backfill (consolidated)
+        if: steps.mode.outputs.mode == 'backfill'
+        run: |
+          echo "Rodando backfill_b3_trades_consolidated.py ${{ inputs.start_date }} ${{ inputs.end_date }}"
+          python backfill_b3_trades_consolidated.py '${{ inputs.start_date }}' '${{ inputs.end_date }}'
 
       - name: Rebuild dashboard
         run: |
@@ -103,9 +119,9 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add data/b3_trades/ index.html
+          git add data/b3_trades/ data/b3_trades_consolidated/ index.html
           if git diff --cached --quiet; then
-            echo "Sem mudanca em data/b3_trades/ ou index.html — pulando commit."
+            echo "Sem mudanca em data/b3_trades/, data/b3_trades_consolidated/ ou index.html — pulando commit."
             exit 0
           fi
           DATE_TAG=$(date -u +%Y-%m-%d)

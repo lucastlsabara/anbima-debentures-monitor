@@ -76,6 +76,12 @@ class B3UnavailableError(Exception):
     """B3 retornou 403/404: dia em FDS/feriado/ainda nao publicado."""
 
 
+class SandboxBlockedError(Exception):
+    """Resposta 403 com header x-deny-reason: bloqueio de allowlist do
+    ambiente (sandbox), nao da B3. Falha real — nao silenciar como
+    'indisponivel'."""
+
+
 def _post_page(date_iso: str, page: int) -> dict:
     url = B3_URL.format(ini=date_iso, fim=date_iso, page=page, page_size=PAGE_SIZE)
     last_exc: Exception | None = None
@@ -87,13 +93,20 @@ def _post_page(date_iso: str, page: int) -> dict:
                 json={},
                 timeout=TIMEOUT,
             )
+            deny_reason = r.headers.get("x-deny-reason")
+            if r.status_code == 403 and deny_reason:
+                raise SandboxBlockedError(
+                    f"HTTP 403 bloqueado pela sandbox (x-deny-reason={deny_reason}): "
+                    f"host arquivos.b3.com.br fora da allowlist. Rode este script "
+                    f"em ambiente com egress livre (ex: GitHub Actions)."
+                )
             if r.status_code in (403, 404):
                 raise B3UnavailableError(f"HTTP {r.status_code}")
             if r.status_code >= 500:
                 raise requests.HTTPError(f"HTTP {r.status_code}")
             r.raise_for_status()
             return r.json()
-        except B3UnavailableError:
+        except (B3UnavailableError, SandboxBlockedError):
             raise
         except (requests.Timeout, requests.HTTPError, requests.ConnectionError) as exc:
             last_exc = exc
