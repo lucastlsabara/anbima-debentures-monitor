@@ -168,7 +168,8 @@
     .curves-grid { grid-template-columns: 1fr; }
   }
   /* Titulos Publicos: 4 tabelas (LFT, NTN-B, LTN, NTN-F) em grid 2x2.
-     Cada tabela ocupa 50% e ajusta altura ao conteudo (height fixo via JS). */
+     Cada tabela ocupa 50% e cresce conforme conteudo (sem scroll interno).
+     align-items: stretch (default) alinha cards da mesma linha pela maior altura. */
   .tp-tables-grid {
     display: grid; grid-template-columns: 1fr 1fr;
     gap: 14px; margin-bottom: 14px;
@@ -578,9 +579,6 @@
       </label>
       <label>Data Atual:
         <input type="text" id="mov-date-atual" placeholder="DD-MM-YYYY">
-      </label>
-      <label>Indexador:
-        <select id="mov-idx"><option value="">Todos</option></select>
       </label>
       <label>
         <input type="checkbox" id="mov-hide-iliq" checked> Esconder ilíquidos
@@ -2107,17 +2105,6 @@ async function renderMovimentacoes() {
   GLOBAL_DATE_ATUAL = MOV_DATE_ATUAL;
   GLOBAL_DATE_ANTERIOR = MOV_DATE_ANTERIOR;
 
-  const idxSel = document.getElementById("mov-idx");
-  while (idxSel.options.length > 1) idxSel.remove(1);
-  const idxs = new Set();
-  for (const date of dates)
-    for (const r of MOV_DATA.by_date[date].rows)
-      if (r.indexador) idxs.add(r.indexador);
-  for (const s of [...idxs].sort()) {
-    const o = document.createElement("option"); o.value=s; o.textContent=s;
-    idxSel.appendChild(o);
-  }
-
   if (MOV_FP_ATUAL) MOV_FP_ATUAL.destroy();
   if (MOV_FP_ANTERIOR) MOV_FP_ANTERIOR.destroy();
   MOV_FP_ATUAL = flatpickr("#mov-date-atual", {
@@ -2147,7 +2134,6 @@ async function renderMovimentacoes() {
   });
 
   buildMovTable();
-  document.getElementById("mov-idx").addEventListener("change", applyMovFilter);
   document.getElementById("mov-hide-iliq").addEventListener("change", applyMovFilter);
   applyMovFilter();
 }
@@ -2334,11 +2320,9 @@ function buildMovTable() {
 }
 
 function applyMovFilter() {
-  const idx = document.getElementById("mov-idx").value;
   const hideIliq = document.getElementById("mov-hide-iliq").checked;
   MOV_TABLE.setFilter(d => {
     if (hideIliq && d.iliquido) return false;
-    if (idx && d.indexador !== idx) return false;
     return true;
   });
 }
@@ -3499,7 +3483,6 @@ function _buildTpTable(containerId, rows) {
     data: rows,
     layout: "fitColumns",
     resizableColumns: false,
-    height: "400px",
     initialSort: [{ column: "vencimento", dir: "asc" }],
     columns: [
       { title: "Vencimento", field: "vencimento", width: 100,
@@ -4095,8 +4078,21 @@ async function tr2_fetchTradeDay(entry) {
 
 async function tr2_load() {
   const dateEntries = tr2_datesInRange(TR2_MANIFEST);
+
+  // Sem dias no range: preserva TR2_SELECTED, atualiza TR2_INDEX/TR2_RANGE_ROWS
+  // para o estado vazio e re-renderiza chips+chart. Sem early return — chips
+  // ficam visiveis com mensagem de "sem dados no periodo" no chart.
   if (!dateEntries.length) {
-    tr2_showEmpty("0 trades neste período.");
+    TR2_RANGE_ROWS = [];
+    TR2_RANGE_NDAYS = 0;
+    TR2_INDEX = { tickers: [], emissores: [] };
+    tr2_setStatus("");
+    tr2_renderChips();
+    if (!TR2_SELECTED.size) {
+      tr2_showEmpty("0 trades neste período.");
+    } else {
+      tr2_renderAllCharts();
+    }
     return;
   }
 
@@ -4131,16 +4127,20 @@ async function tr2_load() {
 
   TR2_RANGE_ROWS = allRows;
   TR2_RANGE_NDAYS = dateEntries.length;
-
-  if (!allRows.length) {
-    tr2_setStatus("");
-    tr2_showEmpty("0 trades neste período.");
-    return;
-  }
-
   TR2_INDEX = tr2_buildIndex(allRows);
 
   tr2_setStatus("");
+  // Sem rows mas range valido: preserva chips, chart mostra estado vazio.
+  if (!allRows.length) {
+    tr2_renderChips();
+    if (!TR2_SELECTED.size) {
+      tr2_showEmpty("0 trades neste período.");
+    } else {
+      tr2_renderAllCharts();
+    }
+    return;
+  }
+
   tr2_renderChips();
   tr2_renderAllCharts();
 }
@@ -4282,13 +4282,16 @@ function tr2_renderChips() {
     const issBtn = e.target.closest("button[data-remove-issuer]");
     if (issBtn) {
       const issuer = issBtn.dataset.removeIssuer;
-      const ent = TR2_INDEX && TR2_INDEX.emissores
-        ? TR2_INDEX.emissores.find(x => x.name === issuer) : null;
-      if (ent) {
-        for (const t of ent.tickers) TR2_SELECTED.delete(t);
-        let i = 0;
-        for (const v of TR2_SELECTED.values()) v.color = tr2_colorForIndex(i++);
+      // Remove TODOS os tickers do emissor presentes em TR2_SELECTED,
+      // independente de TR2_INDEX do range corrente — garante que mudancas
+      // de range nao orfanem tickers ao remover o chip agregador.
+      const toDelete = [];
+      for (const [t, v] of TR2_SELECTED) {
+        if ((v.issuer || "") === issuer) toDelete.push(t);
       }
+      for (const t of toDelete) TR2_SELECTED.delete(t);
+      let i = 0;
+      for (const v of TR2_SELECTED.values()) v.color = tr2_colorForIndex(i++);
       tr2_renderChips();
       tr2_renderAllCharts();
       return;
@@ -4477,20 +4480,36 @@ function tr2_renderTable() {
 }
 
 function tr2_renderUnifiedStackedBarChart(granularity, divId) {
-  // Ordena selecionados por emissor (ordem de primeira aparicao em
-  // TR2_SELECTED), e dentro do emissor por ticker — empilhamento agrupa
-  // visualmente tickers da mesma cor.
-  const issuerOrder = [];
-  const byIssuer = new Map();
+  // Modo da legenda depende de #emissores distintos em TR2_SELECTED:
+  //  - 1 emissor:   1 cor por TICKER, legenda 1:1 ticker (alfabetica).
+  //  - >1 emissor:  1 cor por EMISSOR, legenda 1:1 emissor (PR #95 M6).
+  const distinctIssuers = new Set();
   for (const v of TR2_SELECTED.values()) {
-    const k = v.issuer || "(sem emissor)";
-    if (!byIssuer.has(k)) { byIssuer.set(k, []); issuerOrder.push(k); }
-    byIssuer.get(k).push(v);
+    distinctIssuers.add(v.issuer || "(sem emissor)");
   }
+  const singleIssuerMode = distinctIssuers.size === 1;
+
+  // Ordem dos traces:
+  //  - singleIssuerMode: alfabetica por ticker (mesma ordem da legenda).
+  //  - multi: por emissor (ordem de 1a aparicao em TR2_SELECTED), e
+  //    dentro do emissor por ticker — empilhamento agrupa por cor.
   const orderedSelected = [];
-  for (const iss of issuerOrder) {
-    const arr = byIssuer.get(iss).slice().sort((a, b) => a.ticker.localeCompare(b.ticker));
-    for (const v of arr) orderedSelected.push({ sel: v });
+  if (singleIssuerMode) {
+    const all = [...TR2_SELECTED.values()]
+      .slice().sort((a, b) => a.ticker.localeCompare(b.ticker));
+    for (const v of all) orderedSelected.push({ sel: v });
+  } else {
+    const issuerOrder = [];
+    const byIssuer = new Map();
+    for (const v of TR2_SELECTED.values()) {
+      const k = v.issuer || "(sem emissor)";
+      if (!byIssuer.has(k)) { byIssuer.set(k, []); issuerOrder.push(k); }
+      byIssuer.get(k).push(v);
+    }
+    for (const iss of issuerOrder) {
+      const arr = byIssuer.get(iss).slice().sort((a, b) => a.ticker.localeCompare(b.ticker));
+      for (const v of arr) orderedSelected.push({ sel: v });
+    }
   }
 
   // Coleta labels de bucket cronologicamente ordenados (categorias do eixo X).
@@ -4517,34 +4536,55 @@ function tr2_renderUnifiedStackedBarChart(granularity, divId) {
   const sortedTs = Array.from(labelByTs.keys()).sort((a, b) => a - b);
   const categoryarray = sortedTs.map(ts => labelByTs.get(ts));
 
-  // Cor por EMISSOR: tickers do mesmo emissor compartilham cor. Paleta
-  // qualitativa ciclica; ordem de atribuicao segue ordem de aparicao em
-  // `built` (que ja vem agrupado por emissor -> ticker).
+  // Cor:
+  //  - singleIssuerMode: 1 cor por TICKER (idx = posicao alfabetica em `built`).
+  //  - multi: 1 cor por EMISSOR (ordem de aparicao em `built`).
+  const tickerColor = new Map();
   const issuerColor = new Map();
-  let cIdx = 0;
-  for (const { sel } of built) {
-    const k = sel.issuer || "(sem emissor)";
-    if (!issuerColor.has(k)) {
-      issuerColor.set(k, PALETTE_QUAL[cIdx % PALETTE_QUAL.length]);
+  if (singleIssuerMode) {
+    let cIdx = 0;
+    for (const { sel } of built) {
+      tickerColor.set(sel.ticker, PALETTE_QUAL[cIdx % PALETTE_QUAL.length]);
       cIdx += 1;
+    }
+  } else {
+    let cIdx = 0;
+    for (const { sel } of built) {
+      const k = sel.issuer || "(sem emissor)";
+      if (!issuerColor.has(k)) {
+        issuerColor.set(k, PALETTE_QUAL[cIdx % PALETTE_QUAL.length]);
+        cIdx += 1;
+      }
     }
   }
 
-  // Legenda agrupada por EMISSOR: 1 entrada por emissor mesmo quando varios
-  // tickers do mesmo emissor estao selecionados. Cada trace mantem 1 ticker
-  // (hover/tooltip individual), mas showlegend=true so no primeiro trace de
-  // cada emissor; restantes compartilham legendgroup (visibility toggle).
+  // Legenda:
+  //  - singleIssuerMode: 1 entrada por ticker (showlegend=true em todos,
+  //    name=ticker, legendgroup=ticker).
+  //  - multi: 1 entrada por emissor (showlegend=true so no 1o trace do grupo,
+  //    name=emissor, legendgroup=emissor). Tooltip individual por ticker em
+  //    ambos os modos.
   const issuerLegendDone = new Set();
   const traces = built.map(({ sel, series }) => {
     const issuer = sel.issuer || "(sem emissor)";
-    const color = issuerColor.get(issuer);
-    const isFirst = !issuerLegendDone.has(issuer);
-    if (isFirst) issuerLegendDone.add(issuer);
+    let name, legendgroup, showlegend, color;
+    if (singleIssuerMode) {
+      name = sel.ticker;
+      legendgroup = sel.ticker;
+      showlegend = true;
+      color = tickerColor.get(sel.ticker);
+    } else {
+      name = issuer;
+      legendgroup = issuer;
+      showlegend = !issuerLegendDone.has(issuer);
+      if (showlegend) issuerLegendDone.add(issuer);
+      color = issuerColor.get(issuer);
+    }
     return {
       type: "bar",
-      name: issuer,
-      legendgroup: issuer,
-      showlegend: isFirst,
+      name,
+      legendgroup,
+      showlegend,
       x: series.map(p => labelByTs.get(p.ts.getTime())),
       y: series.map(p => p.vol),
       marker: { color },
