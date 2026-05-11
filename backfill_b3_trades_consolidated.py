@@ -32,14 +32,15 @@ def _iter_business_days(start: date, end: date):
         d += timedelta(days=1)
 
 
-def _parse_argv(argv: list[str]) -> tuple[date, date, str]:
-    table = fetch_b3_trades_consolidated.DEFAULT_TABLE_NAME
+def _parse_argv(argv: list[str]) -> tuple[date, date, str | None]:
+    table: str | None = fetch_b3_trades_consolidated.DEFAULT_TABLE_NAME
     positional: list[str] = []
     i = 1
     while i < len(argv):
         a = argv[i]
         if a == "--table" and i + 1 < len(argv):
-            table = argv[i + 1]
+            cli_val = argv[i + 1].strip()
+            table = cli_val or None
             i += 2
             continue
         positional.append(a)
@@ -60,9 +61,10 @@ def main(argv: list[str]) -> int:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     days = list(_iter_business_days(start, end))
+    label = table if table else "PROBING (auto)"
     print(
         f"Backfill consolidated: {len(days)} dia(s) uteis entre {start} e {end} "
-        f"(tabela={table})"
+        f"(tabela={label})"
     )
 
     skipped = 0

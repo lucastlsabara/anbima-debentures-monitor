@@ -817,7 +817,7 @@ const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
 // Substituído pelo build com hash dos JSONs em data/. Em dev (template puro)
 // fica vazio e o cache do browser dita a frescor. Em produção, ?v=<hash>
 // invalida o cache do GitHub Pages quando snapshots novos chegam.
-const BUILD_VERSION = "6d98aeaed5e5";
+const BUILD_VERSION = "19f918f88e78";
 
 const cache = new Map();
 async function loadJSON(path) {
@@ -3979,6 +3979,11 @@ let TR2_FP_INI = null, TR2_FP_FIM = null;
 let TR2_DATE_INI = null, TR2_DATE_FIM = null;
 let TR2_RANGE_ROWS = null;
 let TR2_RANGE_NDAYS = 0;
+// Uniao ordenada das colunas brutas reportadas pela B3 nos payloads
+// consolidated do range atual (ordem = primeira aparicao). Usada pela
+// tabela pra render dinamico — schema da B3 ainda nao confirmado em
+// prod, entao nao trava colunas fixas: mostra o que vier.
+let TR2_CONS_COLUMNS_ORDERED = [];
 let TR2_INDEX = null;                  // {tickers, emissores}
 const TR2_SELECTED = new Map();        // ticker -> {ticker, issuer, color}
 // Emissores adicionados explicitamente via tr2_pickEmissor. Persistem ao mudar
@@ -4174,6 +4179,9 @@ async function tr2_load() {
   if (!TR2_MANIFEST) return;
   const dateEntries = tr2_datesInRange(TR2_MANIFEST);
   const isCons = TR2_SOURCE === "consolidated";
+  // Reset por load: colunas dinamicas vao ser repopuladas durante o
+  // parse de payloads se isCons; trade-by-trade nao usa.
+  TR2_CONS_COLUMNS_ORDERED = [];
 
   // Sem dias no range: preserva TR2_SELECTED, atualiza TR2_INDEX/TR2_RANGE_ROWS
   // para o estado vazio e re-renderiza chips+chart. Sem early return — chips
@@ -4212,7 +4220,18 @@ async function tr2_load() {
   // filtra cancelados; consolidated mapeia via heuristica de aliases sobre
   // p.columns (schema da B3 nao confirmado em sandbox).
   const allRows = [];
+  // Uniao das colunas brutas (1a aparicao manda na ordem) — reset por load.
+  const consColsSeen = new Set();
+  const consColsOrdered = [];
   for (const p of payloads) {
+    if (isCons && Array.isArray(p.columns)) {
+      for (const c of p.columns) {
+        if (c && !consColsSeen.has(c)) {
+          consColsSeen.add(c);
+          consColsOrdered.push(c);
+        }
+      }
+    }
     for (const r of p.rows) {
       let obj;
       if (isCons) {
@@ -4226,6 +4245,7 @@ async function tr2_load() {
       allRows.push(obj);
     }
   }
+  TR2_CONS_COLUMNS_ORDERED = consColsOrdered;
 
   TR2_RANGE_ROWS = allRows;
   TR2_RANGE_NDAYS = dateEntries.length;
@@ -4712,15 +4732,12 @@ function tr2_renderTable() {
 }
 
 function _tr2_buildConsTable(containerId, rows) {
-  // Tabela para fonte consolidated. Schema dos rows depende de mapping
-  // heuristico em _tr2_consRowToObj — colunas opcionais ficam vazias
-  // quando o campo nao existe no payload da B3.
-  const _set = (key) => {
-    const s = new Set();
-    for (const r of rows) if (r[key]) s.add(r[key]);
-    return ["", ...[...s].sort()];
-  };
-  const setorOpts = _set("setor");
+  // Tabela para fonte consolidated. Schema da B3 ainda nao foi confirmado
+  // em prod: render dinamico baseado em TR2_CONS_COLUMNS_ORDERED (uniao
+  // ordenada das colunas brutas dos payloads do range). Cada coluna ganha
+  // formatter automatico baseado em sniff dos valores observados (numerico
+  // pt-BR vs string). Se nao houver colunas reportadas (fallback raro),
+  // cai pro schema heuristico antigo.
   const fmtNum = (digits) => (c) => {
     const v = c.getValue();
     if (v == null || v === "") return "—";
@@ -4729,7 +4746,8 @@ function _tr2_buildConsTable(containerId, rows) {
     return n.toLocaleString("pt-BR",
       { minimumFractionDigits: digits, maximumFractionDigits: digits });
   };
-  return new Tabulator(containerId, {
+
+  const baseOpts = {
     data: rows,
     layout: "fitDataStretch",
     resizableColumns: true,
@@ -4738,35 +4756,88 @@ function _tr2_buildConsTable(containerId, rows) {
     paginationSize: 50,
     paginationSizeSelector: [25, 50, 100, 250],
     initialSort: [{ column: "date", dir: "desc" }],
+  };
+
+  const dateCol = {
+    title: "Data", field: "date", width: 100,
+    formatter: c => brDate(c.getValue()),
+    headerFilter: "input", headerFilterFunc: trd_likeCI,
+    headerFilterPlaceholder: "AAAA-MM",
+  };
+
+  if (Array.isArray(TR2_CONS_COLUMNS_ORDERED) && TR2_CONS_COLUMNS_ORDERED.length) {
+    const columns = [dateCol];
+    for (const raw of TR2_CONS_COLUMNS_ORDERED) {
+      const kn = String(raw).toLowerCase();
+      const looksMonetary = /(volume|vol_|preco|price|valor|montante)/.test(kn);
+      const looksIntegerCount = /(qtd|quantidade|num_|numero_|n_neg|negocios|count|trades)/.test(kn);
+      // Sniff numerico: amostra ate 50 valores nao-nulos; se >=80% sao
+      // numericos (apos normalizar pt-BR), formata como numero.
+      let sampled = 0;
+      let numeric = 0;
+      for (const r of rows) {
+        const v = r[raw];
+        if (v == null || v === "") continue;
+        sampled += 1;
+        if (typeof v === "number") { numeric += 1; }
+        else if (typeof v === "string") {
+          const n = Number(v.replace(/\./g, "").replace(",", "."));
+          if (!Number.isNaN(n)) numeric += 1;
+        }
+        if (sampled >= 50) break;
+      }
+      const isNumeric = sampled > 0 && numeric / sampled >= 0.8;
+      const col = {
+        title: raw,
+        field: raw,
+        headerFilter: "input",
+      };
+      if (isNumeric) {
+        col.hozAlign = "right";
+        col.headerFilterFunc = trd_numericFilter;
+        if (looksIntegerCount && !looksMonetary) {
+          col.formatter = c => trd_fmtIntBR(c.getValue());
+        } else {
+          col.formatter = fmtNum(looksMonetary ? 2 : 6);
+        }
+      } else {
+        col.headerFilterFunc = trd_likeCI;
+      }
+      columns.push(col);
+    }
+    return new Tabulator(containerId, { ...baseOpts, columns });
+  }
+
+  // Fallback: schema heuristico (mantido pra robustez quando p.columns
+  // chegar vazio da B3).
+  const _set = (key) => {
+    const s = new Set();
+    for (const r of rows) if (r[key]) s.add(r[key]);
+    return ["", ...[...s].sort()];
+  };
+  const setorOpts = _set("setor");
+  return new Tabulator(containerId, {
+    ...baseOpts,
     columns: [
-      { title: "Data", field: "date", width: 100,
-        formatter: c => brDate(c.getValue()),
-        headerFilter: "input", headerFilterFunc: trd_likeCI,
-        headerFilterPlaceholder: "AAAA-MM" },
-      { title: "Ticker", field: "ticker", width: 110,
-        headerFilter: "input" },
-      { title: "Emissor", field: "issuer", minWidth: 200,
-        headerFilter: "input" },
+      dateCol,
+      { title: "Ticker", field: "ticker", width: 110, headerFilter: "input" },
+      { title: "Emissor", field: "issuer", minWidth: 200, headerFilter: "input" },
       { title: "Setor", field: "setor", width: 160,
         headerFilter: "list",
         headerFilterParams: { values: setorOpts, clearable: true },
         headerFilterFunc: "=" },
       { title: "Nº Negócios", field: "n_trades", width: 110, hozAlign: "right",
         formatter: c => trd_fmtIntBR(c.getValue()),
-        headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">100" },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter },
       { title: "Qtd Total", field: "qtd", width: 110, hozAlign: "right",
         formatter: c => trd_fmtIntBR(c.getValue()),
-        headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">1000" },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter },
       { title: "Vol Total (R$)", field: "vol", width: 140, hozAlign: "right",
         formatter: fmtNum(2),
-        headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">1000000" },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter },
       { title: "Preço Médio", field: "price", width: 120, hozAlign: "right",
         formatter: fmtNum(6),
-        headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">1000" },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter },
       { title: "Preço Mín", field: "price_min", width: 110, hozAlign: "right",
         formatter: fmtNum(6),
         headerFilter: "input", headerFilterFunc: trd_numericFilter },
