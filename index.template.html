@@ -367,42 +367,6 @@
   .trd-top10 th:nth-child(3), .trd-top10 td:nth-child(3) { width:20%; }
   .trd-top10 th:nth-child(4), .trd-top10 td:nth-child(4) { width:14%; }
   .tabulator .tabulator-row.trd-big { font-weight:600; color:#e6edf7; }
-  /* Multi-select dropdown da aba Trades B3 */
-  .trd-ms { position:relative; }
-  .trd-ms-btn {
-    background:var(--surface2); color:var(--fg);
-    border:1px solid var(--border-strong); border-radius:4px;
-    padding:6px 10px; font-size:12.5px; font-family:inherit;
-    cursor:pointer; display:inline-flex; align-items:center; gap:6px;
-  }
-  .trd-ms-btn:hover { border-color:var(--accent); }
-  .trd-ms-btn.open { border-color:var(--accent); }
-  .trd-ms-label { color:var(--muted); }
-  .trd-ms-summary { color:var(--fg); }
-  .trd-ms-caret { color:var(--muted); font-size:10px; margin-left:2px; }
-  .trd-ms-menu {
-    position:absolute; top:calc(100% + 4px); left:0; z-index:50;
-    background:var(--surface); border:1px solid var(--border-strong);
-    border-radius:4px; padding:6px 0; min-width:160px;
-    box-shadow:0 6px 18px rgba(0,0,0,0.35);
-  }
-  .trd-ms-item {
-    display:flex; align-items:center; gap:8px;
-    padding:6px 12px; cursor:pointer; font-size:12.5px; color:var(--fg);
-    user-select:none;
-  }
-  .trd-ms-item:hover { background:var(--surface2); }
-  .trd-ms-item input[type="checkbox"] { margin:0; cursor:pointer; }
-  .trd-ms-actions {
-    display:flex; gap:6px; padding:4px 12px 6px;
-    border-bottom:1px solid var(--border); margin-bottom:4px;
-  }
-  .trd-ms-actions button {
-    background:transparent; border:none; padding:0;
-    color:var(--accent); font-size:11px; font-family:inherit;
-    cursor:pointer; text-decoration:underline;
-  }
-  .trd-ms-actions button:hover { opacity:.85; }
   /* Aba Trades (multi-indexador) */
   .tr2-toolbar { row-gap:8px; margin-bottom:6px; }
   .tr2-search-row { margin-bottom:10px; align-items:center; }
@@ -526,15 +490,14 @@
       <div id="chart-histogram-cdi" class="chart"></div>
     </div>
   </div>
-  <div class="grid-2x2">
-    <div class="panel">
-      <h2>Curva ETTJ NTN-B — Data Atual vs Data Anterior</h2>
-      <div id="chart-curves-overlay" class="chart"></div>
-    </div>
-    <div class="panel">
-      <h2>Curva Pré — Data Atual vs Data Anterior</h2>
-      <div id="chart-curves-pre" class="chart"></div>
-    </div>
+  <div class="grid-kpi" id="vg-kpi-row"></div>
+  <div class="panel">
+    <h2>Volume diário de debêntures</h2>
+    <div id="vg-chart-volume-deb" class="chart"></div>
+  </div>
+  <div class="panel">
+    <h2>Top 10 papéis por volume</h2>
+    <div id="vg-top10"></div>
   </div>
 </section>
 
@@ -725,22 +688,6 @@
       <label>Até:
         <input type="text" id="trd-date-fim" placeholder="DD-MM-YYYY">
       </label>
-      <div class="trd-ms" data-trd-ms="produto">
-        <button type="button" class="trd-ms-btn">
-          <span class="trd-ms-label">Produto:</span>
-          <span class="trd-ms-summary">Todos</span>
-          <span class="trd-ms-caret">▾</span>
-        </button>
-        <div class="trd-ms-menu hide"></div>
-      </div>
-      <div class="trd-ms" data-trd-ms="indexador">
-        <button type="button" class="trd-ms-btn">
-          <span class="trd-ms-label">Indexador:</span>
-          <span class="trd-ms-summary">Todos</span>
-          <span class="trd-ms-caret">▾</span>
-        </button>
-        <div class="trd-ms-menu hide"></div>
-      </div>
       <span id="trd-status" class="trd-status"></span>
     </div>
   </div>
@@ -750,15 +697,6 @@
     <button id="trd-retry" type="button" class="play-btn" style="margin-top:10px">Tentar novamente</button>
   </div>
   <div id="trd-content">
-    <div class="grid-kpi" id="trd-kpi-row"></div>
-    <div class="panel">
-      <h2>Volume Total Negociado por Indexador</h2>
-      <div id="trd-chart-idx-stack" class="chart"></div>
-    </div>
-    <div class="panel">
-      <h2>Top 10 papéis por volume</h2>
-      <div id="trd-top10"></div>
-    </div>
     <div class="panel">
       <h2>Trades</h2>
       <div id="trd-table"></div>
@@ -1108,8 +1046,7 @@ function drawVisao() {
   // os 4 cards principais de cada indexador.
   renderDailySpreadBars("IPCA+", "chart-vis-spread-ipca", cssVar("--accent"));
   renderDailySpreadBars("DI+",   "chart-vis-spread-cdi",  cssVar("--accent"));
-  renderCurvesOverlay(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
-  renderCurvesPre(VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
+  vg_renderB3Section(VIS_DATE_ANTERIOR || VIS_DATE_ATUAL, VIS_DATE_ATUAL);
 }
 
 function renderDailySpreadBars(idx, containerId, color) {
@@ -1221,70 +1158,6 @@ function renderKpis(kpisMap) {
     `<div class="hint">${c.hint}</div></div>`).join("");
 }
 
-function renderCurvesOverlay(atual, anterior) {
-  const traces = [];
-  const cAt = OVERVIEW.by_date[atual];
-  const cAn = anterior ? OVERVIEW.by_date[anterior] : null;
-  if (cAt && cAt.curve_ipca && cAt.curve_ipca.length) {
-    traces.push({
-      x: cAt.curve_ipca.map(p => p.a), y: cAt.curve_ipca.map(p => p.t),
-      type:"scatter", mode:"lines",
-      name: "Atual (" + brDate(atual) + ")",
-      line:{ width: 2.5, color: cssVar("--accent") },
-    });
-  }
-  if (cAn && cAn.curve_ipca && cAn.curve_ipca.length) {
-    traces.push({
-      x: cAn.curve_ipca.map(p => p.a), y: cAn.curve_ipca.map(p => p.t),
-      type:"scatter", mode:"lines",
-      name: "Anterior (" + brDate(anterior) + ")",
-      line:{ width: 1.5, color: cssVar("--muted") },
-    });
-  }
-  const layout = Object.assign(PLOTLY_LAYOUT(), {
-    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title:"Vértice (anos)", type:"log" }),
-    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title:"Taxa NTN-B (%)", ticksuffix:"%" }),
-    showlegend: true,
-  });
-  if (!traces.length) {
-    document.getElementById("chart-curves-overlay").innerHTML =
-      '<div class="empty">Sem curvas disponíveis.</div>';
-    return;
-  }
-  Plotly.newPlot("chart-curves-overlay", traces, layout, PLOTLY_CONFIG);
-}
-
-function renderCurvesPre(atual, anterior) {
-  const root = document.getElementById("chart-curves-pre");
-  const cAt = OVERVIEW.by_date[atual];
-  const cAn = anterior ? OVERVIEW.by_date[anterior] : null;
-  const hasAt = cAt && cAt.curve_pre && cAt.curve_pre.length;
-  const hasAn = cAn && cAn.curve_pre && cAn.curve_pre.length;
-  if (!hasAt && !hasAn) {
-    root.innerHTML = '<div class="empty">Curva Pré indisponível para esta data.</div>';
-    return;
-  }
-  const traces = [];
-  if (hasAt) traces.push({
-    x: cAt.curve_pre.map(p => p.a), y: cAt.curve_pre.map(p => p.t),
-    type:"scatter", mode:"lines",
-    name: "Atual (" + brDate(atual) + ")",
-    line:{ width: 2.5, color: cssVar("--accent") },
-  });
-  if (hasAn) traces.push({
-    x: cAn.curve_pre.map(p => p.a), y: cAn.curve_pre.map(p => p.t),
-    type:"scatter", mode:"lines",
-    name: "Anterior (" + brDate(anterior) + ")",
-    line:{ width: 1.5, color: cssVar("--muted") },
-  });
-  const layout = Object.assign(PLOTLY_LAYOUT(), {
-    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { title:"Vértice (anos)", type:"log" }),
-    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { title:"Taxa Pré (%)", ticksuffix:"%" }),
-    showlegend: true,
-  });
-  Plotly.newPlot("chart-curves-pre", traces, layout, PLOTLY_CONFIG);
-}
-
 function renderHistogram(h, displayLabel, containerId) {
   const el = document.getElementById(containerId);
   if (!h) {
@@ -1349,6 +1222,159 @@ function renderTopMovers(tm, displayLabel, containerId) {
     `<table class="mini">${head}<tbody>${tm.abrindo.map(row).join("")}</tbody></table>` +
     '<div style="font-size:11px;color:var(--muted);margin:12px 0 4px">Fechando (spread ↓)</div>' +
     `<table class="mini">${head}<tbody>${tm.fechando.map(row).join("")}</tbody></table>`;
+}
+
+// ----- Visao Geral: secao B3 (somente DEB) -----
+// Carrega trades B3 no range [VIS_DATE_ANTERIOR, VIS_DATE_ATUAL] e renderiza
+// 2 KPIs (Volume total + Trades), chart de volume diario (bar simples) e
+// Top 10 papeis. Filtros aplicados pos-load: instrumento === "DEB" e exclusao
+// de cancelados. Cache de dia compartilhado com a aba Trades B3 (TRD_DAY_CACHE).
+let VG_B3_TOKEN = 0;
+async function vg_renderB3Section(dateLo, dateHi) {
+  const token = ++VG_B3_TOKEN;
+  const kpiEl = document.getElementById("vg-kpi-row");
+  const chartEl = document.getElementById("vg-chart-volume-deb");
+  const topEl = document.getElementById("vg-top10");
+  kpiEl.innerHTML = "";
+  Plotly.purge(chartEl);
+  chartEl.innerHTML = '<div class="empty">Carregando…</div>';
+  topEl.innerHTML = "";
+
+  let manifest;
+  try {
+    manifest = await loadJSON("data/b3_trades/manifest.json");
+  } catch (e) {
+    if (token !== VG_B3_TOKEN) return;
+    chartEl.innerHTML = '<div class="empty">Sem dados de Trades B3.</div>';
+    return;
+  }
+  if (token !== VG_B3_TOKEN) return;
+
+  const entries = (manifest.dates || []).filter(e => e.date >= dateLo && e.date <= dateHi);
+  if (!entries.length) {
+    chartEl.innerHTML = '<div class="empty">Sem trades B3 no intervalo selecionado.</div>';
+    return;
+  }
+  let payloads;
+  try {
+    payloads = await Promise.all(entries.map(e => trd_fetchDay(e)));
+  } catch (e) {
+    if (token !== VG_B3_TOKEN) return;
+    chartEl.innerHTML = '<div class="empty">Falha ao carregar dados B3.</div>';
+    return;
+  }
+  if (token !== VG_B3_TOKEN) return;
+
+  const rows = [];
+  for (const p of payloads) {
+    for (const r of p.rows) {
+      const obj = trd_rowToObj(r, p.date);
+      if (obj.instrument !== "DEB") continue;
+      if (_trd_isCancelled(obj.situation)) continue;
+      rows.push(obj);
+    }
+  }
+  if (!rows.length) {
+    chartEl.innerHTML = '<div class="empty">Sem debêntures no intervalo selecionado.</div>';
+    return;
+  }
+  vg_renderKpis(rows);
+  vg_renderVolumeChart(rows);
+  vg_renderTop10(rows);
+}
+
+function vg_renderKpis(rows) {
+  let vol = 0;
+  for (const r of rows) if (typeof r.vol === "number") vol += r.vol;
+  const cards = [
+    { label: "Volume total (DEB)", val: trd_fmtMoneyShort(vol), hint: trd_fmtMoneyFull(vol) },
+    { label: "Trades (DEB)", val: trd_fmtIntBR(rows.length) },
+  ];
+  document.getElementById("vg-kpi-row").innerHTML = cards.map(c => `
+    <div class="kpi">
+      <div class="label">${escapeHtml(c.label)}</div>
+      <div class="val">${escapeHtml(c.val)}</div>
+      ${c.hint ? `<div class="hint">${escapeHtml(c.hint)}</div>` : ""}
+    </div>`).join("");
+}
+
+function vg_renderVolumeChart(rows) {
+  const div = "vg-chart-volume-deb";
+  const byDate = new Map();
+  for (const r of rows) {
+    if (!r.date || typeof r.vol !== "number") continue;
+    byDate.set(r.date, (byDate.get(r.date) || 0) + r.vol);
+  }
+  const dates = [...byDate.keys()].sort();
+  if (!dates.length) {
+    Plotly.purge(div);
+    document.getElementById(div).innerHTML =
+      '<div class="empty">Sem volume no intervalo selecionado.</div>';
+    return;
+  }
+  const xs = dates.map(brDate);
+  const ys = dates.map(d => byDate.get(d));
+  const trace = {
+    type: "bar",
+    name: "Volume",
+    x: xs, y: ys,
+    marker: { color: cssVar("--accent") },
+    customdata: ys.map(v => trd_fmtMoneyFull(v)),
+    hovertemplate: "%{x}<br>%{customdata}<extra></extra>",
+  };
+  const annotations = xs.map((x, i) => ({
+    x, y: ys[i],
+    text: trd_fmtMoneyShort(ys[i]),
+    showarrow: false,
+    yshift: 12,
+    font: { size: 11, color: cssVar("--fg") },
+  }));
+  const base = PLOTLY_LAYOUT();
+  const layout = Object.assign({}, base, {
+    margin: { t: 30, r: 20, b: 70, l: 60 },
+    showlegend: false,
+    annotations,
+    xaxis: Object.assign({}, base.xaxis, {
+      type: "category",
+      categoryorder: "array",
+      categoryarray: xs,
+      tickangle: -25,
+      nticks: Math.min(30, xs.length),
+    }),
+    yaxis: Object.assign({}, base.yaxis, {
+      tickformat: "~s", separatethousands: true,
+    }),
+  });
+  Plotly.newPlot(div, [trace], layout, PLOTLY_CONFIG);
+}
+
+function vg_renderTop10(rows) {
+  const agg = new Map();
+  for (const r of rows) {
+    if (!r.ticker) continue;
+    let cur = agg.get(r.ticker);
+    if (!cur) {
+      cur = { ticker: r.ticker, issuer: r.issuer || "", vol: 0, n: 0 };
+      agg.set(r.ticker, cur);
+    }
+    if (typeof r.vol === "number") cur.vol += r.vol;
+    cur.n += 1;
+  }
+  const top = [...agg.values()].sort((a, b) => b.vol - a.vol).slice(0, 10);
+  const head = `
+    <thead><tr>
+      <th>Ticker</th><th>Emissor</th>
+      <th class="num">Volume (R$)</th><th class="num">Trades</th>
+    </tr></thead>`;
+  const body = top.map(r => `
+    <tr>
+      <td>${escapeHtml(r.ticker)}</td>
+      <td>${escapeHtml(r.issuer)}</td>
+      <td class="num">${escapeHtml(trd_fmtMoneyShort(r.vol))}</td>
+      <td class="num">${escapeHtml(trd_fmtIntBR(r.n))}</td>
+    </tr>`).join("");
+  document.getElementById("vg-top10").innerHTML =
+    `<table class="trd-top10">${head}<tbody>${body}</tbody></table>`;
 }
 
 /* ============================================================
@@ -3399,12 +3425,6 @@ const TRD_COLUMNS = [
   "rate","origin","time","trade_code","isin","settlement_dt","situation",
 ];
 
-// Selecionadores globais da aba (M7). Default: todos marcados.
-const TRD_PRODUCT_OPTS = ["DEB", "CRA", "CRI", "CFF", "COE", "LF", "LIG"];
-const TRD_INDEXER_OPTS = ["CDI", "%CDI", "IPCA", "PRE", "OUTROS"];
-let TRD_FILTER_PRODUCTS = new Set(TRD_PRODUCT_OPTS);
-let TRD_FILTER_INDEXERS = new Set(TRD_INDEXER_OPTS);
-
 // Filtro de trades cancelados (M2). Match prefixo "Cancelado" cobre
 // "Cancelado", "Cancelado B3" e "Cancelado Parcial B3". Aplicado apos load,
 // antes de qualquer agregacao/render.
@@ -3501,7 +3521,6 @@ function trd_numericFilter(term, value) {
 async function renderTradesB3() {
   if (!TRD_INITED) {
     document.getElementById("trd-retry").addEventListener("click", () => trd_load());
-    trd_initMultiSelects();
     TRD_INITED = true;
   }
 
@@ -3623,23 +3642,10 @@ async function trd_load() {
   trd_refreshViews();
 }
 
-// Re-renderiza KPIs, chart stacked, Top 10 e tabela aplicando os filtros
-// globais (produto + indexador). Chamado apos load e a cada mudanca nos
-// selecionadores (sem refetch).
+// Re-renderiza a tabela completa de trades. Chamado apos load.
 function trd_refreshViews() {
   if (!TRD_RANGE_ROWS) return;
-  const filtered = TRD_RANGE_ROWS.filter(_trd_passesFilters);
-  trd_renderKpis(filtered);
-  trd_renderIndexerStackedChart(filtered);
-  trd_renderTop10(filtered);
-  trd_renderTable(filtered);
-}
-
-function _trd_passesFilters(r) {
-  if (!TRD_FILTER_PRODUCTS.has(r.instrument)) return false;
-  const idx = r.indexador || "OUTROS";
-  if (!TRD_FILTER_INDEXERS.has(idx)) return false;
-  return true;
+  trd_renderTable(TRD_RANGE_ROWS);
 }
 
 async function trd_fetchDay(entry) {
@@ -3657,121 +3663,6 @@ function trd_rowToObj(arr, date) {
   const obj = { date };
   for (let i = 0; i < TRD_COLUMNS.length; i++) obj[TRD_COLUMNS[i]] = arr[i];
   return obj;
-}
-
-function trd_renderKpis(rows) {
-  let vol = 0;
-  for (const r of rows) {
-    if (typeof r.vol === "number") vol += r.vol;
-  }
-  const cards = [
-    { label: "Volume total", val: trd_fmtMoneyShort(vol), hint: trd_fmtMoneyFull(vol) },
-    { label: "Trades", val: trd_fmtIntBR(rows.length) },
-  ];
-  const html = cards.map(c => `
-    <div class="kpi">
-      <div class="label">${escapeHtml(c.label)}</div>
-      <div class="val">${escapeHtml(c.val)}</div>
-      ${c.hint ? `<div class="hint">${escapeHtml(c.hint)}</div>` : ""}
-    </div>`).join("");
-  document.getElementById("trd-kpi-row").innerHTML = html;
-}
-
-function trd_renderTop10(rows) {
-  const agg = new Map();   // ticker -> {ticker, issuer, vol, n}
-  for (const r of rows) {
-    if (!r.ticker) continue;
-    let cur = agg.get(r.ticker);
-    if (!cur) {
-      cur = { ticker: r.ticker, issuer: r.issuer || "", vol: 0, n: 0 };
-      agg.set(r.ticker, cur);
-    }
-    if (typeof r.vol === "number") cur.vol += r.vol;
-    cur.n += 1;
-  }
-  const top = [...agg.values()].sort((a, b) => b.vol - a.vol).slice(0, 10);
-  const head = `
-    <thead><tr>
-      <th>Ticker</th><th>Emissor</th>
-      <th class="num">Volume (R$)</th><th class="num">Trades</th>
-    </tr></thead>`;
-  const body = top.map(r => `
-    <tr>
-      <td>${escapeHtml(r.ticker)}</td>
-      <td>${escapeHtml(r.issuer)}</td>
-      <td class="num">${escapeHtml(trd_fmtMoneyShort(r.vol))}</td>
-      <td class="num">${escapeHtml(trd_fmtIntBR(r.n))}</td>
-    </tr>`).join("");
-  document.getElementById("trd-top10").innerHTML =
-    `<table class="trd-top10">${head}<tbody>${body}</tbody></table>`;
-}
-
-// Volume total negociado por indexador (stacked bar, 1 serie por grupo).
-// Annotations no topo de cada barra mostram o total diario.
-function trd_renderIndexerStackedChart(rows) {
-  const div = "trd-chart-idx-stack";
-  if (!rows.length) {
-    Plotly.purge(div);
-    document.getElementById(div).innerHTML =
-      '<div class="empty">Sem trades no período (após filtros).</div>';
-    return;
-  }
-  const dateSet = new Set();
-  const byIdx = {};   // grupo -> {date -> vol}
-  for (const r of rows) {
-    if (!r.date) continue;
-    if (typeof r.vol !== "number") continue;
-    const g = r.indexador || "OUTROS";
-    dateSet.add(r.date);
-    if (!byIdx[g]) byIdx[g] = {};
-    byIdx[g][r.date] = (byIdx[g][r.date] || 0) + r.vol;
-  }
-  const dates = [...dateSet].sort();
-  const xs = dates.map(brDate);
-  const totals = new Array(dates.length).fill(0);
-  const traces = [];
-  for (const g of TR2_GROUPS) {
-    const map = byIdx[g];
-    if (!map) continue;
-    const ys = dates.map((d, i) => {
-      const v = map[d] || 0;
-      totals[i] += v;
-      return v;
-    });
-    traces.push({
-      type: "bar", name: g,
-      x: xs, y: ys,
-      marker: { color: TR2_GROUP_META[g].color },
-      customdata: ys.map(v => trd_fmtMoneyFull(v)),
-      hovertemplate: `<b>${g}</b><br>%{x}<br>%{customdata}<extra></extra>`,
-    });
-  }
-  const annotations = xs.map((x, i) => ({
-    x, y: totals[i],
-    text: trd_fmtMoneyShort(totals[i]),
-    showarrow: false,
-    yshift: 12,
-    font: { size: 11, color: cssVar("--fg") },
-  }));
-  const base = PLOTLY_LAYOUT();
-  const layout = Object.assign({}, base, {
-    barmode: "stack",
-    margin: { t: 30, r: 20, b: 70, l: 60 },
-    showlegend: true,
-    legend: { orientation: "h", y: -0.22, x: 0 },
-    annotations,
-    xaxis: Object.assign({}, base.xaxis, {
-      type: "category",
-      categoryorder: "array",
-      categoryarray: xs,
-      tickangle: -25,
-      nticks: Math.min(30, xs.length),
-    }),
-    yaxis: Object.assign({}, base.yaxis, {
-      tickformat: "~s", separatethousands: true,
-    }),
-  });
-  Plotly.newPlot(div, traces, layout, PLOTLY_CONFIG);
 }
 
 // ----- Helpers compartilhados de tempo/buckets (usados pela aba Trades) -----
@@ -3979,95 +3870,9 @@ function _trd_annotateIndexer(rows, idxMap) {
 }
 
 function trd_renderTable(rows) {
-  // Anotacao do indexador ja foi feita em trd_load (rows aqui sao um subset
-  // filtrado de TRD_RANGE_ROWS que ja recebeu _trd_annotateIndexer).
+  // Anotacao do indexador ja foi feita em trd_load.
   if (TRD_TABLE) { TRD_TABLE.destroy(); TRD_TABLE = null; }
   TRD_TABLE = _trd_buildTradesTable("#trd-table", rows);
-}
-
-// ----- Selecionadores multi-select (Produto + Indexador) -----
-
-function trd_initMultiSelects() {
-  trd_buildMSMenu("produto", TRD_PRODUCT_OPTS, TRD_FILTER_PRODUCTS);
-  trd_buildMSMenu("indexador", TRD_INDEXER_OPTS, TRD_FILTER_INDEXERS);
-  trd_updateMSSummary("produto", TRD_PRODUCT_OPTS, TRD_FILTER_PRODUCTS);
-  trd_updateMSSummary("indexador", TRD_INDEXER_OPTS, TRD_FILTER_INDEXERS);
-
-  // Toggle aberto/fechado ao clicar no botao; clicar fora fecha.
-  document.querySelectorAll('.trd-ms').forEach(ms => {
-    const btn = ms.querySelector(".trd-ms-btn");
-    const menu = ms.querySelector(".trd-ms-menu");
-    btn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      const wasOpen = !menu.classList.contains("hide");
-      document.querySelectorAll(".trd-ms-menu").forEach(m => m.classList.add("hide"));
-      document.querySelectorAll(".trd-ms-btn").forEach(b => b.classList.remove("open"));
-      if (!wasOpen) {
-        menu.classList.remove("hide");
-        btn.classList.add("open");
-      }
-    });
-  });
-  document.addEventListener("click", (ev) => {
-    if (!ev.target.closest(".trd-ms")) {
-      document.querySelectorAll(".trd-ms-menu").forEach(m => m.classList.add("hide"));
-      document.querySelectorAll(".trd-ms-btn").forEach(b => b.classList.remove("open"));
-    }
-  });
-}
-
-function trd_buildMSMenu(key, opts, stateSet) {
-  const ms = document.querySelector(`.trd-ms[data-trd-ms="${key}"]`);
-  if (!ms) return;
-  const menu = ms.querySelector(".trd-ms-menu");
-  const parts = [`<div class="trd-ms-actions">` +
-    `<button type="button" data-act="all">Todos</button>` +
-    `<button type="button" data-act="none">Nenhum</button>` +
-    `</div>`];
-  for (const o of opts) {
-    const checked = stateSet.has(o) ? " checked" : "";
-    parts.push(
-      `<label class="trd-ms-item">` +
-      `<input type="checkbox" value="${escapeAttr(o)}"${checked}>` +
-      `<span>${escapeHtml(o)}</span>` +
-      `</label>`
-    );
-  }
-  menu.innerHTML = parts.join("");
-
-  menu.addEventListener("change", (ev) => {
-    const cb = ev.target.closest('input[type="checkbox"]');
-    if (!cb) return;
-    if (cb.checked) stateSet.add(cb.value);
-    else stateSet.delete(cb.value);
-    trd_updateMSSummary(key, opts, stateSet);
-    trd_refreshViews();
-  });
-  menu.addEventListener("click", (ev) => {
-    const btn = ev.target.closest("button[data-act]");
-    if (!btn) return;
-    ev.stopPropagation();
-    const act = btn.dataset.act;
-    if (act === "all") { for (const o of opts) stateSet.add(o); }
-    else if (act === "none") { stateSet.clear(); }
-    for (const cb of menu.querySelectorAll('input[type="checkbox"]')) {
-      cb.checked = stateSet.has(cb.value);
-    }
-    trd_updateMSSummary(key, opts, stateSet);
-    trd_refreshViews();
-  });
-}
-
-function trd_updateMSSummary(key, opts, stateSet) {
-  const ms = document.querySelector(`.trd-ms[data-trd-ms="${key}"]`);
-  if (!ms) return;
-  const sumEl = ms.querySelector(".trd-ms-summary");
-  let text;
-  if (stateSet.size === 0) text = "Nenhum";
-  else if (stateSet.size === opts.length) text = "Todos";
-  else if (stateSet.size === 1) text = [...stateSet][0];
-  else text = `${stateSet.size} selecionados`;
-  sumEl.textContent = text;
 }
 
 /* ============================================================
@@ -4713,12 +4518,21 @@ function tr2_renderUnifiedStackedBarChart(granularity, divId) {
     }
   }
 
+  // Legenda agrupada por EMISSOR: 1 entrada por emissor mesmo quando varios
+  // tickers do mesmo emissor estao selecionados. Cada trace mantem 1 ticker
+  // (hover/tooltip individual), mas showlegend=true so no primeiro trace de
+  // cada emissor; restantes compartilham legendgroup (visibility toggle).
+  const issuerLegendDone = new Set();
   const traces = built.map(({ sel, grp, series }) => {
     const issuer = sel.issuer || "(sem emissor)";
     const color = issuerColor.get(issuer);
+    const isFirst = !issuerLegendDone.has(issuer);
+    if (isFirst) issuerLegendDone.add(issuer);
     return {
       type: "bar",
-      name: sel.ticker,
+      name: issuer,
+      legendgroup: issuer,
+      showlegend: isFirst,
       x: series.map(p => labelByTs.get(p.ts.getTime())),
       y: series.map(p => p.vol),
       marker: { color },
