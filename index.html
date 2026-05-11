@@ -74,6 +74,19 @@
   .kpi .val { font-size:22px; font-weight:600; margin-top:4px; }
   .kpi .val.pos { color:var(--pos); }
   .kpi .val.neg { color:var(--neg); }
+  .kpi .val-row {
+    display:flex; align-items:baseline; gap:12px;
+    margin-top:4px; flex-wrap:wrap;
+    font-size:22px;
+  }
+  .kpi .val-row .val { margin-top:0; font-size:1em; }
+  .kpi .delta {
+    font-size:0.55em; font-weight:600; letter-spacing:0.01em;
+    line-height:1;
+  }
+  .kpi .delta.pos { color:var(--pos); }
+  .kpi .delta.neg { color:var(--neg); }
+  .kpi .delta.neutral { color:var(--muted); }
   .kpi .hint { color:var(--muted); font-size:11px; margin-top:2px; }
   .grid-2x2 {
     display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px;
@@ -415,6 +428,12 @@
     font-weight:600;
     letter-spacing:0.03em;
   }
+  .tr2-chips-sep {
+    display:inline-block;
+    width:1px; align-self:stretch;
+    background:var(--border-strong);
+    margin:2px 6px;
+  }
   .tr2-notice {
     color:var(--warn); font-size:11.5px; margin-top:8px;
   }
@@ -433,8 +452,8 @@
   <a href="#/movimentacoes" data-tab="movimentacoes">Debêntures: Papéis</a>
   <a href="#/heatmap" data-tab="heatmap">Debêntures: Setor × Prazo</a>
   <a href="#/dispersao" data-tab="dispersao">Debêntures: Gráfico</a>
-  <a href="#/trades-b3" data-tab="trades-b3">Trades</a>
   <a href="#/trades" data-tab="trades">Pesquisa de Trades</a>
+  <a href="#/trades-b3" data-tab="trades-b3">Todos Trades</a>
   <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
 </nav>
 
@@ -1289,25 +1308,73 @@ async function vg_renderB3Section(dateLo, dateHi) {
   const kpiRows = VIS_DATE_ANTERIOR
     ? rows.filter(r => r.date && r.date > VIS_DATE_ANTERIOR)
     : rows;
-  vg_renderKpis(kpiRows);
+  vg_renderKpis(kpiRows, rows);
   vg_renderVolumeChart(rows);
   vg_renderTopPapeis(rows);
   vg_renderTopEmissores(rows);
 }
 
-function vg_renderKpis(rows) {
+function vg_renderKpis(rows, rangeRows) {
   let vol = 0;
   for (const r of rows) if (typeof r.vol === "number") vol += r.vol;
+  // DoD: usa data util mais recente e mais antiga com dado em rangeRows
+  // (intervalo completo, antes do filtro exclusive dos cards). Se as duas
+  // datas efetivas coincidem, oculta o badge. Se a anterior for zero, "n/a".
+  const dod = _vg_computeDoD(rangeRows || rows);
+  const volDelta = dod ? _vg_pctDelta(dod.volAtual, dod.volAnterior) : null;
+  const nDelta   = dod ? _vg_pctDelta(dod.nAtual,   dod.nAnterior)   : null;
   const cards = [
-    { label: "Volume total negociado", val: trd_fmtMoneyShort(vol), hint: trd_fmtMoneyFull(vol) },
-    { label: "Número de trades", val: trd_fmtIntBR(rows.length) },
+    { label: "Volume total negociado", val: trd_fmtMoneyShort(vol), hint: trd_fmtMoneyFull(vol), delta: volDelta },
+    { label: "Número de trades", val: trd_fmtIntBR(rows.length), delta: nDelta },
   ];
   document.getElementById("vg-kpi-row").innerHTML = cards.map(c => `
     <div class="kpi">
       <div class="label">${escapeHtml(c.label)}</div>
-      <div class="val">${escapeHtml(c.val)}</div>
+      <div class="val-row">
+        <span class="val">${escapeHtml(c.val)}</span>
+        ${_vg_deltaHtml(c.delta)}
+      </div>
       ${c.hint ? `<div class="hint">${escapeHtml(c.hint)}</div>` : ""}
     </div>`).join("");
+}
+
+function _vg_computeDoD(rangeRows) {
+  if (!rangeRows || !rangeRows.length) return null;
+  const byDate = new Map();   // date -> { vol, n }
+  for (const r of rangeRows) {
+    if (!r.date) continue;
+    let cur = byDate.get(r.date);
+    if (!cur) { cur = { vol: 0, n: 0 }; byDate.set(r.date, cur); }
+    if (typeof r.vol === "number") cur.vol += r.vol;
+    cur.n += 1;
+  }
+  const dates = [...byDate.keys()].sort();
+  if (dates.length < 2) return null;
+  const dAtual = dates[dates.length - 1];
+  const dAnt   = dates[0];
+  if (dAtual === dAnt) return null;
+  const a = byDate.get(dAtual), b = byDate.get(dAnt);
+  return { volAtual: a.vol, volAnterior: b.vol, nAtual: a.n, nAnterior: b.n };
+}
+
+function _vg_pctDelta(atual, anterior) {
+  if (!anterior || anterior === 0) return { kind: "na" };
+  const pct = (atual / anterior - 1) * 100;
+  return { kind: "num", pct };
+}
+
+function _vg_deltaHtml(d) {
+  if (!d) return "";
+  if (d.kind === "na") return `<span class="delta neutral">n/a</span>`;
+  const pct = d.pct;
+  let cls = "neutral";
+  if (pct > 0) cls = "pos";
+  else if (pct < 0) cls = "neg";
+  const sign = pct > 0 ? "+" : (pct < 0 ? "-" : "");
+  const abs = Math.abs(pct).toLocaleString("pt-BR", {
+    minimumFractionDigits: 1, maximumFractionDigits: 1,
+  });
+  return `<span class="delta ${cls}">${sign}${escapeHtml(abs)}%</span>`;
 }
 
 function vg_renderVolumeChart(rows) {
@@ -1368,6 +1435,19 @@ function _vg_topSort(a, b) {
   return a._name.localeCompare(b._name);
 }
 
+// Formatter exclusivo das tabelas Top 20: sempre 1 casa decimal em qualquer
+// unidade (Mil/MM/Bi/Tri). Cards, chart e demais tabelas mantem trd_fmtMoneyShort.
+function _vg_fmtMoneyShort1d(v) {
+  if (v == null || isNaN(v)) return "—";
+  const abs = Math.abs(v);
+  const opts = { minimumFractionDigits: 1, maximumFractionDigits: 1 };
+  if (abs >= 1e12) return (v / 1e12).toLocaleString("pt-BR", opts) + " Tri";
+  if (abs >= 1e9)  return (v / 1e9).toLocaleString("pt-BR", opts) + " Bi";
+  if (abs >= 1e6)  return (v / 1e6).toLocaleString("pt-BR", opts) + " MM";
+  if (abs >= 1e3)  return (v / 1e3).toLocaleString("pt-BR", opts) + " Mil";
+  return v.toLocaleString("pt-BR", opts);
+}
+
 function vg_renderTopPapeis(rows) {
   const agg = new Map();
   for (const r of rows) {
@@ -1390,7 +1470,7 @@ function vg_renderTopPapeis(rows) {
     <tr>
       <td>${escapeHtml(r.ticker)}</td>
       <td>${escapeHtml(r.issuer)}</td>
-      <td class="num">${escapeHtml(trd_fmtMoneyShort(r.vol))}</td>
+      <td class="num">${escapeHtml(_vg_fmtMoneyShort1d(r.vol))}</td>
       <td class="num">${escapeHtml(trd_fmtIntBR(r.n))}</td>
     </tr>`).join("");
   document.getElementById("vg-top-papeis").innerHTML =
@@ -1418,7 +1498,7 @@ function vg_renderTopEmissores(rows) {
   const body = top.map(r => `
     <tr>
       <td>${escapeHtml(r.issuer)}</td>
-      <td class="num">${escapeHtml(trd_fmtMoneyShort(r.vol))}</td>
+      <td class="num">${escapeHtml(_vg_fmtMoneyShort1d(r.vol))}</td>
       <td class="num">${escapeHtml(trd_fmtIntBR(r.n))}</td>
     </tr>`).join("");
   document.getElementById("vg-top-emissores").innerHTML =
@@ -4166,11 +4246,15 @@ function tr2_renderChips() {
     issuerBuckets.get(issuer).push(v);
   }
 
+  // Layout: todos os chips de emissor primeiro, divisor sutil, depois todos
+  // os chips de ticker individuais. Ordem dos emissores e dos tickers segue
+  // a ordem de primeira selecao.
   const fullIssuers = tr2_fullySelectedIssuers();
-  const html = [];
+  const issuerChips = [];
+  const tickerChips = [];
   for (const [issuer, list] of issuerBuckets) {
     if (fullIssuers.has(issuer)) {
-      html.push(
+      issuerChips.push(
         `<span class="ex-chip is-issuer-all" data-issuer="${escapeAttr(issuer)}">` +
         `${escapeHtml(issuer)}` +
         `<button type="button" data-remove-issuer="${escapeAttr(issuer)}" aria-label="Remover emissor">×</button>` +
@@ -4178,7 +4262,7 @@ function tr2_renderChips() {
       );
     }
     for (const v of list) {
-      html.push(
+      tickerChips.push(
         `<span class="ex-chip is-ticker" style="border-color:${v.color}">` +
         `${escapeHtml(v.ticker)}` +
         `<button type="button" data-remove="${escapeAttr(v.ticker)}" aria-label="Remover">×</button>` +
@@ -4186,7 +4270,13 @@ function tr2_renderChips() {
       );
     }
   }
-  box.innerHTML = html.join("");
+  const parts = [];
+  parts.push(...issuerChips);
+  if (issuerChips.length && tickerChips.length) {
+    parts.push(`<span class="tr2-chips-sep" aria-hidden="true"></span>`);
+  }
+  parts.push(...tickerChips);
+  box.innerHTML = parts.join("");
   // Single delegated listener (rebind a cada render — innerHTML zera).
   box.onclick = (e) => {
     const issBtn = e.target.closest("button[data-remove-issuer]");
