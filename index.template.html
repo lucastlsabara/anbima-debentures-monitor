@@ -714,6 +714,10 @@
     <button id="trd-retry" type="button" class="play-btn" style="margin-top:10px">Tentar novamente</button>
   </div>
   <div id="trd-content">
+    <div class="panel" id="trd-volume-chart-card">
+      <h2>Volume Total por Dia</h2>
+      <div id="trd-volume-chart" class="chart" style="height:340px"></div>
+    </div>
     <div class="panel">
       <h2>Trades</h2>
       <div id="trd-table"></div>
@@ -834,6 +838,14 @@ function brDate(iso) {
   if (!iso) return "—";
   const [y, m, d] = iso.split("-");
   return `${d}-${m}-${y}`;
+}
+
+const MESES_PT = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho",
+                  "Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+function fmtDataExtenso(iso) {
+  if (!iso) return "—";
+  const [y, m, d] = iso.split("-").map(Number);
+  return `${d} de ${MESES_PT[m-1]} de ${y}`;
 }
 
 // Item 9: Default Data Anterior = data imediatamente anterior à atual em `dates`.
@@ -969,8 +981,29 @@ async function init() {
     hdr.textContent = "Última Atualização em —";
     return;
   }
-  hdr.textContent = "Última Atualização em " + brDate(MANIFEST.latest);
+  hdr.textContent = "Última Atualização em " + fmtDataExtenso(MANIFEST.latest);
   activateTab((location.hash || "#/visao").replace(/^#\//, ""));
+
+  // Cabeçalho mostra o maior dia em que TODOS os 3 manifests (ANBIMA, B3
+  // trade-by-trade e B3 consolidated) têm aquela data. Async para não
+  // bloquear a ativação inicial das abas; fallback é a última data ANBIMA
+  // já exibida acima.
+  Promise.all([
+    loadJSON("data/b3_trades/manifest.json").catch(() => null),
+    loadJSON("data/b3_trades_consolidated/manifest.json").catch(() => null),
+  ]).then(([trdMan, consMan]) => {
+    const anbimaDates = new Set(MANIFEST.dates || []);
+    const trdDates = new Set(((trdMan && trdMan.dates) || []).map(e => e.date));
+    const consDates = new Set(((consMan && consMan.dates) || []).map(e => e.date));
+    let common = [];
+    if (trdDates.size && consDates.size) {
+      for (const d of anbimaDates) {
+        if (trdDates.has(d) && consDates.has(d)) common.push(d);
+      }
+    }
+    const chosen = common.length ? common.sort()[common.length - 1] : MANIFEST.latest;
+    hdr.textContent = "Última Atualização em " + fmtDataExtenso(chosen);
+  }).catch(() => { /* mantém fallback ANBIMA */ });
 }
 
 async function renderTab(name) {
@@ -4017,6 +4050,56 @@ function _trd_buildTradesTable(containerId, rows) {
 function trd_renderTable(rows) {
   if (TRD_TABLE) { TRD_TABLE.destroy(); TRD_TABLE = null; }
   TRD_TABLE = _trd_buildTradesTable("#trd-table", rows);
+  redrawTrdVolumeChart(rows);
+  // Recompute chart sempre que qualquer filtro (range, header, etc) muda a
+  // visibilidade das linhas. Plotly.react reusa o div renderizado.
+  TRD_TABLE.on("dataFiltered", (_filters, visibleRows) => {
+    const data = visibleRows.map(r => r.getData());
+    redrawTrdVolumeChart(data);
+  });
+}
+
+function _trd_volumeByDate(rows) {
+  const byDate = new Map();
+  for (const r of rows) {
+    if (!r || !r.date || typeof r.vol !== "number") continue;
+    byDate.set(r.date, (byDate.get(r.date) || 0) + r.vol);
+  }
+  const dates = [...byDate.keys()].sort();
+  return { dates, xs: dates.map(brDate), ys: dates.map(d => byDate.get(d)) };
+}
+
+function redrawTrdVolumeChart(rows) {
+  const div = "trd-volume-chart";
+  const el = document.getElementById(div);
+  if (!el) return;
+  const { xs, ys } = _trd_volumeByDate(rows || []);
+  const trace = {
+    type: "bar",
+    x: xs, y: ys,
+    marker: { color: cssVar("--accent") },
+    hovertemplate: "%{x}<br>Volume: R$ %{y:,.0f}<extra></extra>",
+  };
+  const base = PLOTLY_LAYOUT();
+  const layout = Object.assign({}, base, {
+    margin: { t: 12, r: 18, b: 60, l: 50 },
+    showlegend: false,
+    xaxis: Object.assign({}, base.xaxis, {
+      type: "category",
+      categoryorder: "array",
+      categoryarray: xs,
+      tickangle: -25,
+      title: "",
+    }),
+    yaxis: Object.assign({}, base.yaxis, {
+      type: "linear",
+      title: "Volume (R$)",
+      tickformat: ",.0f",
+      separatethousands: true,
+    }),
+  });
+  Plotly.react(div, [trace], layout,
+    Object.assign({}, PLOTLY_CONFIG, { displayModeBar: false }));
 }
 
 /* ============================================================
