@@ -36,7 +36,6 @@ from collections import defaultdict
 from pathlib import Path
 
 from compute_spreads import indexador_group as _indexador_group
-from compute_spreads import build_spline as _build_spline
 from sectors import SECTORS, classify as _classify_setor, clean_emissor
 
 DU_POR_ANO = 252.0
@@ -58,43 +57,6 @@ DISPERSION_INDEXADORES = ["IPCA+", "DI+"]
 # helpers
 # ----------------------------------------------------------------------------
 
-def _backfill_prefixados(snap: dict) -> None:
-    """Calcula spread_pp para prefixados *in-place* via ETTJ Pré interpolada.
-
-    Os snapshots em history/ podem ter sido gerados antes do item 12 e portanto
-    têm ``spread_pp = None`` para todo o grupo Prefixado. Aqui aplicamos a
-    fórmula composta usando a curva ETTJ Pré (ettj_pre quando presente, ou
-    ettj_ipca.taxa_pref como fallback) interpolada por spline no
-    ``duration_dias`` do papel.
-
-    Não toca em papéis que já têm spread_pp computado (idempotente para
-    snapshots futuros gerados pelo compute_spreads atualizado).
-    """
-    pre_rows = snap.get("ettj_pre") or [
-        {"vertice_du": r["vertice_du"], "taxa_pre": r.get("taxa_pref")}
-        for r in (snap.get("ettj_ipca") or [])
-        if r.get("taxa_pref") is not None
-    ]
-    curve = _build_spline(pre_rows, "taxa_pre")
-    if curve is None:
-        return
-    for d in snap.get("debentures", []):
-        if _indexador_group(d.get("indice")) != "Prefixado":
-            continue
-        if d.get("spread_pp") is not None:
-            continue
-        taxa = d.get("taxa_indicativa")
-        dur = d.get("duration_dias")
-        if taxa is None or dur is None or d.get("flag_iliquido"):
-            continue
-        ref_pre = float(curve(dur))
-        sp = ((1 + taxa / 100.0) / (1 + ref_pre / 100.0) - 1) * 100.0
-        d["spread_pp"] = round(sp, 4)
-        d["taxa_benchmark"] = round(ref_pre, 4)
-        d["benchmark_titulo"] = "ETTJ Pré"
-        d["spread_metodo"] = "ettj_pre_interp"
-
-
 def _load_history() -> list[dict]:
     """Lê todos os snapshots em history/, ordenados por data crescente."""
     if not HIST_DIR.exists():
@@ -106,7 +68,6 @@ def _load_history() -> list[dict]:
         except json.JSONDecodeError:
             print(f"[warn ] {p} inválido, pulando", file=sys.stderr)
             continue
-        _backfill_prefixados(snap)
         snaps.append(snap)
     snaps.sort(key=lambda s: s["data_referencia"])
     return snaps
