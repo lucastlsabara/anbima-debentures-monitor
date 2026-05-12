@@ -4069,20 +4069,50 @@ function _trd_volumeByDate(rows) {
   return { dates, xs: dates.map(brDate), ys: dates.map(d => byDate.get(d)) };
 }
 
+function _trd_chooseUnit(maxVal) {
+  if (maxVal >= 1_000_000) return { divisor: 1_000_000, suffix: "MM" };
+  if (maxVal >= 1_000)     return { divisor: 1_000,     suffix: "k"  };
+  return { divisor: 1, suffix: "" };
+}
+
+function _trd_formatBarLabel(rawVal, unit) {
+  const scaled = rawVal / unit.divisor;
+  const decimals = (unit.suffix && scaled < 100) ? 1 : 0;
+  const txt = scaled.toLocaleString("pt-BR", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+  return unit.suffix ? `${txt} ${unit.suffix}` : txt;
+}
+
 function redrawTrdVolumeChart(rows) {
   const div = "trd-volume-chart";
   const el = document.getElementById(div);
   if (!el) return;
   const { xs, ys } = _trd_volumeByDate(rows || []);
+  const maxRaw = ys.length ? Math.max(...ys) : 0;
+  const unit = _trd_chooseUnit(maxRaw);
+  const ysScaled = ys.map(v => v / unit.divisor);
+  const barLabels = ys.map(v => _trd_formatBarLabel(v, unit));
+  const yTitle = unit.suffix ? `Volume (R$ ${unit.suffix})` : "Volume (R$)";
+  const yMax = ysScaled.length ? Math.max(...ysScaled) : 0;
+  const base = PLOTLY_LAYOUT();
+  const fgColor = base.font && base.font.color;
   const trace = {
     type: "bar",
-    x: xs, y: ys,
+    x: xs, y: ysScaled,
     marker: { color: cssVar("--accent") },
-    hovertemplate: "%{x}<br>Volume: R$ %{y:,.0f}<extra></extra>",
+    customdata: ys,
+    hovertemplate: "%{x}<br>Volume: R$ %{customdata:,.0f}<extra></extra>",
+    text: barLabels,
+    textposition: "outside",
+    texttemplate: "%{text}",
+    cliponaxis: false,
+    textfont: { color: fgColor, size: 11,
+                family: "-apple-system, BlinkMacSystemFont, Inter, sans-serif" },
   };
-  const base = PLOTLY_LAYOUT();
   const layout = Object.assign({}, base, {
-    margin: { t: 12, r: 18, b: 60, l: 50 },
+    margin: { t: 30, r: 18, b: 60, l: 50 },
     showlegend: false,
     xaxis: Object.assign({}, base.xaxis, {
       type: "category",
@@ -4093,9 +4123,10 @@ function redrawTrdVolumeChart(rows) {
     }),
     yaxis: Object.assign({}, base.yaxis, {
       type: "linear",
-      title: "Volume (R$)",
+      title: yTitle,
       tickformat: ",.0f",
       separatethousands: true,
+      range: yMax > 0 ? [0, yMax * 1.15] : undefined,
     }),
   });
   Plotly.react(div, [trace], layout,
