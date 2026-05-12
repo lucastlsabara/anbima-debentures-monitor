@@ -31,10 +31,6 @@ on:
         description: 'YYYY-MM-DD (apenas para mode=backfill)'
         required: false
         default: ''
-      consolidated_table_name:
-        description: 'Override do nome da tabela B3 consolidated. Vazio = probing automatico sobre CANDIDATE_TABLES. Setado = usa SOMENTE esse nome (util pra testar candidatos individualmente).'
-        required: false
-        default: ''
 
 permissions:
   contents: write
@@ -96,14 +92,8 @@ jobs:
 
       - name: Run fetch_day (consolidated)
         if: steps.mode.outputs.mode == 'fetch_day'
-        env:
-          B3_CONSOLIDATED_TABLE: ${{ inputs.consolidated_table_name }}
         run: |
-          if [ -n "$B3_CONSOLIDATED_TABLE" ]; then
-            echo "Rodando fetch_b3_trades_consolidated.py com tabela override=$B3_CONSOLIDATED_TABLE"
-          else
-            echo "Rodando fetch_b3_trades_consolidated.py (probing automatico)"
-          fi
+          echo "Rodando fetch_b3_trades_consolidated.py (5 dias uteis B3)"
           python fetch_b3_trades_consolidated.py
 
       - name: Run backfill (trade-by-trade)
@@ -114,12 +104,7 @@ jobs:
 
       - name: Run backfill (consolidated)
         if: steps.mode.outputs.mode == 'backfill'
-        env:
-          B3_CONSOLIDATED_TABLE: ${{ inputs.consolidated_table_name }}
         run: |
-          if [ -n "$B3_CONSOLIDATED_TABLE" ]; then
-            echo "Backfill consolidated com tabela override=$B3_CONSOLIDATED_TABLE"
-          fi
           echo "Rodando backfill_b3_trades_consolidated.py ${{ inputs.start_date }} ${{ inputs.end_date }}"
           python backfill_b3_trades_consolidated.py '${{ inputs.start_date }}' '${{ inputs.end_date }}'
 

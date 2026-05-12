@@ -3979,11 +3979,6 @@ let TR2_FP_INI = null, TR2_FP_FIM = null;
 let TR2_DATE_INI = null, TR2_DATE_FIM = null;
 let TR2_RANGE_ROWS = null;
 let TR2_RANGE_NDAYS = 0;
-// Uniao ordenada das colunas brutas reportadas pela B3 nos payloads
-// consolidated do range atual (ordem = primeira aparicao). Usada pela
-// tabela pra render dinamico — schema da B3 ainda nao confirmado em
-// prod, entao nao trava colunas fixas: mostra o que vier.
-let TR2_CONS_COLUMNS_ORDERED = [];
 let TR2_INDEX = null;                  // {tickers, emissores}
 const TR2_SELECTED = new Map();        // ticker -> {ticker, issuer, color}
 // Emissores adicionados explicitamente via tr2_pickEmissor. Persistem ao mudar
@@ -4179,9 +4174,6 @@ async function tr2_load() {
   if (!TR2_MANIFEST) return;
   const dateEntries = tr2_datesInRange(TR2_MANIFEST);
   const isCons = TR2_SOURCE === "consolidated";
-  // Reset por load: colunas dinamicas vao ser repopuladas durante o
-  // parse de payloads se isCons; trade-by-trade nao usa.
-  TR2_CONS_COLUMNS_ORDERED = [];
 
   // Sem dias no range: preserva TR2_SELECTED, atualiza TR2_INDEX/TR2_RANGE_ROWS
   // para o estado vazio e re-renderiza chips+chart. Sem early return — chips
@@ -4216,26 +4208,14 @@ async function tr2_load() {
     return;
   }
 
-  // Monta lista de rows. Trade-by-trade reusa schema canonico TRD_COLUMNS e
-  // filtra cancelados; consolidated mapeia via heuristica de aliases sobre
-  // p.columns (schema da B3 nao confirmado em sandbox).
+  // Trade-by-trade: schema canonico TRD_COLUMNS, filtra cancelados.
+  // Consolidated: schema fixo (B3 ConsolidatedRecords, 17 cols snake_case).
   const allRows = [];
-  // Uniao das colunas brutas (1a aparicao manda na ordem) — reset por load.
-  const consColsSeen = new Set();
-  const consColsOrdered = [];
   for (const p of payloads) {
-    if (isCons && Array.isArray(p.columns)) {
-      for (const c of p.columns) {
-        if (c && !consColsSeen.has(c)) {
-          consColsSeen.add(c);
-          consColsOrdered.push(c);
-        }
-      }
-    }
     for (const r of p.rows) {
       let obj;
       if (isCons) {
-        obj = _tr2_consRowToObj(r, p.date, p.columns);
+        obj = _tr2_consRowToObj(r, p.date);
       } else {
         obj = (typeof trd_rowToObj !== "undefined")
           ? trd_rowToObj(r, p.date)
@@ -4245,7 +4225,6 @@ async function tr2_load() {
       allRows.push(obj);
     }
   }
-  TR2_CONS_COLUMNS_ORDERED = consColsOrdered;
 
   TR2_RANGE_ROWS = allRows;
   TR2_RANGE_NDAYS = dateEntries.length;
@@ -4268,106 +4247,89 @@ async function tr2_load() {
   tr2_renderAllCharts();
 }
 
-// Helpers do schema consolidated.
+// Helpers do schema consolidated (B3 ConsolidatedRecords, 17 colunas fixas).
 //
-// Schema dos rows ainda nao foi confirmado em ambiente de prod (a B3 esta
-// bloqueada no sandbox onde a FASE 2 rodou). Mapeamos via heuristica usando
-// p.columns quando presente — qualquer header que faca match com um padrao
-// conhecido vira o campo canonico correspondente. Se a primeira execucao em
-// prod revelar headers diferentes, ajustar os padroes abaixo.
+// Schema da B3 (snake_case, casa com fetch_b3_trades_consolidated.COLUMNS):
+//   data_negocio, data_referencia, codigo_if, instrumento, isin, emissor,
+//   data_liquidacao, quantidade, pmp, preco, volume_unit, min, max,
+//   n_negocios, volume_total, grupo, extra.
 //
-// Campos canonicos pos-mapping:
-//   .ticker .issuer .setor       -> usados pelo picker/chart/tabela.
-//   .vol                          -> volume R$ (numerico).
-//   .qtd                          -> quantidade total.
-//   .n_trades                     -> numero de negocios agregados no bucket.
-//   .price .price_min .price_max  -> precos.
-//   ._group_raw                   -> valor bruto do campo intra/extragrupo
-//                                    (string ou booleano). Convertido em
-//                                    intra=true/false/null por _tr2_consIsIntra.
-function _tr2_consRowToObj(arr, date, columns) {
+// Campos canonicos pos-mapping usados pelo picker/chart/tabela:
+//   .ticker        <- codigo_if
+//   .issuer        <- emissor
+//   .instrumento   <- instrumento (CCB/CDB/CFF/...)
+//   .vol           <- volume_total (usado pelo index/chart de volume)
+//   .qtd           <- quantidade
+//   .n_trades      <- n_negocios (pode ser null)
+//   .pmp .preco .preco_min .preco_max
+//   .grupo         <- grupo bruto ("INTRAGRUPO" ou "-")
+//   .isin .data_negocio .data_referencia .data_liquidacao .volume_unit
+function _tr2_consRowToObj(arr, date) {
   const obj = { date, _source: "consolidated" };
-  if (!Array.isArray(columns) || !columns.length) {
-    // Sem schema: posicional minimo (palpite — ajustar quando schema chegar).
-    obj.ticker = arr[0]; obj.issuer = arr[1]; obj.vol = arr[2];
-    return obj;
-  }
-  for (let i = 0; i < columns.length; i++) {
-    const k = columns[i];
-    const v = arr[i];
-    obj[k] = v;
-    const kn = String(k).toLowerCase();
-    if (!obj.ticker && /(ticker|symbol|codigo|cod_negociacao|cod_instrumento)/.test(kn)) obj.ticker = v;
-    if (!obj.issuer && /(issuer|emissor)/.test(kn)) obj.issuer = v;
-    if (!obj.setor && /setor/.test(kn)) obj.setor = v;
-    if (obj.vol == null && /(volume_total|vol_total|volume_negociado|volumeneg|volume$|^vol$|^volume)/.test(kn)) obj.vol = v;
-    if (obj.n_trades == null && /(numero.*negoc|num_negocios|n_negocios|qtd_negocios|negocios|trades_count|n_trades)/.test(kn)) obj.n_trades = v;
-    if (obj.qtd == null && /(quantidade_total|qtd_total|^qtd$|^quantidade$|quantidade_negociada)/.test(kn)) obj.qtd = v;
-    if (obj.price == null && /(preco_medio|preco_med|preco_avg|avg_price|^preco$|^price$)/.test(kn)) obj.price = v;
-    if (obj.price_min == null && /(preco_min|min_price|menor_preco)/.test(kn)) obj.price_min = v;
-    if (obj.price_max == null && /(preco_max|max_price|maior_preco)/.test(kn)) obj.price_max = v;
-    if (obj._group_raw == null && /(intragrupo|intra_grupo|tipo_operac|tipo_negoc|^grupo$|tipo_grupo)/.test(kn)) obj._group_raw = v;
-  }
-  // Tolera vol/qtd/preco como string formatada (pt-BR ou en-US).
-  for (const k of ["vol", "qtd", "n_trades", "price", "price_min", "price_max"]) {
-    if (typeof obj[k] === "string") {
-      const n = Number(obj[k].replace(/\./g, "").replace(",", "."));
-      if (!isNaN(n)) obj[k] = n;
-    }
-  }
+  obj.data_negocio = arr[0];
+  obj.data_referencia = arr[1];
+  obj.codigo_if = arr[2];
+  obj.instrumento = arr[3];
+  obj.isin = arr[4];
+  obj.emissor = arr[5];
+  obj.data_liquidacao = arr[6];
+  obj.quantidade = arr[7];
+  obj.pmp = arr[8];
+  obj.preco = arr[9];
+  obj.volume_unit = arr[10];
+  obj.preco_min = arr[11];
+  obj.preco_max = arr[12];
+  obj.n_negocios = arr[13];
+  obj.volume_total = arr[14];
+  obj.grupo = arr[15];
+  // arr[16] = extra (salvo no JSON mas nao exibido).
+
+  // Campos canonicos para chart/index/picker.
+  obj.ticker = obj.codigo_if;
+  obj.issuer = obj.emissor;
+  obj.vol = _tr2_toNumber(obj.volume_total);
+  obj.qtd = _tr2_toNumber(obj.quantidade);
+  obj.n_trades = (obj.n_negocios == null) ? null : _tr2_toNumber(obj.n_negocios);
   return obj;
 }
 
-// Heuristica para classificar uma row consolidated como intra/extragrupo.
-// Retorna true (intragrupo), false (extragrupo), ou null (campo ausente
-// ou nao reconhecido — row e' deixada de fora do filtro).
+function _tr2_toNumber(v) {
+  if (v == null || v === "") return null;
+  if (typeof v === "number") return v;
+  const n = Number(String(v).replace(/\./g, "").replace(",", "."));
+  return Number.isNaN(n) ? null : n;
+}
+
+// Classificacao intra/extragrupo: coluna nativa `grupo` da B3.
+// "INTRAGRUPO" (case-insensitive) = intra; qualquer outro valor = extra.
 function _tr2_consIsIntra(r) {
-  if (!r || r._group_raw == null) return null;
-  const v = r._group_raw;
-  if (typeof v === "boolean") return v;
-  if (typeof v === "number") {
-    if (v === 1) return true;
-    if (v === 0) return false;
-    return null;
-  }
-  const s = String(v).trim().toLowerCase();
-  if (/intra/.test(s)) return true;
-  if (/extra/.test(s)) return false;
-  if (s === "true" || s === "1" || s === "s" || s === "sim") return true;
-  if (s === "false" || s === "0" || s === "n" || s === "nao" || s === "não") return false;
-  return null;
+  if (!r) return false;
+  const v = r.grupo;
+  if (v == null) return false;
+  return String(v).trim().toUpperCase() === "INTRAGRUPO";
 }
 
 // Aplica TR2_GROUP em TR2_RANGE_ROWS quando fonte = consolidated.
-// Para "intra"/"extra", rows sem _group_raw reconhecivel sao filtradas fora.
 function _tr2_filteredRows() {
   if (!TR2_RANGE_ROWS) return [];
   if (TR2_SOURCE !== "consolidated" || TR2_GROUP === "all") return TR2_RANGE_ROWS;
   const want = TR2_GROUP === "intra";
-  return TR2_RANGE_ROWS.filter(r => {
-    const intra = _tr2_consIsIntra(r);
-    if (intra === null) return false;
-    return intra === want;
-  });
+  return TR2_RANGE_ROWS.filter(r => _tr2_consIsIntra(r) === want);
 }
 
-// Habilita Intragrupo/Extragrupo no selectbox apenas quando o schema do
-// consolidated trouxe um campo de grupo reconhecivel. Sem isso, opcoes
-// ficam desabilitadas (placeholder "Indisponivel") e qualquer selecao
-// previa fora de "Todos" e' resetada.
+// Coluna `grupo` e' nativa do schema ConsolidatedRecords — selectbox
+// Intra/Extragrupo fica sempre habilitada quando fonte=consolidated.
 function tr2_updateGroupSelectAvailability() {
   const sel = document.getElementById("tr2-group");
   if (!sel) return;
-  const hasGroup = TR2_SOURCE === "consolidated"
-    && Array.isArray(TR2_RANGE_ROWS)
-    && TR2_RANGE_ROWS.some(r => _tr2_consIsIntra(r) !== null);
+  const enabled = TR2_SOURCE === "consolidated";
   for (const opt of sel.options) {
     if (opt.value === "intra" || opt.value === "extra") {
-      opt.disabled = !hasGroup;
-      opt.title = hasGroup ? "" : "Indisponível para este schema";
+      opt.disabled = !enabled;
+      opt.title = "";
     }
   }
-  if (!hasGroup && (TR2_GROUP === "intra" || TR2_GROUP === "extra")) {
+  if (!enabled && (TR2_GROUP === "intra" || TR2_GROUP === "extra")) {
     TR2_GROUP = "all";
     sel.value = "all";
   }
@@ -4732,12 +4694,8 @@ function tr2_renderTable() {
 }
 
 function _tr2_buildConsTable(containerId, rows) {
-  // Tabela para fonte consolidated. Schema da B3 ainda nao foi confirmado
-  // em prod: render dinamico baseado em TR2_CONS_COLUMNS_ORDERED (uniao
-  // ordenada das colunas brutas dos payloads do range). Cada coluna ganha
-  // formatter automatico baseado em sniff dos valores observados (numerico
-  // pt-BR vs string). Se nao houver colunas reportadas (fallback raro),
-  // cai pro schema heuristico antigo.
+  // Tabela com schema fixo da B3 ConsolidatedRecords. 1 linha = 1 instrumento
+  // negociado em um dia. Volumes/precos formatados em pt-BR.
   const fmtNum = (digits) => (c) => {
     const v = c.getValue();
     if (v == null || v === "") return "—";
@@ -4746,8 +4704,33 @@ function _tr2_buildConsTable(containerId, rows) {
     return n.toLocaleString("pt-BR",
       { minimumFractionDigits: digits, maximumFractionDigits: digits });
   };
+  const fmtInt = c => {
+    const v = c.getValue();
+    if (v == null || v === "") return "—";
+    return trd_fmtIntBR(v);
+  };
+  const fmtDate = c => {
+    const v = c.getValue();
+    return (v == null || v === "" || v === "-") ? "—" : brDate(String(v));
+  };
+  const fmtText = c => {
+    const v = c.getValue();
+    return (v == null || v === "" || v === "-") ? "—" : String(v);
+  };
+  const fmtGrupo = c => {
+    const v = c.getValue();
+    if (v == null || v === "" || v === "-") return "Extragrupo";
+    return String(v).trim().toUpperCase() === "INTRAGRUPO" ? "Intragrupo" : "Extragrupo";
+  };
 
-  const baseOpts = {
+  const _set = (key) => {
+    const s = new Set();
+    for (const r of rows) if (r[key]) s.add(r[key]);
+    return ["", ...[...s].sort()];
+  };
+  const instrumentoOpts = _set("instrumento");
+
+  return new Tabulator(containerId, {
     data: rows,
     layout: "fitDataStretch",
     resizableColumns: true,
@@ -4755,97 +4738,45 @@ function _tr2_buildConsTable(containerId, rows) {
     pagination: true,
     paginationSize: 50,
     paginationSizeSelector: [25, 50, 100, 250],
-    initialSort: [{ column: "date", dir: "desc" }],
-  };
-
-  const dateCol = {
-    title: "Data", field: "date", width: 100,
-    formatter: c => brDate(c.getValue()),
-    headerFilter: "input", headerFilterFunc: trd_likeCI,
-    headerFilterPlaceholder: "AAAA-MM",
-  };
-
-  if (Array.isArray(TR2_CONS_COLUMNS_ORDERED) && TR2_CONS_COLUMNS_ORDERED.length) {
-    const columns = [dateCol];
-    for (const raw of TR2_CONS_COLUMNS_ORDERED) {
-      const kn = String(raw).toLowerCase();
-      const looksMonetary = /(volume|vol_|preco|price|valor|montante)/.test(kn);
-      const looksIntegerCount = /(qtd|quantidade|num_|numero_|n_neg|negocios|count|trades)/.test(kn);
-      // Sniff numerico: amostra ate 50 valores nao-nulos; se >=80% sao
-      // numericos (apos normalizar pt-BR), formata como numero.
-      let sampled = 0;
-      let numeric = 0;
-      for (const r of rows) {
-        const v = r[raw];
-        if (v == null || v === "") continue;
-        sampled += 1;
-        if (typeof v === "number") { numeric += 1; }
-        else if (typeof v === "string") {
-          const n = Number(v.replace(/\./g, "").replace(",", "."));
-          if (!Number.isNaN(n)) numeric += 1;
-        }
-        if (sampled >= 50) break;
-      }
-      const isNumeric = sampled > 0 && numeric / sampled >= 0.8;
-      const col = {
-        title: raw,
-        field: raw,
-        headerFilter: "input",
-      };
-      if (isNumeric) {
-        col.hozAlign = "right";
-        col.headerFilterFunc = trd_numericFilter;
-        if (looksIntegerCount && !looksMonetary) {
-          col.formatter = c => trd_fmtIntBR(c.getValue());
-        } else {
-          col.formatter = fmtNum(looksMonetary ? 2 : 6);
-        }
-      } else {
-        col.headerFilterFunc = trd_likeCI;
-      }
-      columns.push(col);
-    }
-    return new Tabulator(containerId, { ...baseOpts, columns });
-  }
-
-  // Fallback: schema heuristico (mantido pra robustez quando p.columns
-  // chegar vazio da B3).
-  const _set = (key) => {
-    const s = new Set();
-    for (const r of rows) if (r[key]) s.add(r[key]);
-    return ["", ...[...s].sort()];
-  };
-  const setorOpts = _set("setor");
-  return new Tabulator(containerId, {
-    ...baseOpts,
+    initialSort: [{ column: "data_negocio", dir: "desc" }],
     columns: [
-      dateCol,
-      { title: "Ticker", field: "ticker", width: 110, headerFilter: "input" },
-      { title: "Emissor", field: "issuer", minWidth: 200, headerFilter: "input" },
-      { title: "Setor", field: "setor", width: 160,
+      { title: "Data Negócio", field: "data_negocio", width: 120,
+        formatter: fmtDate,
+        headerFilter: "input", headerFilterFunc: trd_likeCI },
+      { title: "Código IF", field: "codigo_if", width: 130, headerFilter: "input" },
+      { title: "Instrumento", field: "instrumento", width: 130,
         headerFilter: "list",
-        headerFilterParams: { values: setorOpts, clearable: true },
+        headerFilterParams: { values: instrumentoOpts, clearable: true },
         headerFilterFunc: "=" },
-      { title: "Nº Negócios", field: "n_trades", width: 110, hozAlign: "right",
-        formatter: c => trd_fmtIntBR(c.getValue()),
+      { title: "Emissor", field: "emissor", minWidth: 200, headerFilter: "input" },
+      { title: "ISIN", field: "isin", width: 140,
+        formatter: fmtText, headerFilter: "input" },
+      { title: "Liquidação", field: "data_liquidacao", width: 110,
+        formatter: fmtDate,
+        headerFilter: "input", headerFilterFunc: trd_likeCI },
+      { title: "Quantidade", field: "quantidade", width: 120, hozAlign: "right",
+        formatter: fmtInt,
         headerFilter: "input", headerFilterFunc: trd_numericFilter },
-      { title: "Qtd Total", field: "qtd", width: 110, hozAlign: "right",
-        formatter: c => trd_fmtIntBR(c.getValue()),
+      { title: "Nº Negócios", field: "n_negocios", width: 110, hozAlign: "right",
+        formatter: fmtInt,
         headerFilter: "input", headerFilterFunc: trd_numericFilter },
-      { title: "Vol Total (R$)", field: "vol", width: 140, hozAlign: "right",
+      { title: "PMP", field: "pmp", width: 110, hozAlign: "right",
+        formatter: fmtNum(6),
+        headerFilter: "input", headerFilterFunc: trd_numericFilter },
+      { title: "Preço", field: "preco", width: 110, hozAlign: "right",
+        formatter: fmtNum(6),
+        headerFilter: "input", headerFilterFunc: trd_numericFilter },
+      { title: "Mínimo", field: "preco_min", width: 110, hozAlign: "right",
+        formatter: fmtNum(6),
+        headerFilter: "input", headerFilterFunc: trd_numericFilter },
+      { title: "Máximo", field: "preco_max", width: 110, hozAlign: "right",
+        formatter: fmtNum(6),
+        headerFilter: "input", headerFilterFunc: trd_numericFilter },
+      { title: "Volume Total (R$)", field: "volume_total", width: 160, hozAlign: "right",
         formatter: fmtNum(2),
         headerFilter: "input", headerFilterFunc: trd_numericFilter },
-      { title: "Preço Médio", field: "price", width: 120, hozAlign: "right",
-        formatter: fmtNum(6),
-        headerFilter: "input", headerFilterFunc: trd_numericFilter },
-      { title: "Preço Mín", field: "price_min", width: 110, hozAlign: "right",
-        formatter: fmtNum(6),
-        headerFilter: "input", headerFilterFunc: trd_numericFilter },
-      { title: "Preço Máx", field: "price_max", width: 110, hozAlign: "right",
-        formatter: fmtNum(6),
-        headerFilter: "input", headerFilterFunc: trd_numericFilter },
-      { title: "Grupo", field: "_group_raw", width: 120,
-        formatter: c => c.getValue() == null ? "—" : String(c.getValue()),
+      { title: "Grupo", field: "grupo", width: 120,
+        formatter: fmtGrupo,
         headerFilter: "input", headerFilterFunc: trd_likeCI },
     ],
   });
