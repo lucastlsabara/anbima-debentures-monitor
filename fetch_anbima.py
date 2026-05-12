@@ -19,7 +19,6 @@ import argparse
 import json
 import sys
 import time
-from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
@@ -70,7 +69,8 @@ def _http_get(url: str) -> requests.Response:
         else:
             if r.status_code < 400 or r.status_code in (404,):
                 # Sucesso ou 404 (resposta legítima a propagar para o caller).
-                r.raise_for_status() if r.status_code >= 400 else None
+                if r.status_code >= 400:
+                    r.raise_for_status()
                 return r
             if r.status_code in (429,) or r.status_code >= 500:
                 last_exc = requests.HTTPError(

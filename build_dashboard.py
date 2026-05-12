@@ -30,13 +30,14 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
 
 from compute_spreads import indexador_group as _indexador_group
 from compute_spreads import build_spline as _build_spline
-from sectors import SECTORS, classify as _classify_setor
+from sectors import SECTORS, classify as _classify_setor, clean_emissor
 
 DU_POR_ANO = 252.0
 
@@ -158,19 +159,12 @@ def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values)
 
 
-def _clean_emissor(name: str | None) -> str:
-    if not name:
-        return ""
-    import re
-    return re.sub(r"\s*\(\*+\)\s*", " ", name).strip()
-
-
 def _enrich(papers: list[dict]) -> list[dict]:
     """Anota cada papel com emissor normalizado + grupo de indexador + setor."""
     out = []
     for p in papers:
         e = dict(p)
-        emissor_clean = _clean_emissor(p.get("emissor"))
+        emissor_clean = clean_emissor(p.get("emissor"))
         e["emissor_clean"] = emissor_clean
         e["indexador_grupo"] = _indexador_group(p.get("indice"))
         e["setor"] = _classify_setor(p.get("codigo"), p.get("emissor"))
@@ -687,7 +681,6 @@ def write_html(out_path: Path, build_version: str) -> int:
     html = (ROOT / "index.template.html").read_text(encoding="utf-8")
     # Substitui placeholder; se o template já estiver com a versão expandida
     # (artefato do último build), normaliza primeiro para o placeholder.
-    import re
     html = re.sub(
         r'const BUILD_VERSION = "[^"]*";',
         f'const BUILD_VERSION = "{build_version}";',
