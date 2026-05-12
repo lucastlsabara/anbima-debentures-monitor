@@ -1,7 +1,7 @@
 # anbima-debentures-monitor
 
 Dashboard diário do mercado secundário de debêntures (ANBIMA), atualizado
-automaticamente via Routines do Claude Code.
+automaticamente via Routine no Claude.ai.
 
 ## Pipeline (3 scripts, sem backend)
 
@@ -84,6 +84,11 @@ Tudo é gerado por `python3 build_dashboard.py` lendo `history/`:
 | `data/movements.json` | tabela completa do dia + Δ D-1/D-5/D-21 | ~220 KB |
 | `data/dispersion/_index.json` | datas com snapshot disponível | < 1 KB |
 | `data/dispersion/<date>.json` | papéis IPCA+ daquele dia (codigo, setor, dur, taxa, spread) | ~80 KB/dia |
+| `data/titpub_history.json` | série histórica de taxas indicativas de NTN-B/LTN/NTN-F (ms.txt) | ~50 KB |
+| `data/b3_trades/<date>.json` | trades B3 trade-by-trade do dia (DEB/CRA/CRI/CFF/COE) | ~1-3 MB/dia |
+| `data/b3_trades/manifest.json` | índice de datas + totais (n_trades, vol_brl) | < 5 KB |
+| `data/b3_trades_consolidated/<date>.json` | consolidados B3 (pmp, vol total, min/max) por instrumento × dia | ~200-500 KB/dia |
+| `data/b3_trades_consolidated/manifest.json` | índice de datas + total_rows | < 2 KB |
 
 Garantia de design: cada arquivo individual fica < 5 MB mesmo com 252 dias
 de histórico. Dispersion e overview escalam por número de dias (lazy load
@@ -103,9 +108,9 @@ Brava, Origem.
 
 ## Pipeline de coleta (automação externa)
 
-Trigger: **Routine do Claude Code, 23h BRT diariamente**. A configuração da
-routine vive fora do repositório (no painel do Claude Code do operador), mas
-o que ela executa está versionado abaixo:
+Trigger: **Routine no Claude.ai, 23h BRT diariamente**. A configuração da
+routine vive fora do repositório (no painel `claude.ai/code/routines` do
+operador), mas o que ela executa está versionado abaixo:
 
 Janela de catch-up: **[hoje, D-1, D-2, D-3, D-4]** — cinco datas, hoje + 4
 anteriores (em dias corridos, sem pular fim de semana). A janela larga
@@ -267,6 +272,42 @@ VWAP (line) + volume R$ por bucket (stacked bar), com cor por **emissor**
 `data/b3_trades/`. Quando todos os tickers ANBIMA de um emissor estão
 selecionados, um chip agregador do emissor aparece antes dos chips de
 ticker — clicar no X remove todos de uma vez.
+
+Filtros disponíveis:
+
+- **Fonte**: `Trade-by-trade` (`data/b3_trades/`) ou `Consolidated`
+  (`data/b3_trades_consolidated/`). O consolidated agrega por instrumento ×
+  dia (PMP, volume total, min/max) — útil quando o chart trade-by-trade vira
+  ruído. Toggle preserva os tickers selecionados ao trocar.
+- **Grupo**: `INTRAGRUPO` vs `-` (não-intragrupo). Filtro disponível apenas
+  na fonte consolidated, onde a coluna `grupo` da B3 marca operações
+  intragrupo (entre instituições do mesmo conglomerado). Default exibe os
+  dois grupos.
+
+**Invariante de datas**: o seletor garante `Data Anterior <= Data Atual`. Se
+o usuário escolher data anterior posterior à data atual, o componente
+empurra a data atual pra frente automaticamente.
+
+## Automação B3
+
+O pipeline de trades B3 roda no GitHub Actions, não na Routine ANBIMA — a
+sandbox da Routine bloqueia `arquivos.b3.com.br` por allowlist (`x-deny-reason:
+host_not_allowed`).
+
+Workflow: `.github/workflows/b3_trades.yml`
+
+- **Cron**: `0 2 * * 2-6` (UTC) = 23h BRT seg-sex, alinhado à janela ANBIMA
+- **Modo padrão (schedule)**: roda `fetch_b3_trades.py` +
+  `fetch_b3_trades_consolidated.py`, depois `build_dashboard.py`, commit em main
+- **Modo manual (workflow_dispatch)**: aceita `mode=fetch_day` ou
+  `mode=backfill` com `start_date` / `end_date`
+- **Janela**: 5 dias úteis B3 mais recentes (HOJE se útil + D-1..D-4)
+- **Padrão delete + write atômico**: cada execução zera e regrava esses 5
+  dias para capturar correções retroativas; histórico antigo nunca é tocado
+- **Falha de rede após retries**: preserva arquivo existente (não gera dado
+  sintético); exit code != 0 sinaliza a falha
+- **Race com Routine ANBIMA**: workflow faz `git pull --rebase origin main`
+  antes do push (ambos commitam em main na mesma janela)
 
 ## Convenção
 
