@@ -112,7 +112,7 @@ def _post_page(date_iso: str, page: int) -> dict:
             last_exc = exc
             if attempt == MAX_RETRIES - 1:
                 break
-            backoff = 2 ** attempt
+            backoff = 2 ** (attempt + 1)
             print(f"  [retry {attempt + 1}/{MAX_RETRIES}] {exc}; aguardando {backoff}s")
             time.sleep(backoff)
     raise RuntimeError(f"Falha apos {MAX_RETRIES} tentativas: {last_exc}")
