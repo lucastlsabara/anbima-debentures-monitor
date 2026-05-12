@@ -4070,6 +4070,12 @@ function _trd_volumeByDate(rows) {
 }
 
 function _trd_fmtVolPerBar(rawVal) {
+  if (rawVal >= 1_000_000_000) {
+    const bi = rawVal / 1_000_000_000;
+    let s = bi.toFixed(2);
+    s = parseFloat(s).toString();
+    return s.replace('.', ',') + ' Bi';
+  }
   if (rawVal >= 1_000_000) {
     const mm = rawVal / 1_000_000;
     let s = mm.toFixed(2);
@@ -4086,6 +4092,28 @@ function _trd_fmtVolPerBar(rawVal) {
     return Math.round(rawVal).toString();
   }
   return '0';
+}
+
+function _trd_axisTicksFromMax(maxVal) {
+  if (!(maxVal > 0)) return { tickvals: [0], ticktext: ['0'] };
+  const target_ticks = 5;
+  const rough = maxVal / target_ticks;
+  const exp = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / exp;
+  let step_norm;
+  if (norm <= 1) step_norm = 1;
+  else if (norm <= 2) step_norm = 2;
+  else if (norm <= 2.5) step_norm = 2.5;
+  else if (norm <= 5) step_norm = 5;
+  else step_norm = 10;
+  const step = step_norm * exp;
+  const tickvals = [];
+  for (let v = 0; v <= maxVal * 1.05; v += step) {
+    tickvals.push(v);
+    if (tickvals.length > 12) break;
+  }
+  const ticktext = tickvals.map(v => v === 0 ? '0' : _trd_fmtVolPerBar(v));
+  return { tickvals, ticktext };
 }
 
 function redrawTrdVolumeChart(rows) {
@@ -4108,6 +4136,8 @@ function redrawTrdVolumeChart(rows) {
     showarrow: false,
     font: { color: "#d6dde7", size: 11 },
   }));
+  const maxVal = ys.length ? Math.max(...ys) : 0;
+  const { tickvals, ticktext } = _trd_axisTicksFromMax(maxVal);
   const layout = Object.assign({}, base, {
     margin: { t: 30, r: 18, b: 60, l: 60 },
     showlegend: false,
@@ -4122,8 +4152,8 @@ function redrawTrdVolumeChart(rows) {
     yaxis: Object.assign({}, base.yaxis, {
       type: "linear",
       title: "",
-      tickformat: "~s",
-      separatethousands: true,
+      tickvals: tickvals,
+      ticktext: ticktext,
     }),
   });
   Plotly.react(div, [trace], layout,
