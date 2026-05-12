@@ -699,10 +699,10 @@
 <section id="tab-trades-b3" class="tab hide">
   <div class="panel">
     <div class="controls">
-      <label>De:
+      <label>Data Anterior:
         <input type="text" id="trd-date-ini" placeholder="DD-MM-YYYY">
       </label>
-      <label>Até:
+      <label>Data Atual:
         <input type="text" id="trd-date-fim" placeholder="DD-MM-YYYY">
       </label>
       <span id="trd-status" class="trd-status"></span>
@@ -725,10 +725,10 @@
 <section id="tab-trades" class="tab hide">
   <div class="panel">
     <div class="controls tr2-toolbar">
-      <label>De:
+      <label>Data Anterior:
         <input type="text" id="tr2-date-ini" placeholder="DD-MM-YYYY">
       </label>
-      <label>Até:
+      <label>Data Atual:
         <input type="text" id="tr2-date-fim" placeholder="DD-MM-YYYY">
       </label>
       <label>Fonte:
@@ -3680,17 +3680,29 @@ async function renderTradesB3() {
   if (TRD_FP_FIM) TRD_FP_FIM.destroy();
   TRD_FP_INI = flatpickr("#trd-date-ini", {
     dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
-    enable: dates, defaultDate: TRD_DATE_INI, minDate: earliest, maxDate: latest,
+    enable: dates, defaultDate: TRD_DATE_INI, minDate: earliest, maxDate: TRD_DATE_FIM || latest,
     onChange: (_, d) => {
-      if (d) TRD_DATE_INI = d;
+      if (!d) return;
+      TRD_DATE_INI = d;
+      if (TRD_DATE_FIM && TRD_DATE_INI > TRD_DATE_FIM) {
+        TRD_DATE_FIM = TRD_DATE_INI;
+        if (TRD_FP_FIM) TRD_FP_FIM.setDate(TRD_DATE_FIM, false);
+      }
+      if (TRD_FP_FIM) TRD_FP_FIM.set("minDate", TRD_DATE_INI);
       trd_scheduleRecalc();
     },
   });
   TRD_FP_FIM = flatpickr("#trd-date-fim", {
     dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
-    enable: dates, defaultDate: TRD_DATE_FIM, minDate: earliest, maxDate: latest,
+    enable: dates, defaultDate: TRD_DATE_FIM, minDate: TRD_DATE_INI || earliest, maxDate: latest,
     onChange: (_, d) => {
-      if (d) TRD_DATE_FIM = d;
+      if (!d) return;
+      TRD_DATE_FIM = d;
+      if (TRD_DATE_INI && TRD_DATE_FIM < TRD_DATE_INI) {
+        TRD_DATE_INI = TRD_DATE_FIM;
+        if (TRD_FP_INI) TRD_FP_INI.setDate(TRD_DATE_INI, false);
+      }
+      if (TRD_FP_INI) TRD_FP_INI.set("maxDate", TRD_DATE_FIM);
       trd_scheduleRecalc();
     },
   });
@@ -4094,17 +4106,29 @@ async function tr2_initDatesAndLoad() {
   if (TR2_FP_FIM) TR2_FP_FIM.destroy();
   TR2_FP_INI = flatpickr("#tr2-date-ini", {
     dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
-    enable: dates, defaultDate: TR2_DATE_INI, minDate: earliest, maxDate: latest,
+    enable: dates, defaultDate: TR2_DATE_INI, minDate: earliest, maxDate: TR2_DATE_FIM || latest,
     onChange: (_, d) => {
-      if (d) TR2_DATE_INI = d;
+      if (!d) return;
+      TR2_DATE_INI = d;
+      if (TR2_DATE_FIM && TR2_DATE_INI > TR2_DATE_FIM) {
+        TR2_DATE_FIM = TR2_DATE_INI;
+        if (TR2_FP_FIM) TR2_FP_FIM.setDate(TR2_DATE_FIM, false);
+      }
+      if (TR2_FP_FIM) TR2_FP_FIM.set("minDate", TR2_DATE_INI);
       tr2_scheduleRecalc();
     },
   });
   TR2_FP_FIM = flatpickr("#tr2-date-fim", {
     dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
-    enable: dates, defaultDate: TR2_DATE_FIM, minDate: earliest, maxDate: latest,
+    enable: dates, defaultDate: TR2_DATE_FIM, minDate: TR2_DATE_INI || earliest, maxDate: latest,
     onChange: (_, d) => {
-      if (d) TR2_DATE_FIM = d;
+      if (!d) return;
+      TR2_DATE_FIM = d;
+      if (TR2_DATE_INI && TR2_DATE_FIM < TR2_DATE_INI) {
+        TR2_DATE_INI = TR2_DATE_FIM;
+        if (TR2_FP_INI) TR2_FP_INI.setDate(TR2_DATE_INI, false);
+      }
+      if (TR2_FP_INI) TR2_FP_INI.set("maxDate", TR2_DATE_FIM);
       tr2_scheduleRecalc();
     },
   });
