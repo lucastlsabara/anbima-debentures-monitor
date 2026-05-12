@@ -4069,20 +4069,23 @@ function _trd_volumeByDate(rows) {
   return { dates, xs: dates.map(brDate), ys: dates.map(d => byDate.get(d)) };
 }
 
-function _trd_chooseUnit(maxVal) {
-  if (maxVal >= 1_000_000) return { divisor: 1_000_000, suffix: "MM" };
-  if (maxVal >= 1_000)     return { divisor: 1_000,     suffix: "k"  };
-  return { divisor: 1, suffix: "" };
-}
-
-function _trd_formatBarLabel(rawVal, unit) {
-  const scaled = rawVal / unit.divisor;
-  const decimals = (unit.suffix && scaled < 100) ? 1 : 0;
-  const txt = scaled.toLocaleString("pt-BR", {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  });
-  return unit.suffix ? `${txt} ${unit.suffix}` : txt;
+function _trd_fmtVolPerBar(rawVal) {
+  if (rawVal >= 1_000_000) {
+    const mm = rawVal / 1_000_000;
+    let s = mm.toFixed(2);
+    s = parseFloat(s).toString();
+    return s.replace('.', ',') + ' MM';
+  }
+  if (rawVal >= 1_000) {
+    const k = rawVal / 1_000;
+    let s = k.toFixed(1);
+    s = parseFloat(s).toString();
+    return s.replace('.', ',') + ' k';
+  }
+  if (rawVal > 0) {
+    return Math.round(rawVal).toString();
+  }
+  return '0';
 }
 
 function redrawTrdVolumeChart(rows) {
@@ -4090,30 +4093,25 @@ function redrawTrdVolumeChart(rows) {
   const el = document.getElementById(div);
   if (!el) return;
   const { xs, ys } = _trd_volumeByDate(rows || []);
-  const maxRaw = ys.length ? Math.max(...ys) : 0;
-  const unit = _trd_chooseUnit(maxRaw);
-  const ysScaled = ys.map(v => v / unit.divisor);
-  const barLabels = ys.map(v => _trd_formatBarLabel(v, unit));
-  const yTitle = unit.suffix ? `Volume (R$ ${unit.suffix})` : "Volume (R$)";
-  const yMax = ysScaled.length ? Math.max(...ysScaled) : 0;
   const base = PLOTLY_LAYOUT();
-  const fgColor = base.font && base.font.color;
   const trace = {
     type: "bar",
-    x: xs, y: ysScaled,
+    x: xs, y: ys,
     marker: { color: cssVar("--accent") },
-    customdata: ys,
-    hovertemplate: "%{x}<br>Volume: R$ %{customdata:,.0f}<extra></extra>",
-    text: barLabels,
-    textposition: "outside",
-    texttemplate: "%{text}",
-    cliponaxis: false,
-    textfont: { color: fgColor, size: 11,
-                family: "-apple-system, BlinkMacSystemFont, Inter, sans-serif" },
+    hovertemplate: "%{x}<br>Volume: R$ %{y:,.0f}<extra></extra>",
   };
+  const annotations = xs.map((x, i) => ({
+    text: _trd_fmtVolPerBar(ys[i]),
+    x: x,
+    y: ys[i],
+    yshift: 12,
+    showarrow: false,
+    font: { color: "#d6dde7", size: 11 },
+  }));
   const layout = Object.assign({}, base, {
-    margin: { t: 30, r: 18, b: 60, l: 50 },
+    margin: { t: 30, r: 18, b: 60, l: 60 },
     showlegend: false,
+    annotations: annotations,
     xaxis: Object.assign({}, base.xaxis, {
       type: "category",
       categoryorder: "array",
@@ -4123,10 +4121,9 @@ function redrawTrdVolumeChart(rows) {
     }),
     yaxis: Object.assign({}, base.yaxis, {
       type: "linear",
-      title: yTitle,
-      tickformat: ",.0f",
+      title: "",
+      tickformat: "~s",
       separatethousands: true,
-      range: yMax > 0 ? [0, yMax * 1.15] : undefined,
     }),
   });
   Plotly.react(div, [trace], layout,
