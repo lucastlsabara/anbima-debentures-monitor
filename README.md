@@ -214,10 +214,6 @@ python3 fetch_b3_trades_consolidated.py
 python3 fetch_b3_trades.py              2026-05-08
 python3 fetch_b3_trades_consolidated.py 2026-05-08
 
-# 2b. override do nome da tabela do endpoint consolidated
-B3_CONSOLIDATED_TABLE=NomeCorreto python3 fetch_b3_trades_consolidated.py
-python3 fetch_b3_trades_consolidated.py --table NomeCorreto
-
 # 3. se ajustar a lógica em sectors.py, reaplica a classificação
 #    em todos os snapshots já gravados (idempotente, sem rede)
 python3 recompute_sectors.py
@@ -228,7 +224,9 @@ Saídas:
 - `data/b3_trades/` — JSON colunar minificado por dia útil (`{YYYY-MM-DD}.json`)
   + `manifest.json` com índice de datas, totais e filenames.
 - `data/b3_trades_consolidated/` — mesmo formato (1 JSON por dia útil +
-  `manifest.json`), schema bruto vindo da B3 (`columns` + `rows` passthrough).
+  `manifest.json`), schema fixo da tabela `ConsolidatedRecords` da B3
+  (17 colunas snake_case: `data_negocio`, `codigo_if`, `instrumento`,
+  `emissor`, `volume_total`, `grupo` etc.).
 
 A aba carrega o manifest no boot, faz fetch lazy dos dias do range escolhido
 e cacheia em memória durante a sessão.
