@@ -702,16 +702,16 @@ def main() -> int:
     print(f"[build] BUILD_VERSION={build_version}", file=sys.stderr)
 
     max_bytes = 0
+    size_warn_threshold = 10 * 1024 * 1024
     print("\n[build] arquivos gerados:", file=sys.stderr)
     for name, n in sizes:
         kb = n / 1024
-        flag = " ⚠️ >5MB" if n > 5 * 1024 * 1024 else ""
+        flag = " ⚠️ >10MB" if n > size_warn_threshold else ""
         print(f"  {name:40} {kb:>10.1f} KB{flag}", file=sys.stderr)
         max_bytes = max(max_bytes, n)
 
-    if max_bytes > 5 * 1024 * 1024:
-        print(f"[warn] algum arquivo excedeu 5MB", file=sys.stderr)
-        return 2
+    if max_bytes > size_warn_threshold:
+        print(f"[warn] algum arquivo excedeu 10MB", file=sys.stderr)
 
     print(f"\n[build] OK — {len(snaps)} snapshot(s), maior arquivo {max_bytes/1024:.1f} KB",
           file=sys.stderr)

@@ -2233,25 +2233,44 @@ function buildMovTable() {
     if (!parts.length) return true;
     return parts.some(p => s.includes(p));
   };
-  // Numeric: suporta sintaxe '>5', '<10', '>=2.5', '<=8', '=3' ou apenas
-  // substring se não casar com nenhum desses operadores.
+  // Numeric: numero puro = IGUALDADE ESTRITA; operadores '>', '>=', '<',
+  // '<=', '=', '==' explicitos; range "A-B" inclusivo. Tolera espacos e
+  // virgula decimal. Termo nao parseavel: nao filtra (retorna true).
   const numericFilter = (term, value) => {
-    if (term == null || term === "") return true;
+    if (term == null) return true;
+    if (typeof term !== "string" && typeof term !== "number") return true;
     const s = String(term).trim();
-    if (value == null) return false;
-    const m = s.match(/^(>=|<=|>|<|=)\s*(-?\d+(?:[.,]\d+)?)$/);
-    if (m) {
-      const op = m[1];
-      const ref = parseFloat(m[2].replace(",", "."));
-      const v = Number(value);
+    if (s === "") return true;
+    const num = "(-?\\d+(?:[.,]\\d+)?)";
+    const v = (value == null) ? NaN : Number(value);
+    const mOp = s.match(new RegExp("^(>=|<=|==|=|>|<)\\s*" + num + "\\s*$"));
+    if (mOp) {
       if (Number.isNaN(v)) return false;
-      if (op === ">") return v > ref;
-      if (op === "<") return v < ref;
+      const op = mOp[1];
+      const ref = parseFloat(mOp[2].replace(",", "."));
+      if (op === ">")  return v > ref;
+      if (op === "<")  return v < ref;
       if (op === ">=") return v >= ref;
       if (op === "<=") return v <= ref;
-      if (op === "=") return v === ref;
+      if (op === "=" || op === "==") return v === ref;
     }
-    return likeCI(term, value);
+    // Numero puro (inclui "-N"): igualdade estrita. Avaliado antes de range
+    // para que "-5" sozinho seja igualdade.
+    const mNum = s.match(new RegExp("^" + num + "$"));
+    if (mNum) {
+      if (Number.isNaN(v)) return false;
+      const ref = parseFloat(mNum[1].replace(",", "."));
+      return v === ref;
+    }
+    const mRange = s.match(new RegExp("^" + num + "\\s*-\\s*" + num + "$"));
+    if (mRange) {
+      if (Number.isNaN(v)) return false;
+      let a = parseFloat(mRange[1].replace(",", "."));
+      let b = parseFloat(mRange[2].replace(",", "."));
+      if (a > b) { const t = a; a = b; b = t; }
+      return v >= a && v <= b;
+    }
+    return true;
   };
   const setorOpts = (() => {
     const all = new Set();
@@ -2304,11 +2323,11 @@ function buildMovTable() {
         formatter: c => c.getValue() ? brDate(c.getValue()) : "-" },
       { title:"Duration", field:"duration_anos", width:90, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">2",
+        headerFilterPlaceholder: "2, >2",
         formatter: c => fmtAnos(c.getValue()) },
       { title:"PU (R$)", field:"pu", width:120, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">1000",
+        headerFilterPlaceholder: "1000, >1000",
         formatter: c => {
           const v = c.getValue();
           if (v == null) return "—";
@@ -2317,23 +2336,23 @@ function buildMovTable() {
         } },
       { title:"Taxa", field:"taxa", width:78, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">5",
+        headerFilterPlaceholder: "5, >5",
         formatter: c => fmtPct(c.getValue()) },
       { title:"%PAR", field:"pct_pu_par", width:84, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">100",
+        headerFilterPlaceholder: "100, >100",
         formatter: fmtPctPar },
       { title:"Spread Anterior", field:"spread_ref_pp", width:130, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">1.5",
+        headerFilterPlaceholder: "1.5, >1.5",
         formatter: fmtSpread },
       { title:"Spread Atual", field:"spread_pp", width:120, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">1.5",
+        headerFilterPlaceholder: "1.5, >1.5",
         formatter: fmtSpread },
       { title:"Δ Spread (bps)", field:"delta_bps", width:130, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: ">10",
+        headerFilterPlaceholder: "10, >10",
         formatter: fmtDelta },
     ],
   });
@@ -3644,7 +3663,15 @@ function trd_numericFilter(term, value) {
     if (op === "<=") return v <= ref;
     if (op === "=" || op === "==") return v === ref;
   }
-  // Range "A-B" (A nao vazio, A <= B): inclusivo nos dois lados.
+  // Numero puro (inclui "-N"): IGUALDADE ESTRITA. Avaliado antes de range
+  // para que "-5" sozinho seja igualdade, nao seja interpretado como range.
+  const mNum = s.match(new RegExp("^" + num + "$"));
+  if (mNum) {
+    if (Number.isNaN(v)) return false;
+    const ref = parseFloat(mNum[1].replace(",", "."));
+    return v === ref;
+  }
+  // Range "A-B" (dois numeros separados por "-"): inclusivo nos dois lados.
   const mRange = s.match(new RegExp("^" + num + "\\s*-\\s*" + num + "$"));
   if (mRange) {
     if (Number.isNaN(v)) return false;
@@ -3652,13 +3679,6 @@ function trd_numericFilter(term, value) {
     let b = parseFloat(mRange[2].replace(",", "."));
     if (a > b) { const t = a; a = b; b = t; }
     return v >= a && v <= b;
-  }
-  // Numero puro (inclui "-N"): threshold inclusivo ">= N".
-  const mNum = s.match(new RegExp("^" + num + "$"));
-  if (mNum) {
-    if (Number.isNaN(v)) return false;
-    const ref = parseFloat(mNum[1].replace(",", "."));
-    return v >= ref;
   }
   // Termo nao parseavel: nao filtra.
   return true;
@@ -3955,7 +3975,7 @@ function _trd_buildTradesTable(containerId, rows) {
       { title: "Qtd", field: "qtd", width: 90, hozAlign: "right",
         formatter: c => trd_fmtIntBR(c.getValue()),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">=100" },
+        headerFilterPlaceholder: "100, >100" },
       { title: "Preço", field: "price", width: 110, hozAlign: "right",
         formatter: c => {
           const v = c.getValue();
@@ -3964,7 +3984,7 @@ function _trd_buildTradesTable(containerId, rows) {
             { minimumFractionDigits: 2, maximumFractionDigits: 6 });
         },
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">=1000" },
+        headerFilterPlaceholder: "1000, >1000" },
       { title: "Vol (R$)", field: "vol", width: 130, hozAlign: "right",
         formatter: c => {
           const v = c.getValue();
@@ -3973,11 +3993,11 @@ function _trd_buildTradesTable(containerId, rows) {
             { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         },
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">=1000000" },
+        headerFilterPlaceholder: "1000000, >1000000" },
       { title: "Taxa", field: "rate", width: 110, hozAlign: "right",
         formatter: c => trd_fmtRate(c.getValue()),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">=5" },
+        headerFilterPlaceholder: "5, >5" },
       { title: "Origem", field: "origin", width: 170,
         headerFilter: "input", headerFilterFunc: trd_likeCI },
       { title: "Cód. Trade", field: "trade_code", width: 120,
@@ -4802,31 +4822,31 @@ function _tr2_buildConsTable(containerId, rows) {
       { title: "Quantidade", field: "quantidade", width: 120, hozAlign: "right",
         formatter: fmtInt,
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">=100" },
+        headerFilterPlaceholder: "100, >100" },
       { title: "Nº Negócios", field: "n_negocios", width: 110, hozAlign: "right",
         formatter: fmtInt,
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">=10" },
+        headerFilterPlaceholder: "10, >10" },
       { title: "PMP", field: "pmp", width: 110, hozAlign: "right",
         formatter: fmtNum(6),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">=1000" },
+        headerFilterPlaceholder: "1000, >1000" },
       { title: "Preço", field: "preco", width: 110, hozAlign: "right",
         formatter: fmtNum(6),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">=1000" },
+        headerFilterPlaceholder: "1000, >1000" },
       { title: "Mínimo", field: "preco_min", width: 110, hozAlign: "right",
         formatter: fmtNum(6),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">=1000" },
+        headerFilterPlaceholder: "1000, >1000" },
       { title: "Máximo", field: "preco_max", width: 110, hozAlign: "right",
         formatter: fmtNum(6),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">=1000" },
+        headerFilterPlaceholder: "1000, >1000" },
       { title: "Volume Total (R$)", field: "volume_total", width: 160, hozAlign: "right",
         formatter: fmtNum(2),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">=1000000" },
+        headerFilterPlaceholder: "1000000, >1000000" },
       { title: "Grupo", field: "grupo", width: 120,
         formatter: fmtGrupo,
         headerFilter: "input", headerFilterFunc: trd_likeCI },
