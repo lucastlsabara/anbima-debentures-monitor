@@ -110,6 +110,11 @@ jobs:
           echo "Rodando backfill_b3_trades_consolidated.py ${{ inputs.start_date }} ${{ inputs.end_date }}"
           python backfill_b3_trades_consolidated.py '${{ inputs.start_date }}' '${{ inputs.end_date }}'
 
+      - name: Podar historico
+        run: |
+          echo "Aplicando politica de retencao 60 du B3 em data/b3_trades*/"
+          python scripts/podar_historico.py
+
       - name: Rebuild dashboard
         run: |
           echo "Regenerando index.html com BUILD_VERSION atualizado"

@@ -309,6 +309,20 @@ Workflow: `.github/workflows/b3_trades.yml`
 - **Race com Routine ANBIMA**: workflow faz `git pull --rebase origin main`
   antes do push (ambos commitam em main na mesma janela)
 
+### Retenção
+
+- `data/b3_trades/*.json` e `data/b3_trades_consolidated/*.json` mantêm
+  apenas os **60 dias úteis B3 mais recentes** no `main` (rolling). A poda
+  acontece a cada execução do workflow via `scripts/podar_historico.py`,
+  após os fetches e antes do build/commit.
+- O histórico completo (estado anterior à política) vive na branch
+  **`historical-data`**, criada como backup imutável: não recebe builds
+  futuros, só retém snapshots brutos. Use-a para análises retroativas
+  longas.
+- `data/history/`, `data/dispersion/`, `data/overview.json`,
+  `data/movements.json` etc. **não são podados** — são leves o suficiente
+  para retenção total e dependem de série histórica para gráficos.
+
 ## Convenção
 
 - **252 dias úteis = 1 ano** (convenção ANBIMA da ETTJ)
