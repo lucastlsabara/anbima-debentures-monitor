@@ -1453,17 +1453,17 @@ function _vg_topSort(a, b) {
   return a._name.localeCompare(b._name);
 }
 
-// Formatter exclusivo das tabelas Top 20: sempre 1 casa decimal em qualquer
+// Formatter exclusivo das tabelas Top 20: sem casas decimais em qualquer
 // unidade (Mil/MM/Bi/Tri). Cards, chart e demais tabelas mantem trd_fmtMoneyShort.
-function _vg_fmtMoneyShort1d(v) {
+function _vg_fmtMoneyShort0d(v) {
   if (v == null || isNaN(v)) return "—";
   const abs = Math.abs(v);
-  const opts = { minimumFractionDigits: 1, maximumFractionDigits: 1 };
-  if (abs >= 1e12) return (v / 1e12).toLocaleString("pt-BR", opts) + " Tri";
-  if (abs >= 1e9)  return (v / 1e9).toLocaleString("pt-BR", opts) + " Bi";
-  if (abs >= 1e6)  return (v / 1e6).toLocaleString("pt-BR", opts) + " MM";
-  if (abs >= 1e3)  return (v / 1e3).toLocaleString("pt-BR", opts) + " Mil";
-  return v.toLocaleString("pt-BR", opts);
+  const opts = { minimumFractionDigits: 0, maximumFractionDigits: 0 };
+  if (abs >= 1e12) return Math.round(v / 1e12).toLocaleString("pt-BR", opts) + " Tri";
+  if (abs >= 1e9)  return Math.round(v / 1e9).toLocaleString("pt-BR", opts) + " Bi";
+  if (abs >= 1e6)  return Math.round(v / 1e6).toLocaleString("pt-BR", opts) + " MM";
+  if (abs >= 1e3)  return Math.round(v / 1e3).toLocaleString("pt-BR", opts) + " Mil";
+  return Math.round(v).toLocaleString("pt-BR", opts);
 }
 
 function vg_renderTopPapeis(rows) {
@@ -1488,7 +1488,7 @@ function vg_renderTopPapeis(rows) {
     <tr>
       <td>${escapeHtml(r.ticker)}</td>
       <td>${escapeHtml(r.issuer)}</td>
-      <td class="num">${escapeHtml(_vg_fmtMoneyShort1d(r.vol))}</td>
+      <td class="num">${escapeHtml(_vg_fmtMoneyShort0d(r.vol))}</td>
       <td class="num">${escapeHtml(trd_fmtIntBR(r.n))}</td>
     </tr>`).join("");
   document.getElementById("vg-top-papeis").innerHTML =
@@ -1516,7 +1516,7 @@ function vg_renderTopEmissores(rows) {
   const body = top.map(r => `
     <tr>
       <td>${escapeHtml(r.issuer)}</td>
-      <td class="num">${escapeHtml(_vg_fmtMoneyShort1d(r.vol))}</td>
+      <td class="num">${escapeHtml(_vg_fmtMoneyShort0d(r.vol))}</td>
       <td class="num">${escapeHtml(trd_fmtIntBR(r.n))}</td>
     </tr>`).join("");
   document.getElementById("vg-top-emissores").innerHTML =
@@ -3626,26 +3626,42 @@ function trd_likeCI(term, value) {
 }
 
 function trd_numericFilter(term, value) {
-  if (term == null || term === "") return true;
+  if (term == null) return true;
+  if (typeof term !== "string" && typeof term !== "number") return true;
   const s = String(term).trim();
-  const m = s.match(/^(>=|<=|>|<)\s*(-?\d+(?:[.,]\d+)?)$/);
-  if (m) {
-    if (value == null) return false;
-    const op = m[1];
-    const ref = parseFloat(m[2].replace(",", "."));
-    const v = Number(value);
+  if (s === "") return true;
+  const num = "(-?\\d+(?:[.,]\\d+)?)";
+  const v = (value == null) ? NaN : Number(value);
+  // Operadores explicitos: >, >=, <, <=, =, ==
+  const mOp = s.match(new RegExp("^(>=|<=|==|=|>|<)\\s*" + num + "\\s*$"));
+  if (mOp) {
     if (Number.isNaN(v)) return false;
-    if (op === ">") return v > ref;
-    if (op === "<") return v < ref;
+    const op = mOp[1];
+    const ref = parseFloat(mOp[2].replace(",", "."));
+    if (op === ">")  return v > ref;
+    if (op === "<")  return v < ref;
     if (op === ">=") return v >= ref;
     if (op === "<=") return v <= ref;
+    if (op === "=" || op === "==") return v === ref;
   }
-  // Sem operador: tenta igualdade numerica; se o termo nao parsear como
-  // numero, nao filtra (passa todas as linhas).
-  const ref = parseFloat(s.replace(",", "."));
-  if (Number.isNaN(ref)) return true;
-  if (value == null) return false;
-  return Number(value) === ref;
+  // Range "A-B" (A nao vazio, A <= B): inclusivo nos dois lados.
+  const mRange = s.match(new RegExp("^" + num + "\\s*-\\s*" + num + "$"));
+  if (mRange) {
+    if (Number.isNaN(v)) return false;
+    let a = parseFloat(mRange[1].replace(",", "."));
+    let b = parseFloat(mRange[2].replace(",", "."));
+    if (a > b) { const t = a; a = b; b = t; }
+    return v >= a && v <= b;
+  }
+  // Numero puro (inclui "-N"): threshold inclusivo ">= N".
+  const mNum = s.match(new RegExp("^" + num + "$"));
+  if (mNum) {
+    if (Number.isNaN(v)) return false;
+    const ref = parseFloat(mNum[1].replace(",", "."));
+    return v >= ref;
+  }
+  // Termo nao parseavel: nao filtra.
+  return true;
 }
 
 async function renderTradesB3() {
@@ -3939,7 +3955,7 @@ function _trd_buildTradesTable(containerId, rows) {
       { title: "Qtd", field: "qtd", width: 90, hozAlign: "right",
         formatter: c => trd_fmtIntBR(c.getValue()),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">100" },
+        headerFilterPlaceholder: ">=100" },
       { title: "Preço", field: "price", width: 110, hozAlign: "right",
         formatter: c => {
           const v = c.getValue();
@@ -3948,7 +3964,7 @@ function _trd_buildTradesTable(containerId, rows) {
             { minimumFractionDigits: 2, maximumFractionDigits: 6 });
         },
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">1000" },
+        headerFilterPlaceholder: ">=1000" },
       { title: "Vol (R$)", field: "vol", width: 130, hozAlign: "right",
         formatter: c => {
           const v = c.getValue();
@@ -3957,11 +3973,11 @@ function _trd_buildTradesTable(containerId, rows) {
             { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         },
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">1000000" },
+        headerFilterPlaceholder: ">=1000000" },
       { title: "Taxa", field: "rate", width: 110, hozAlign: "right",
         formatter: c => trd_fmtRate(c.getValue()),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: ">5" },
+        headerFilterPlaceholder: ">=5" },
       { title: "Origem", field: "origin", width: 170,
         headerFilter: "input", headerFilterFunc: trd_likeCI },
       { title: "Cód. Trade", field: "trade_code", width: 120,
@@ -4785,25 +4801,32 @@ function _tr2_buildConsTable(containerId, rows) {
         headerFilter: "input", headerFilterFunc: trd_likeCI },
       { title: "Quantidade", field: "quantidade", width: 120, hozAlign: "right",
         formatter: fmtInt,
-        headerFilter: "input", headerFilterFunc: trd_numericFilter },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: ">=100" },
       { title: "Nº Negócios", field: "n_negocios", width: 110, hozAlign: "right",
         formatter: fmtInt,
-        headerFilter: "input", headerFilterFunc: trd_numericFilter },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: ">=10" },
       { title: "PMP", field: "pmp", width: 110, hozAlign: "right",
         formatter: fmtNum(6),
-        headerFilter: "input", headerFilterFunc: trd_numericFilter },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: ">=1000" },
       { title: "Preço", field: "preco", width: 110, hozAlign: "right",
         formatter: fmtNum(6),
-        headerFilter: "input", headerFilterFunc: trd_numericFilter },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: ">=1000" },
       { title: "Mínimo", field: "preco_min", width: 110, hozAlign: "right",
         formatter: fmtNum(6),
-        headerFilter: "input", headerFilterFunc: trd_numericFilter },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: ">=1000" },
       { title: "Máximo", field: "preco_max", width: 110, hozAlign: "right",
         formatter: fmtNum(6),
-        headerFilter: "input", headerFilterFunc: trd_numericFilter },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: ">=1000" },
       { title: "Volume Total (R$)", field: "volume_total", width: 160, hozAlign: "right",
         formatter: fmtNum(2),
-        headerFilter: "input", headerFilterFunc: trd_numericFilter },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: ">=1000000" },
       { title: "Grupo", field: "grupo", width: 120,
         formatter: fmtGrupo,
         headerFilter: "input", headerFilterFunc: trd_likeCI },
