@@ -34,34 +34,21 @@ from __future__ import annotations
 import json
 import sys
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
-import requests
-
 import sectors
-from b3_calendar import is_b3_business_day, today_brt
+from b3_api import (
+    B3UnavailableError,
+    post_page,
+    refresh_recent_days as _refresh_recent_days,
+)
 
 
-B3_URL = "https://arquivos.b3.com.br/bdi/table/Trade/{ini}/{fim}/{page}/{page_size}"
+TABLE_NAME = "Trade"
 PAGE_SIZE = 500
-TIMEOUT = 60
-MAX_RETRIES = 3
 SLEEP_BETWEEN_PAGES = 0.2
-SLEEP_BETWEEN_DAYS = 1.0
 REFRESH_WINDOW_DAYS = 5
-
-REQUEST_HEADERS = {
-    "Content-Type": "application/json",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-    "Origin": "https://arquivos.b3.com.br",
-    "Referer": "https://arquivos.b3.com.br/",
-    "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
-}
 
 DATA_DIR = Path(__file__).parent / "data" / "b3_trades"
 MANIFEST_PATH = DATA_DIR / "manifest.json"
@@ -70,52 +57,6 @@ COLUMNS = [
     "instrument", "issuer", "ticker", "setor", "qtd", "price", "vol",
     "rate", "origin", "time", "trade_code", "isin", "settlement_dt", "situation",
 ]
-
-
-class B3UnavailableError(Exception):
-    """B3 retornou 403/404: dia em FDS/feriado/ainda nao publicado."""
-
-
-class SandboxBlockedError(Exception):
-    """Resposta 403 com header x-deny-reason: bloqueio de allowlist do
-    ambiente (sandbox), nao da B3. Falha real — nao silenciar como
-    'indisponivel'."""
-
-
-def _post_page(date_iso: str, page: int) -> dict:
-    url = B3_URL.format(ini=date_iso, fim=date_iso, page=page, page_size=PAGE_SIZE)
-    last_exc: Exception | None = None
-    for attempt in range(MAX_RETRIES):
-        try:
-            r = requests.post(
-                url,
-                headers=REQUEST_HEADERS,
-                json={},
-                timeout=TIMEOUT,
-            )
-            deny_reason = r.headers.get("x-deny-reason")
-            if r.status_code == 403 and deny_reason:
-                raise SandboxBlockedError(
-                    f"HTTP 403 bloqueado pela sandbox (x-deny-reason={deny_reason}): "
-                    f"host arquivos.b3.com.br fora da allowlist. Rode este script "
-                    f"em ambiente com egress livre (ex: GitHub Actions)."
-                )
-            if r.status_code in (403, 404):
-                raise B3UnavailableError(f"HTTP {r.status_code}")
-            if r.status_code >= 500:
-                raise requests.HTTPError(f"HTTP {r.status_code}")
-            r.raise_for_status()
-            return r.json()
-        except (B3UnavailableError, SandboxBlockedError):
-            raise
-        except (requests.Timeout, requests.HTTPError, requests.ConnectionError) as exc:
-            last_exc = exc
-            if attempt == MAX_RETRIES - 1:
-                break
-            backoff = 2 ** (attempt + 1)
-            print(f"  [retry {attempt + 1}/{MAX_RETRIES}] {exc}; aguardando {backoff}s")
-            time.sleep(backoff)
-    raise RuntimeError(f"Falha apos {MAX_RETRIES} tentativas: {last_exc}")
 
 
 def _row_from_array(arr: list) -> list:
@@ -160,7 +101,7 @@ def fetch_day(date_iso: str) -> dict:
     out_path = DATA_DIR / f"{date_iso}.json"
 
     try:
-        first = _post_page(date_iso, 1)
+        first = post_page(TABLE_NAME, date_iso, 1, PAGE_SIZE)
     except B3UnavailableError as exc:
         print(
             f"[{date_iso}] {exc} - esperado em FDS/feriado/dia ainda nao publicado, pulando"
@@ -193,7 +134,7 @@ def fetch_day(date_iso: str) -> dict:
 
     for page in range(2, page_count + 1):
         time.sleep(SLEEP_BETWEEN_PAGES)
-        resp = _post_page(date_iso, page)
+        resp = post_page(TABLE_NAME, date_iso, page, PAGE_SIZE)
         _ingest_values((resp.get("table") or {}).get("values"))
 
     payload = {
@@ -267,63 +208,8 @@ def _update_manifest(date_iso: str, n_trades: int, vol_brl: float, filename: str
     )
 
 
-def _last_n_b3_business_days(n: int, today: date | None = None) -> list[date]:
-    """N ultimos dias uteis B3, ordem ascendente.
-
-    Inclui `today` se for dia util B3 (padrao ANBIMA: [HOJE, D-1, ...]);
-    caso contrario (FDS/feriado), retorna N dias uteis estritamente anteriores.
-    """
-    if today is None:
-        today = today_brt()
-    out: list[date] = []
-    d = today if is_b3_business_day(today) else today - timedelta(days=1)
-    while len(out) < n:
-        if is_b3_business_day(d):
-            out.append(d)
-        d -= timedelta(days=1)
-    return list(reversed(out))
-
-
 def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS) -> int:
-    """Forca versao fresca dos N dias uteis B3 mais recentes.
-
-    Tenta todos os dias antes de retornar. Exit code != 0 se QUALQUER dia
-    falhar (falha de rede apos retry; 403/404 nao conta como falha).
-    """
-    days = _last_n_b3_business_days(n)
-    print(
-        f"Refresh dos ultimos {len(days)} dias uteis B3: "
-        f"{days[0]} a {days[-1]}"
-    )
-
-    updated = 0
-    unavailable = 0
-    failed = 0
-
-    for i, d in enumerate(days):
-        date_iso = d.isoformat()
-        try:
-            result = fetch_day(date_iso)
-            if result["status"] == "updated":
-                updated += 1
-            else:
-                unavailable += 1
-        except Exception as exc:
-            print(
-                f"[{date_iso}] FALHA apos retries: {exc} - "
-                f"mantendo arquivo existente (se houver)"
-            )
-            failed += 1
-        if i < len(days) - 1:
-            time.sleep(SLEEP_BETWEEN_DAYS)
-
-    print()
-    print(
-        f"Resumo: {updated} atualizado(s), {unavailable} indisponivel(eis) "
-        f"(FDS/feriado/nao publicado), {failed} falha(s)"
-    )
-
-    return 0 if failed == 0 else 1
+    return _refresh_recent_days(fetch_day, n)
 
 
 def main(argv: list[str]) -> int:

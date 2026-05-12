@@ -16,6 +16,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import fetch_b3_trades_consolidated
+from b3_api import last_n_business_days
 from b3_calendar import is_b3_business_day
 
 
@@ -57,9 +58,7 @@ def _parse_argv(argv: list[str]) -> tuple[date, date]:
     if len(positional) >= 2:
         return date.fromisoformat(positional[0]), date.fromisoformat(positional[1])
 
-    days = fetch_b3_trades_consolidated._last_n_b3_business_days(
-        fetch_b3_trades_consolidated.REFRESH_WINDOW_DAYS
-    )
+    days = last_n_business_days(fetch_b3_trades_consolidated.REFRESH_WINDOW_DAYS)
     return days[0], days[-1]
 
 
