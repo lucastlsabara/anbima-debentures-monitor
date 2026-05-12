@@ -27,10 +27,6 @@ Sem interpolação, sem spline, sem síntese de referência. A variação D-1 do
 spread (delta_spread_bps) continua como subtração simples — é variação de
 spread, não spread em si.
 
-Para diagnóstico de migração, computa também `spread_pp_legado` para IPCA+ via
-o método antigo (cubic spline na ETTJ NTN-B). NÃO é usado pelo dashboard;
-serve para a comparação metodológica reportada.
-
 Schema de saída (`data.json`):
   {
     "data_referencia": "YYYY-MM-DD",
@@ -38,8 +34,8 @@ Schema de saída (`data.json`):
     "ettj_ipca":       [...],   # mantido para o tab Curvas
     "ettj_pref":       [...],
     "diagnostico_metodo": {
-      "IPCA+": { "n": 665, "com_referencia": 631, "sem_referencia": 34,
-                 "diff_legado_bps": { "n_gt_5": .., "media_abs": .., "max_abs": .. } },
+      "IPCA+": { "n_papeis": 665, "com_referencia": 631, "sem_referencia": 34,
+                 "nao_aplicavel": 0 },
       ...
     },
     "debentures": [
@@ -50,7 +46,6 @@ Schema de saída (`data.json`):
          taxa_benchmark,               # taxa do título público de referência (lookup exato)
          spread_pp,                    # taxa - taxa_benchmark, ou None
          spread_metodo,                # "referencia" | "indexador_aditivo" | "sem_referencia" | "nao_aplicavel"
-         spread_pp_legado,             # apenas IPCA+: spline interpolada (diagnóstico)
          taxa_indicativa_d1, spread_pp_d1, delta_spread_bps, delta_taxa_bps,
          dias_sem_variacao,
          flag_iliquido, flag_estagnado,
@@ -151,9 +146,6 @@ def main() -> int:
     ntnf_by_venc = titpub.get("NTN-F", {})
     ltn_by_venc = titpub.get("LTN", {})
 
-    # Spline IPCA legado: usado APENAS como diagnóstico para reporte da migração.
-    legacy_curve = build_spline(raw.get("ettj_ipca") or [], "taxa_ipca")
-
     # Curva ETTJ Pré para spread de prefixados (fallback quando não há LTN/NTN-F
     # com casamento exato de vencimento). Prioriza tabela "ETTJ Pre" dedicada
     # se foi parseada; caso contrário, deriva de `taxa_pref` da tabela IPCA.
@@ -174,7 +166,6 @@ def main() -> int:
     counts_by_grp: dict[str, int] = {}
     com_ref_by_grp: dict[str, int] = {}
     sem_ref_by_grp: dict[str, int] = {}
-    diff_bps_ipca: list[float] = []  # |novo - legado| em bps, p/ diagnóstico
 
     for d in raw["debentures"]:
         codigo = d["codigo"]
@@ -189,7 +180,6 @@ def main() -> int:
         taxa_benchmark = None
         spread_pp = None
         spread_metodo = "nao_aplicavel"
-        spread_legado = None
 
         if grupo == "IPCA+":
             ref = d.get("referencia_ntnb")
@@ -211,17 +201,6 @@ def main() -> int:
             else:
                 spread_metodo = "sem_referencia"
                 sem_ref_by_grp[grupo] = sem_ref_by_grp.get(grupo, 0) + 1
-
-            # Diagnóstico legacy: mesma fórmula composta, porém com a NTN-B
-            # interpolada por spline em vez do lookup oficial. Isola o efeito
-            # da troca de método (lookup vs spline), não da aritmética.
-            if legacy_curve is not None and not flag_iliquido and dur_dias is not None:
-                ref_legado = float(legacy_curve(dur_dias))
-                spread_legado = round(
-                    ((1 + taxa / 100.0) / (1 + ref_legado / 100.0) - 1) * 100.0, 4,
-                )
-                if spread_pp is not None:
-                    diff_bps_ipca.append(abs((spread_pp - spread_legado) * 100.0))
 
         elif grupo == "DI+":
             # DI+ / CDI+ (mesmo grupo na ANBIMA): a taxa indicativa publicada já
@@ -319,7 +298,6 @@ def main() -> int:
             "taxa_benchmark": round(taxa_benchmark, 4) if taxa_benchmark is not None else None,
             "spread_pp": round(spread_pp, 4) if spread_pp is not None else None,
             "spread_metodo": spread_metodo,
-            "spread_pp_legado": spread_legado,
             "taxa_indicativa_d1": taxa_d1,
             "spread_pp_d1": spread_d1,
             "delta_spread_bps": delta_spread_bps,
@@ -377,14 +355,6 @@ def main() -> int:
             "sem_referencia": sem_ref_by_grp.get(grp, 0),
             "nao_aplicavel": n - com_ref_by_grp.get(grp, 0) - sem_ref_by_grp.get(grp, 0),
         }
-    if diff_bps_ipca:
-        diag.setdefault("IPCA+", {})["diff_vs_legado_bps"] = {
-            "n": len(diff_bps_ipca),
-            "n_gt_5bps": sum(1 for x in diff_bps_ipca if x > 5),
-            "media_abs": round(sum(diff_bps_ipca) / len(diff_bps_ipca), 2),
-            "max_abs": round(max(diff_bps_ipca), 2),
-        }
-
     out = {
         "data_referencia": today,
         "data_anterior": prev["data_referencia"] if prev else None,
@@ -425,14 +395,6 @@ def main() -> int:
         f"estagnados={n_estag} | data anterior={out['data_anterior']}",
         file=sys.stderr,
     )
-    if diff_bps_ipca:
-        d = diag["IPCA+"]["diff_vs_legado_bps"]
-        print(
-            f"[spread] diagnóstico IPCA+: vs spline legado em {d['n']} papéis | "
-            f"|diff| média={d['media_abs']} bps · máx={d['max_abs']} bps · "
-            f">5 bps em {d['n_gt_5bps']} papéis",
-            file=sys.stderr,
-        )
     return 0
 
 
