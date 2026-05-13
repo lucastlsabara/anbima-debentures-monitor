@@ -308,6 +308,65 @@ Garantias preservadas:
   fetch_b3_*.py, compute_spreads.py, build_dashboard.py,
   list_target_dates.py, b3_calendar.py).
 
+### Fase 5 -- Refresh intraday Trade-by-Trade (PR atual)
+
+Motivacao: a B3 publica Trade-by-Trade a cada 15min durante o pregao,
+mas o canonico das 21h/23h/05h fica preso aguardando os 5 arquivos do
+dia (em particular `ConsolidatedRecords`, que so sai ao fim do
+pregao). Resultado: o site nao reflete trades intraday ate o ciclo
+noturno.
+
+Solucao: novo workflow `.github/workflows/b3_trades_intraday.yml`,
+paralelo ao canonico, que captura SOMENTE Trade-by-Trade a cada 30min
+durante o pregao. Reusa `fetch_b3_trades.py <data>` em modo unitario
+(zero alteracao no script). Apos o fetch, detecta mudanca via
+`git status --porcelain` (cobre arquivo novo + modificado), roda
+`build_dashboard.py`, faz commit com prefixo
+`chore: B3 intraday refresh ...` e push.
+
+Janela: 10h-19h BRT seg-sex (19 disparos/dia util max). Cron UTC em 2
+linhas para cravar fim em 19h:
+- `0,30 13-21 * * 1-5` (UTC) = 18 slots, 10:00 ate 18:30 BRT.
+- `0 22 * * 1-5` (UTC) = 1 slot adicional em 19:00 BRT.
+
+Por que 2 linhas: GitHub Actions cron nao suporta limitar hora de fim
+parcial. Se usasse `0,30 13-22 * * 1-5` incluiria 19:30 BRT (fora da
+janela pedida). Por que dia-da-semana 1-5: cada slot UTC mapeia para o
+MESMO dia da semana BRT (BRT esta atras de UTC, entao 13h UTC seg =
+10h BRT seg; 22h UTC sex = 19h BRT sex — sem virada de dia da semana).
+
+Convivencia com canonico:
+- Janelas nao se sobrepoem (gap de 2h entre 19:00 BRT intraday e
+  21:00 BRT canonico).
+- Concurrency group `anbima-b3-pipeline` adicionado a AMBOS os
+  workflows (intraday + canonico) como safety net: se algum dia
+  janelas se sobreporem (mudanca futura de cron, retry manual etc),
+  fila de execucao evita dois push concorrentes em main.
+
+Comportamento em D+1: canonico das 21h sobrescreve trade-by-trade do
+dia com versao final (igual ou marginalmente maior, ja que B3 fecha o
+arquivo no fim do pregao) e adiciona ConsolidatedRecords + ANBIMA +
+ETTJ + TPF.
+
+Restricoes invioladas:
+- NAO toca `data/.probe_state.json` (marker pertence ao canonico).
+- NAO baixa ANBIMA, ETTJ, TPF nem ConsolidatedRecords.
+- NAO poda historico (`data/b3_trades/` antigos, `data/dispersion/`,
+  `history/`) — funcao do canonico via `scripts/podar_historico.py`.
+- NAO gera dados sinteticos. Falha de rede / 5xx -> workflow falha
+  barulhento (`fetch_b3_trades.py` ja sai nao-zero). 403/404
+  (FDS/feriado/dia ainda nao publicado) eh pulado em silencio pelo
+  proprio script, preservando o arquivo existente.
+
+Limitacao explicita: o intraday SO atualiza
+`data/b3_trades/<HOJE>.json` + rebuild do dashboard. Setor x Prazo,
+Heatmap, Dispersao, Visao Geral, Titulos Publicos continuam
+refletindo o ultimo dia importado pelo canonico ate o proximo ciclo
+dele.
+
+Zero alteracao em scripts Python (`fetch_b3_trades.py`,
+`build_dashboard.py`, `b3_calendar.py`).
+
 ## 8. Regras invioladas
 
 - Nenhum dado sintetico. Se ANBIMA quebrar, workflow falha barulhento
