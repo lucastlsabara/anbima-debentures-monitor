@@ -3764,14 +3764,19 @@ async function renderTradesB3() {
   }
   trd_setStatus("");
 
-  const dates = (TRD_MANIFEST.dates || []).map(e => e.date);
+  // Filtra entradas vazias do manifesto (B3 publica entry com rows=[] para o
+  // dia corrente antes do fim do prega~o; nao deve ser selecionavel). Mantem
+  // datepicker limitado a' ultima data com dados reais.
+  const dates = (TRD_MANIFEST.dates || [])
+    .filter(e => ((e.n_trades || e.n_rows || 0) > 0))
+    .map(e => e.date);
   if (!dates.length) {
     trd_showEmpty("Sem dados ainda. Rode backfill_b3_trades.py.");
     return;
   }
 
-  const latest = TRD_MANIFEST.latest_date || dates[dates.length - 1];
-  const earliest = TRD_MANIFEST.earliest_date || dates[0];
+  const latest = dates[dates.length - 1];
+  const earliest = dates[0];
   // Default: Data Anterior VAZIA (mostra so' Data Atual); Data Atual = latest.
   TRD_DATE_INI = null;
   TRD_DATE_FIM = latest;
@@ -4340,15 +4345,20 @@ async function tr2_initDatesAndLoad() {
   tr2_setStatus("");
   TR2_MANIFEST = manifest;
 
-  const dates = (manifest.dates || []).map(e => e.date);
+  // Filtra entradas vazias do manifesto (B3 publica entry com rows=[] para o
+  // dia corrente antes do fim do prega~o; nao deve ser selecionavel). Mantem
+  // datepicker limitado a' ultima data com dados reais.
+  const dates = (manifest.dates || [])
+    .filter(e => ((e.n_trades || e.n_rows || 0) > 0))
+    .map(e => e.date);
   if (!dates.length) {
     TR2_RANGE_ROWS = null;
     TR2_INDEX = { tickers: [], emissores: [] };
     tr2_showEmpty(emptyMsg);
     return;
   }
-  const latest = manifest.latest_date || dates[dates.length - 1];
-  const earliest = manifest.earliest_date || dates[0];
+  const latest = dates[dates.length - 1];
+  const earliest = dates[0];
   // Default: Data Anterior fica VAZIA (mostra so' Data Atual); Data Atual
   // preenchida com a data mais recente. Preserva range corrente entre trocas
   // de fonte apenas se ambas as datas continuarem existindo na nova fonte.
