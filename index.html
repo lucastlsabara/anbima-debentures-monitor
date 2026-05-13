@@ -970,7 +970,21 @@ function activateTab(name) {
 }
 window.addEventListener("hashchange", () => {
   const name = (location.hash || "#/visao").replace(/^#\//, "");
+  // Sai da aba Debentures: Grafico -> pausa o timelapse do scatter de
+  // dispersao se ainda estiver rodando. Sem isso a animacao continua em
+  // background e o usuario volta com o chart tocando sozinho.
+  if (name !== "dispersao" && typeof timelinePause === "function") {
+    try { timelinePause(); } catch (e) { /* aba ainda nao montada */ }
+  }
   activateTab(name);
+});
+
+// Pausa tambem quando a aba do navegador perde foco (Cmd+Tab, minimiza),
+// para nao deixar o setInterval consumindo loadJSON em background.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && typeof timelinePause === "function") {
+    try { timelinePause(); } catch (e) { /* aba ainda nao montada */ }
+  }
 });
 
 /* ============================================================
@@ -5010,6 +5024,33 @@ function tr2_renderTable() {
   TR2_TABLE = (TR2_SOURCE === "consolidated")
     ? _tr2_buildConsTable("#tr2-table", filtered)
     : _trd_buildTradesTable("#tr2-table", filtered);
+
+  // Sincroniza os 2 charts (bar de Volume R$ + scatter Taxa x Tempo) com os
+  // headerFilters da propria tabela. Tabulator dispara dataFiltered apos
+  // cada keystroke do filtro substring/numerico — debounce de 200ms evita
+  // regerar Plotly a cada caractere digitado. As funcoes de chart aceitam
+  // um override de rows; quando nao passado, caem no _tr2_filteredRows()
+  // (dataset completo) — entao tr2_renderAllCharts continua valendo para o
+  // 1o render. Cores ficam estaveis porque _trd_colorForTrace usa
+  // TR2_SELECTED/orderedSelected, nao o dataset.
+  let tr2FilterTimer = null;
+  TR2_TABLE.on("dataFiltered", (_filters, visibleRows) => {
+    if (tr2FilterTimer) clearTimeout(tr2FilterTimer);
+    tr2FilterTimer = setTimeout(() => {
+      tr2FilterTimer = null;
+      const data = visibleRows.map(r => r.getData());
+      const granularity = (TR2_SOURCE === "consolidated")
+        ? "day"
+        : trd_pickGranularity(TR2_RANGE_NDAYS);
+      if (document.getElementById("tr2-bar-all")) {
+        tr2_renderUnifiedStackedBarChart(granularity, "tr2-bar-all", data);
+      }
+      if (TR2_SOURCE !== "consolidated"
+          && document.getElementById("tr2-scatter-rate")) {
+        tr2_renderScatterRateChart("tr2-scatter-rate", data);
+      }
+    }, 200);
+  });
 }
 
 function _tr2_buildConsTable(containerId, rows) {
@@ -5171,14 +5212,16 @@ function _trd_colorForTrace() {
   return { singleIssuerMode, orderedSelected, colorFor };
 }
 
-function tr2_renderUnifiedStackedBarChart(granularity, divId) {
+function tr2_renderUnifiedStackedBarChart(granularity, divId, rowsOverride) {
   const { singleIssuerMode, orderedSelected, colorFor } = _trd_colorForTrace();
 
   // Coleta labels de bucket cronologicamente ordenados (categorias do eixo X).
   // Eixo "category" elimina buracos de FDS/feriado automaticamente.
   const labelByTs = new Map();
   const built = [];
-  const rowsForChart = _tr2_filteredRows();
+  // rowsOverride permite reagir aos headerFilters da tabela (dataFiltered).
+  // Sem override, usa o dataset completo do range/grupo selecionado.
+  const rowsForChart = rowsOverride || _tr2_filteredRows();
   for (const { sel } of orderedSelected) {
     const series = tr2_calcVolByBucket(rowsForChart, sel.ticker, granularity);
     if (!series.length) continue;
@@ -5284,14 +5327,14 @@ function tr2_renderUnifiedStackedBarChart(granularity, divId) {
   Plotly.newPlot(divId, traces, layout, PLOTLY_CONFIG);
 }
 
-function tr2_renderScatterRateChart(divId) {
+function tr2_renderScatterRateChart(divId, rowsOverride) {
   // Scatter Taxa x Tempo: cada trade vira 1 bolinha em (datetime, rate).
   // Tamanho proporcional ao Volume R$ (sizemode=area). Cor segue a mesma
   // logica do bar de Volume R$ (1 emissor -> cor por ticker; multi -> cor
   // por emissor). Hovertemplate com ticker, emissor, data/hora, taxa e
   // volume formatado em pt-BR.
   const { singleIssuerMode, orderedSelected, colorFor } = _trd_colorForTrace();
-  const rowsAll = _tr2_filteredRows();
+  const rowsAll = rowsOverride || _tr2_filteredRows();
 
   // Agrupa rows por ticker, preservando so' o que tem rate + date + time.
   const byTicker = new Map();
