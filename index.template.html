@@ -5425,7 +5425,14 @@ function tr2_renderScatterRateChart(divId, rowsOverride) {
     showlegend: true,
     legend: { x: 1.02, y: 1, xanchor: "left", yanchor: "top",
               bgcolor: "rgba(0,0,0,0)", font: { size: 11 } },
-    xaxis: Object.assign({}, base.xaxis, { type: "date", tickangle: -25 }),
+    // rangebreaks remove sábados e domingos do eixo X (sem pregão B3),
+    // colando visualmente sexta com a segunda seguinte. Mantém type:"date"
+    // porque os valores de x incluem hora ("YYYY-MM-DD HH:MM").
+    xaxis: Object.assign({}, base.xaxis, {
+      type: "date",
+      tickangle: -25,
+      rangebreaks: [{ bounds: ["sat", "mon"] }],
+    }),
     yaxis: Object.assign({}, base.yaxis, {
       ticksuffix: "%",
       tickformat: ".2f",
