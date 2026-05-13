@@ -1,18 +1,24 @@
 # anbima-debentures-monitor
 
-Dashboard diário do mercado secundário de debêntures (ANBIMA), atualizado
-automaticamente via GitHub Actions. Dois workflows agendados commitam em
-`main` todos os dias e o GitHub Pages re-deploya o site sozinho:
+Dashboard diário do mercado secundário de debêntures (ANBIMA + B3),
+atualizado automaticamente via GitHub Actions. **Um único workflow
+canônico** roda de hora em hora 19h-05h BRT, espera todos os 5 arquivos
+do dia ficarem disponíveis, importa ANBIMA + B3 num só commit e o
+GitHub Pages re-deploya o site sozinho:
 
+- [`.github/workflows/anbima_b3_probe.yml`](.github/workflows/anbima_b3_probe.yml)
+  — **canônico (Fase 4)**. Cron `0 0-8,22-23 * * *` (22-08 UTC = 19h BRT
+  até 05h BRT do dia seguinte). A cada hora: determina dia_alvo (HOJE
+  BRT se hora ≥ 19, senão ONTEM BRT), guard B3 (fds/feriado → exit 0),
+  **check idempotência diária** (`data/.probe_state.json` — se já rodou
+  com sucesso pro dia_alvo, encerra em segundos), probe HTTP dos 5
+  arquivos (ANBIMA Debentures + ETTJ + TPF + B3 Trade + B3
+  ConsolidatedRecords); se todos OK: gap-fill ANBIMA + overwrite B3 +
+  rebuild dashboard + atualiza marker + commit & push.
 - [`.github/workflows/daily_update.yml`](.github/workflows/daily_update.yml)
-  — pipeline ANBIMA (debêntures + ETTJ + títulos públicos → spreads →
-  dashboard). Cron `0 2 * * *` (02:00 UTC = 23h BRT, **todos os dias**
-  inclusive fim de semana e feriado — quando a ANBIMA não publica, o
-  script sai 404 e o workflow termina limpo).
-- [`.github/workflows/b3_trades.yml`](.github/workflows/b3_trades.yml)
-  — pipeline B3 trades (trade-by-trade + consolidated). Cron `0 2 * * 2-6`
-  (UTC) = 23h BRT seg-sex. Separado do ANBIMA porque o endpoint
-  `arquivos.b3.com.br` exige tratamento próprio.
+  e [`.github/workflows/b3_trades.yml`](.github/workflows/b3_trades.yml)
+  — **backup manual** (apenas `workflow_dispatch`, sem cron). Use só
+  para reprocessar um dia específico se o probe canônico falhar.
 
 Acompanhar execuções em
 [Actions](https://github.com/lucastlsabara/anbima-debentures-monitor/actions).
@@ -120,49 +126,75 @@ Cobertura sell-side (badge azul na tabela, toggle no scatter):
 Aegea, BRK, Iguá, Hapvida, Kora, DASA, Viveo, Oncoclínicas, CSN, Prio,
 Brava, Origem.
 
-## Automação ANBIMA (`daily_update.yml`)
+## Automação canônica (`anbima_b3_probe.yml`)
 
-Workflow: [`.github/workflows/daily_update.yml`](.github/workflows/daily_update.yml).
+Workflow: [`.github/workflows/anbima_b3_probe.yml`](.github/workflows/anbima_b3_probe.yml).
 
-- **Cron**: `0 2 * * *` (UTC) = **23h BRT todos os dias** (inclusive
-  fim de semana e feriado — quando ANBIMA não publica, sai 404 e o
-  workflow termina limpo).
-- **Janela de catch-up**: **5 dias úteis B3** mais recentes (HOJE BRT se
-  útil + D-1..D-4 úteis), calculada via `python-holidays`. A janela larga
-  absorve dias em que a ANBIMA atrasou a publicação ou a execução pulou.
-- **Para cada data `X` na janela**:
-  ```bash
-  python3 fetch_anbima.py     --date X
-  python3 compute_spreads.py  --date X
+- **Cron**: `0 0-8,22-23 * * *` (UTC) = **19h BRT até 05h BRT do dia
+  seguinte**, todos os dias. Guard B3 filtra fds/feriado em runtime.
+- **Determinação do `target_date`**: HOJE BRT se hora ≥ 19, senão ONTEM
+  BRT. Quando o dia_alvo muda no meio do ciclo (ex: 05h vira ONTEM, 19h
+  vira HOJE), o probe re-inicia para a nova data automaticamente.
+- **Idempotência diária**: marker `data/.probe_state.json` versionado
+  em git com schema:
+  ```json
+  {
+    "last_successful_date": "YYYY-MM-DD",
+    "last_success_ts": "YYYY-MM-DDTHH:MM:SS-03:00"
+  }
   ```
-- **Após processar todas as datas**: roda `python3 build_dashboard.py` e
-  commita `data/`, `history/`, `index.html` em `main` (`git pull --rebase
-  --autostash origin main` antes do push, pra evitar race com o workflow B3).
-- **Re-rodar é idempotente**: `history/<YYYY-MM-DD>.json` é sobrescrito com
-  conteúdo determinístico; catch-up sobre snapshots já bons não corrompe nada.
+  Antes do probe, o workflow lê o marker; se `last_successful_date ==
+  target_date`, encerra verde em segundos (não faz HTTP, não chama B3,
+  não rebuilda). Apos uma execução bem-sucedida, as próximas runs do
+  mesmo ciclo são no-ops. Quando o dia_alvo muda, o marker não bloqueia.
+- **Probe HTTP**: [`scripts/probe_files.py`](scripts/probe_files.py)
+  verifica disponibilidade dos 5 arquivos do dia (ANBIMA Debentures +
+  ETTJ + TPF + B3 Trade + B3 ConsolidatedRecords). Se todos OK → import.
+  Se algum faltando → exit 0 sem commitar (próxima hora tenta de novo).
+- **Import** (só se probe all OK):
+  - **ANBIMA** (gap-fill 5 dias úteis B3): para cada data, pula se
+    `history/<D>.json` já existe; senão `fetch_anbima.py` + `compute_spreads.py`.
+  - **B3** (overwrite janela 5 dias úteis B3): `fetch_b3_trades.py` +
+    `fetch_b3_trades_consolidated.py` apagam e reescrevem os 5 arquivos
+    mais recentes, capturando correções retroativas.
+  - **Retenção 60 du B3** em `data/b3_trades*/` via `scripts/podar_historico.py`.
+  - `build_dashboard.py` regenera `data/*.json` + `index.html`.
+  - Atualiza marker `data/.probe_state.json` com o dia_alvo + ts BRT.
+  - `git pull --rebase --autostash origin main` + commit + push.
+- **Recuperação retroativa**: se o dia D não publica até 05h BRT do
+  dia D+1, o ciclo do dia D+1 captura D automaticamente via gap-fill
+  ANBIMA (`scripts/list_target_dates.py` retorna `[D+1, D, D-1, D-2, D-3]`)
+  e a janela 5du do B3 sobrescreve. Zero ação manual.
 
 Tratamento de erro por data:
 
 | Cenário | Comportamento |
 |---|---|
-| ANBIMA ainda não publicou (`db<YYMMDD>.txt` 404) | `fetch_anbima.py` sai com exit 2; o workflow captura e pula a data |
+| ANBIMA ainda não publicou (`db<YYMMDD>.txt` 404) | probe responde "faltando", workflow encerra verde sem commit; próxima hora tenta de novo |
 | ms.txt 404 (títulos públicos) | warn-and-skip; `titpub_status='404'` no snapshot, `titpub_rows=[]` (debêntures + ETTJ continuam) |
 | ms.txt com Data Referência interna divergente da target | warn; `titpub_status='data_divergente'`, rows parseadas normalmente |
 | HTTP 5xx ou erro de rede | raise (job marca failure → notificação do GitHub) |
-| Sábado / domingo / feriado | ANBIMA retorna 404; mesmo path do "ainda não publicou" |
+| Sábado / domingo / feriado | guard B3 derruba o run; ANBIMA retornaria 404 do mesmo jeito |
 
 ### Disparar manualmente (`workflow_dispatch`)
 
-1. Abrir [Actions › daily_update](https://github.com/lucastlsabara/anbima-debentures-monitor/actions/workflows/daily_update.yml).
+1. Abrir [Actions › ANBIMA + B3 Probe & Import](https://github.com/lucastlsabara/anbima-debentures-monitor/actions/workflows/anbima_b3_probe.yml).
 2. Clicar em **Run workflow**.
-3. Input opcional `target_date` (formato `YYYY-MM-DD`):
-   - **Vazio** → HOJE BRT + catch-up dos 5 dias úteis B3 (mesmo comportamento do cron).
-   - **Data preenchida** → roda fetch + compute apenas naquela data e regenera o dashboard.
+3. Inputs opcionais:
+   - `target_date` (formato `YYYY-MM-DD`): vazio = derivar conforme
+     horário BRT atual. Preenchido = força aquele dia (usar com `force=true`
+     se quiser reprocessar um dia que já tem marker).
+   - `force` (boolean, default `false`): ignora o marker de idempotência.
+     Útil para reprocessar manualmente um dia atípico ou após correção
+     retroativa na ANBIMA/B3.
 
-Acompanhar runs em
-[Actions](https://github.com/lucastlsabara/anbima-debentures-monitor/actions/workflows/daily_update.yml).
-Cada run tem logs por step e expõe artifacts (`fetch-debug-*.zip`) para
-inspeção do payload bruto da ANBIMA quando algo dá errado.
+### Workflows backup manuais
+
+[`daily_update.yml`](.github/workflows/daily_update.yml) e
+[`b3_trades.yml`](.github/workflows/b3_trades.yml) continuam disponíveis
+mas **sem cron** (apenas `workflow_dispatch`). Use só para fallback se o
+probe estiver com problema ou para reprocessar dia/range específico fora
+da janela do probe.
 
 ## Como rodar manualmente
 
@@ -195,8 +227,9 @@ python3 -m http.server 8000
 ### Default de `--date`
 
 Tanto `fetch_anbima.py` quanto `compute_spreads.py` aceitam `--date YYYY-MM-DD`
-(opcional). Quando omitido, usam **hoje (BRT)**. A pipeline é agendada para
-rodar às 23h BRT — horário em que a ANBIMA já publicou os arquivos do dia.
+(opcional). Quando omitido, usam **hoje (BRT)**. A pipeline canônica
+(`anbima_b3_probe.yml`) cicla de hora em hora 19h-05h BRT e só importa
+quando o probe confirma que todos os 5 arquivos do dia foram publicados.
 Em sábado, domingo ou feriado, hoje continua sendo o próprio dia: a ANBIMA
 retorna 404 e o script termina com exit code 2 (comportamento esperado).
 O calendário B3 (`b3_calendar.py`) continua disponível via
@@ -309,29 +342,6 @@ Filtros disponíveis:
 o usuário escolher data anterior posterior à data atual, o componente
 empurra a data atual pra frente automaticamente.
 
-## Automação B3 (`b3_trades.yml`)
-
-Workflow separado de `daily_update.yml` porque o endpoint
-`arquivos.b3.com.br` exige tratamento próprio (retry/backoff específicos,
-janela seg-sex apenas) e mantemos os dois jobs isolados pra falha de um
-não derrubar o outro.
-
-Workflow: [`.github/workflows/b3_trades.yml`](.github/workflows/b3_trades.yml).
-
-- **Cron**: `0 2 * * 2-6` (UTC) = 23h BRT seg-sex, alinhado à janela ANBIMA
-- **Modo padrão (schedule)**: roda `fetch_b3_trades.py` +
-  `fetch_b3_trades_consolidated.py`, depois `build_dashboard.py`, commit em main
-- **Modo manual (workflow_dispatch)**: aceita `mode=fetch_day` ou
-  `mode=backfill` com `start_date` / `end_date`. Disparar em
-  [Actions › b3_trades](https://github.com/lucastlsabara/anbima-debentures-monitor/actions/workflows/b3_trades.yml)
-- **Janela**: 5 dias úteis B3 mais recentes (HOJE se útil + D-1..D-4)
-- **Padrão delete + write atômico**: cada execução zera e regrava esses 5
-  dias para capturar correções retroativas; histórico antigo nunca é tocado
-- **Falha de rede após retries**: preserva arquivo existente (não gera dado
-  sintético); exit code != 0 sinaliza a falha
-- **Race com `daily_update.yml`**: workflow faz `git pull --rebase --autostash
-  origin main` antes do push (ambos commitam em main na mesma janela das 23h BRT)
-
 ### Retenção
 
 - `data/b3_trades/*.json` e `data/b3_trades_consolidated/*.json` mantêm
@@ -348,12 +358,12 @@ Workflow: [`.github/workflows/b3_trades.yml`](.github/workflows/b3_trades.yml).
 
 ## Dependências
 
-- **Python 3.11+** (versão fixada em `setup-python` nos dois workflows)
+- **Python 3.11+** (versão fixada em `setup-python` nos workflows)
 - Pacotes em [`requirements.txt`](requirements.txt):
   - `numpy`, `scipy`, `pandas` — parsing + álgebra da ETTJ + agregações
   - `requests` — captura HTTP da ANBIMA + B3
   - `holidays` — calendário B3 (feriados nacionais + B3-específicos) para
-    a janela de 5 dias úteis usada em ambos os workflows
+    a janela de 5 dias úteis usada pelo probe canônico
   - `pytz` — fuso BRT para `today_brt()`
 
 ```bash

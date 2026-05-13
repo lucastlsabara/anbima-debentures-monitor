@@ -151,9 +151,10 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          # Pull --rebase antes de stage/commit: minimiza janela de race com
-          # b3_trades.yml (mesmo cron, tambem commita em main). Se rebase
-          # falhar (conflito), exit 1 -- nao mascara.
+          # Pull --rebase antes de stage/commit: este workflow eh backup
+          # manual, mas pode rodar concorrente com o probe canonico
+          # (anbima_b3_probe.yml). Rebase --autostash minimiza race; conflito
+          # real -> exit 1, sem mascarar.
           if ! git pull --rebase --autostash origin main; then
             echo "::error::git pull --rebase falhou (conflito?); abortando push"
             exit 1
