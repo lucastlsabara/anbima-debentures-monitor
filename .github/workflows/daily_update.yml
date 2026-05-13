@@ -1,39 +1,42 @@
-name: ANBIMA Daily Update (PoC)
+name: ANBIMA Daily Update
 
-# PoC de validacao da migracao da Routine claude.ai -> GitHub Actions.
+# Workflow de producao da pipeline ANBIMA (sucessor da Routine no claude.ai).
 #
-# Replica o pipeline ANBIMA que hoje roda na Routine (23h BRT):
-#   1. fetch_anbima.py    : baixa db<YYMMDD>.txt + CZ-down.asp + ms<YYMMDD>.txt
+# Pipeline diario (23h BRT, todos os dias incluindo finais de semana e
+# feriados -- ANBIMA retorna 404 nesses dias e o workflow trata como skip):
+#   1. scripts/list_target_dates.py : computa janela de 5 dias uteis B3
+#                                     (hoje + 4 dias uteis anteriores)
+#   2. fetch_anbima.py    : baixa db<YYMMDD>.txt + CZ-down.asp + ms<YYMMDD>.txt
 #                            das URLs publicas anbima.com.br (sem auth)
-#   2. compute_spreads.py : calcula spreads por lookup exato + history/<date>.json
-#   3. build_dashboard.py : regenera data/*.json + index.html
+#   3. compute_spreads.py : calcula spreads por lookup exato + history/<date>.json
+#   4. build_dashboard.py : regenera data/*.json + index.html
+#   5. commit + push (se houver snapshot novo)
 #
-# Catch-up de 5 dias corridos (hoje + D-1..D-4), espelhando a Routine. ANBIMA
-# publica os arquivos do dia ~21h BRT; 02:00 UTC = 23:00 BRT, mesmo cron do
-# b3_trades.yml. Roda em paralelo ao workflow B3 e a Routine durante a fase
-# de validacao -- NAO commita nada nesta versao.
+# Idempotencia: history/<D>.json existente -> pula a data sem refetch. Se a
+# janela inteira ja' foi capturada, o workflow nao chama build_dashboard nem
+# commita (log "sem dados novos").
 #
-# Saida do job: artifact com os JSONs gerados + summary com diff vs main para
-# inspecao manual. Apos N execucoes batendo com a Routine, este workflow sera
-# promovido a producao (commit + push) em PR separado, e a Routine no claude.ai
-# sera desativada manualmente.
+# Race com b3_trades.yml: ambos workflows commitam em main e rodam no mesmo
+# cron (02:00 UTC). Mitigado por `git pull --rebase origin main` antes do push.
 
 on:
   schedule:
-    # 02:00 UTC ter-sab = 23:00 BRT seg-sex (mesmo cron do b3_trades.yml)
-    - cron: '0 2 * * 2-6'
+    # 02:00 UTC todos os dias = 23:00 BRT. Mesmo horario do b3_trades.yml.
+    # Dias nao-uteis B3 (fds/feriado): ANBIMA responde 404, workflow loga skip
+    # e nao commita -- comportamento esperado, espelhando a Routine.
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       target_date:
-        description: 'Data alvo YYYY-MM-DD (vazio = hoje BRT + catch-up de 5 dias)'
+        description: 'Data alvo YYYY-MM-DD (vazio = hoje BRT + catch-up 5 dias uteis B3)'
         required: false
         default: ''
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  validate-anbima-pipeline:
+  anbima-daily-update:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -41,7 +44,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -55,25 +58,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Resolve target dates
+      - name: Resolve target dates (5 dias uteis B3)
         id: dates
         run: |
           INPUT='${{ inputs.target_date }}'
           if [ -n "$INPUT" ]; then
             DATES="$INPUT"
           else
-            # Catch-up: hoje BRT + 4 dias anteriores (dias corridos, igual Routine).
-            # TZ=America/Sao_Paulo para obter "hoje BRT" mesmo rodando 02:00 UTC.
-            DATES=$(TZ=America/Sao_Paulo python3 -c '
-          from datetime import date, timedelta
-          today = date.today()
-          for i in range(0, 5):
-              print((today - timedelta(days=i)).isoformat())
-          ')
+            # Janela B3: HOJE (BRT) + 4 dias uteis B3 anteriores, pulando
+            # fds e feriados B3 (Sexta Santa, Carnaval seg+ter, Corpus Christi,
+            # 25/jan, 20/nov, demais nacionais).
+            DATES=$(python3 scripts/list_target_dates.py)
           fi
           echo "Datas alvo:"
           echo "$DATES"
-          # Multiline output para o proximo step
           {
             echo 'dates<<EOF'
             echo "$DATES"
@@ -81,19 +79,29 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Run fetch_anbima + compute_spreads por data
+        id: fetch
         run: |
           set -u
           mkdir -p raw
           FAIL_COUNT=0
           OK_COUNT=0
-          SKIP_COUNT=0
+          SKIP_404_COUNT=0
+          SKIP_EXISTING_COUNT=0
+          NEW_DATES=""
           while IFS= read -r d; do
             [ -z "$d" ] && continue
-            echo "::group::ANBIMA fetch+spread $d"
+            echo "::group::ANBIMA $d"
+            # Idempotencia: history/<D>.json ja capturado -> pula sem refetch.
+            if [ -f "history/${d}.json" ]; then
+              echo "[skip] history/${d}.json ja existe; pulando."
+              SKIP_EXISTING_COUNT=$((SKIP_EXISTING_COUNT+1))
+              echo "::endgroup::"
+              continue
+            fi
             python3 fetch_anbima.py --date "$d" --out parsed.json && RC=0 || RC=$?
             if [ "$RC" -eq 2 ]; then
-              echo "[poc] $d: ANBIMA 404 (arquivo nao publicado ainda) -- skip"
-              SKIP_COUNT=$((SKIP_COUNT+1))
+              echo "[skip] $d: ANBIMA 404 (fds/feriado ou ainda nao publicado)"
+              SKIP_404_COUNT=$((SKIP_404_COUNT+1))
               echo "::endgroup::"
               continue
             fi
@@ -105,47 +113,66 @@ jobs:
             fi
             python3 compute_spreads.py --date "$d" --in parsed.json --out data.json
             OK_COUNT=$((OK_COUNT+1))
+            if [ -z "$NEW_DATES" ]; then
+              NEW_DATES="$d"
+            else
+              NEW_DATES="${NEW_DATES}, ${d}"
+            fi
             echo "::endgroup::"
           done <<< "${{ steps.dates.outputs.dates }}"
-          echo "[poc] sumario fetch/spread: ok=$OK_COUNT skip=$SKIP_COUNT fail=$FAIL_COUNT"
+          echo "[summary] novos=$OK_COUNT existentes=$SKIP_EXISTING_COUNT 404=$SKIP_404_COUNT falhas=$FAIL_COUNT"
           if [ "$FAIL_COUNT" -gt 0 ]; then
-            echo "::error::${FAIL_COUNT} data(s) falharam no fetch/spread"
+            echo "::error::${FAIL_COUNT} data(s) falharam no fetch/spread (erro real, nao-404)"
             exit 1
           fi
-          if [ "$OK_COUNT" -eq 0 ]; then
-            echo "::error::Nenhuma data processada com sucesso (todas 404?). Falha barulhento."
-            exit 1
-          fi
+          echo "new_count=$OK_COUNT" >> "$GITHUB_OUTPUT"
+          echo "new_dates=$NEW_DATES" >> "$GITHUB_OUTPUT"
 
       - name: Rebuild dashboard (data/*.json + index.html)
+        if: steps.fetch.outputs.new_count != '0'
         run: |
           python3 build_dashboard.py
 
-      - name: Diff vs main (validacao PoC)
+      - name: Commit & push (snapshots ANBIMA)
+        if: steps.fetch.outputs.new_count != '0'
+        env:
+          NEW_DATES: ${{ steps.fetch.outputs.new_dates }}
         run: |
-          echo "## Diff vs main (apenas paths ANBIMA)" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          git status --porcelain data/ history/ index.html data.json | tee -a "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # Pull --rebase antes de stage/commit: minimiza janela de race com
+          # b3_trades.yml (mesmo cron, tambem commita em main). Se rebase
+          # falhar (conflito), exit 1 -- nao mascara.
+          if ! git pull --rebase origin main; then
+            echo "::error::git pull --rebase falhou (conflito?); abortando push"
+            exit 1
+          fi
+          git add data/ history/ data.json index.html
+          if git diff --cached --quiet; then
+            echo "Sem dados novos pra commitar (history/data/index.html inalterados)"
+            exit 0
+          fi
+          git commit -m "feat: ANBIMA snapshot ${NEW_DATES} (run via daily_update.yml)"
+          git push
+
+      - name: Step summary
+        if: always()
+        run: |
+          echo "## ANBIMA Daily Update" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "## Tamanhos dos JSONs gerados" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          for f in data.json data/manifest.json data/overview.json data/curves_history.json data/heatmap_history.json data/movements.json data/titpub_history.json; do
-            if [ -f "$f" ]; then
-              wc -c "$f"
-            fi
-          done | tee -a "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "**Datas processadas:** ${{ steps.fetch.outputs.new_dates }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Snapshots novos:** ${{ steps.fetch.outputs.new_count }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "## Snapshots em history/ novos ou alterados" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Janela alvo" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          git status --porcelain history/ | tee -a "$GITHUB_STEP_SUMMARY" || true
+          echo "${{ steps.dates.outputs.dates }}" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload artifacts (snapshots + dashboard files)
+      - name: Upload artifacts (debug)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: anbima-poc-${{ github.run_id }}
+          name: anbima-daily-${{ github.run_id }}
           path: |
             parsed.json
             data.json
@@ -153,6 +180,4 @@ jobs:
             history/
             raw/
           retention-days: 7
-
-      # IMPORTANTE: este workflow NAO commita nada. Promocao para producao
-      # acontece em PR separado depois que N execucoes baterem com a Routine.
+          if-no-files-found: ignore
