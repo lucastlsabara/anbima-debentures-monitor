@@ -1,9 +1,15 @@
 name: ANBIMA Daily Update
 
-# Workflow de producao da pipeline ANBIMA (sucessor da Routine no claude.ai).
+# Workflow de backup/fallback manual da pipeline ANBIMA.
 #
-# Pipeline diario (23h BRT, todos os dias incluindo finais de semana e
-# feriados -- ANBIMA retorna 404 nesses dias e o workflow trata como skip):
+# A partir da Fase 4 (probe horario), o pipeline canonico passa a ser
+# .github/workflows/anbima_b3_probe.yml -- que roda de hora em hora 19h-05h
+# BRT e so importa quando TODOS os 5 arquivos do dia estao publicados
+# (ANBIMA Debentures + ETTJ + TPF + B3 Trade + B3 ConsolidatedRecords).
+#
+# Este workflow continua disponivel via workflow_dispatch (UI do GitHub)
+# para reprocessamento manual de um dia especifico OU em caso de fallback
+# se o probe estiver com problema. Logica interna intacta:
 #   1. scripts/list_target_dates.py : computa janela de 5 dias uteis B3
 #                                     (hoje + 4 dias uteis anteriores)
 #   2. fetch_anbima.py    : baixa db<YYMMDD>.txt + CZ-down.asp + ms<YYMMDD>.txt
@@ -15,18 +21,8 @@ name: ANBIMA Daily Update
 # Idempotencia: history/<D>.json existente -> pula a data sem refetch. Se a
 # janela inteira ja' foi capturada, o workflow nao chama build_dashboard nem
 # commita (log "sem dados novos").
-#
-# Race com b3_trades.yml: ambos workflows commitam em main e rodam no mesmo
-# cron (02:00 UTC). Mitigado por `git pull --rebase origin main` antes do push.
 
 on:
-  schedule:
-    # 02:00 UTC ter-sab = 23:00 BRT seg-sex. Mesmo horario do b3_trades.yml.
-    # Cron ja' exclui fds. Feriados B3 (Carnaval, Sexta Santa, Corpus Christi,
-    # Tiradentes, etc.) sao filtrados pelo step "Guard" abaixo via
-    # b3_calendar.is_b3_business_day. Em dia nao-util o job termina verde
-    # com todos os steps subsequentes skipados.
-    - cron: '0 2 * * 2-6'
   workflow_dispatch:
     inputs:
       target_date:
