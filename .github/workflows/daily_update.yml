@@ -1,0 +1,159 @@
+name: ANBIMA Daily Update (PoC)
+
+# PoC de validacao da migracao da Routine claude.ai -> GitHub Actions.
+#
+# Replica o pipeline ANBIMA que hoje roda na Routine (23h BRT):
+#   1. fetch_anbima.py    : baixa db<YYMMDD>.txt + CZ-down.asp + ms<YYMMDD>.txt
+#                            das URLs publicas anbima.com.br (sem auth)
+#   2. compute_spreads.py : calcula spreads por lookup exato + history/<date>.json
+#   3. build_dashboard.py : regenera data/*.json + index.html
+#
+# Catch-up de 5 dias corridos (hoje + D-1..D-4), espelhando a Routine. ANBIMA
+# publica os arquivos do dia ~21h BRT; 02:00 UTC = 23:00 BRT, mesmo cron do
+# b3_trades.yml. Roda em paralelo ao workflow B3 e a Routine durante a fase
+# de validacao -- NAO commita nada nesta versao.
+#
+# Saida do job: artifact com os JSONs gerados + summary com diff vs main para
+# inspecao manual. Apos N execucoes batendo com a Routine, este workflow sera
+# promovido a producao (commit + push) em PR separado, e a Routine no claude.ai
+# sera desativada manualmente.
+
+on:
+  schedule:
+    # 02:00 UTC ter-sab = 23:00 BRT seg-sex (mesmo cron do b3_trades.yml)
+    - cron: '0 2 * * 2-6'
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: 'Data alvo YYYY-MM-DD (vazio = hoje BRT + catch-up de 5 dias)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  validate-anbima-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'requirements.txt'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Resolve target dates
+        id: dates
+        run: |
+          INPUT='${{ inputs.target_date }}'
+          if [ -n "$INPUT" ]; then
+            DATES="$INPUT"
+          else
+            # Catch-up: hoje BRT + 4 dias anteriores (dias corridos, igual Routine).
+            # TZ=America/Sao_Paulo para obter "hoje BRT" mesmo rodando 02:00 UTC.
+            DATES=$(TZ=America/Sao_Paulo python3 -c '
+          from datetime import date, timedelta
+          today = date.today()
+          for i in range(0, 5):
+              print((today - timedelta(days=i)).isoformat())
+          ')
+          fi
+          echo "Datas alvo:"
+          echo "$DATES"
+          # Multiline output para o proximo step
+          {
+            echo 'dates<<EOF'
+            echo "$DATES"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run fetch_anbima + compute_spreads por data
+        run: |
+          set -u
+          mkdir -p raw
+          FAIL_COUNT=0
+          OK_COUNT=0
+          SKIP_COUNT=0
+          while IFS= read -r d; do
+            [ -z "$d" ] && continue
+            echo "::group::ANBIMA fetch+spread $d"
+            python3 fetch_anbima.py --date "$d" --out parsed.json
+            RC=$?
+            if [ "$RC" -eq 2 ]; then
+              echo "[poc] $d: ANBIMA 404 (arquivo nao publicado ainda) -- skip"
+              SKIP_COUNT=$((SKIP_COUNT+1))
+              echo "::endgroup::"
+              continue
+            fi
+            if [ "$RC" -ne 0 ]; then
+              echo "::error::fetch_anbima.py falhou para $d (exit=$RC)"
+              FAIL_COUNT=$((FAIL_COUNT+1))
+              echo "::endgroup::"
+              continue
+            fi
+            python3 compute_spreads.py --date "$d" --in parsed.json --out data.json
+            OK_COUNT=$((OK_COUNT+1))
+            echo "::endgroup::"
+          done <<< "${{ steps.dates.outputs.dates }}"
+          echo "[poc] sumario fetch/spread: ok=$OK_COUNT skip=$SKIP_COUNT fail=$FAIL_COUNT"
+          if [ "$FAIL_COUNT" -gt 0 ]; then
+            echo "::error::${FAIL_COUNT} data(s) falharam no fetch/spread"
+            exit 1
+          fi
+          if [ "$OK_COUNT" -eq 0 ]; then
+            echo "::error::Nenhuma data processada com sucesso (todas 404?). Falha barulhento."
+            exit 1
+          fi
+
+      - name: Rebuild dashboard (data/*.json + index.html)
+        run: |
+          python3 build_dashboard.py
+
+      - name: Diff vs main (validacao PoC)
+        run: |
+          echo "## Diff vs main (apenas paths ANBIMA)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          git status --porcelain data/ history/ index.html data.json | tee -a "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Tamanhos dos JSONs gerados" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          for f in data.json data/manifest.json data/overview.json data/curves_history.json data/heatmap_history.json data/movements.json data/titpub_history.json; do
+            if [ -f "$f" ]; then
+              wc -c "$f"
+            fi
+          done | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Snapshots em history/ novos ou alterados" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          git status --porcelain history/ | tee -a "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts (snapshots + dashboard files)
+        uses: actions/upload-artifact@v4
+        with:
+          name: anbima-poc-${{ github.run_id }}
+          path: |
+            parsed.json
+            data.json
+            data/
+            history/
+            raw/
+          retention-days: 7
+
+      # IMPORTANTE: este workflow NAO commita nada. Promocao para producao
+      # acontece em PR separado depois que N execucoes baterem com a Routine.
