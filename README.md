@@ -204,6 +204,21 @@ mas **sem cron** (apenas `workflow_dispatch`). Use só para fallback se o
 probe estiver com problema ou para reprocessar dia/range específico fora
 da janela do probe.
 
+### Diagnóstico opcional: medir horário de publicação
+
+[`scripts/measure_publication_times.py`](scripts/measure_publication_times.py)
++ workflow
+[`.github/workflows/measure_publication_times.yml`](.github/workflows/measure_publication_times.yml)
+medem, nos últimos N dias úteis B3 (default 5), em qual horário cada um
+dos 5 arquivos (ANBIMA Debentures + ETTJ + TPF + B3 Trade + B3
+ConsolidatedRecords) foi disponibilizado pelo servidor, lendo o header
+`Last-Modified` (HEAD / GET Range para ANBIMA; POST para B3, com
+fallback para campos de timestamp no payload JSON). Disparo manual
+(`workflow_dispatch`); o script é puramente de leitura e a saída
+(tabela markdown + sumário com mediana e horário mais tardio
+observado) é escrita em `$GITHUB_STEP_SUMMARY`. Útil para calibrar a
+janela do cron do probe canônico.
+
 ## Como rodar manualmente
 
 ```bash
