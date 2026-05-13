@@ -2,7 +2,8 @@ name: ANBIMA + B3 Probe & Import
 
 # Workflow UNICO que substitui o cron de daily_update.yml e b3_trades.yml.
 #
-# Cicla de hora em hora 19h-05h BRT (22-08 UTC). A cada execucao:
+# Roda em 3 horarios fixos por dia util B3: 21h BRT e 23h BRT do dia
+# referencia + 05h BRT do dia seguinte (00, 02 e 08 UTC). A cada execucao:
 #   1. Determina o dia alvo (HOJE BRT se hora>=19, senao ONTEM BRT).
 #   2. Guard B3: se nao for dia util B3, sai 0 sem fazer nada.
 #   3. Idempotencia diaria: le data/.probe_state.json; se
@@ -25,23 +26,22 @@ name: ANBIMA + B3 Probe & Import
 
 on:
   schedule:
-    # Cron split para nao disparar em fim de semana BRT.
-    # Cobre apenas o ciclo de dia util seg-sex BRT:
-    #
-    # 19h-20h BRT seg-sex = 22h-23h UTC seg-sex
-    - cron: '0 22-23 * * 1-5'
-    # 21h BRT seg-sex ate 05h BRT ter-sab = 00h-08h UTC ter-sab
-    - cron: '0 0-8 * * 2-6'
+    # 3 horarios fixos por dia util B3, em UTC. BRT = UTC-3:
+    #   00:00 UTC ter-sab = 21h BRT seg-sex (dia_alvo = HOJE BRT)
+    #   02:00 UTC ter-sab = 23h BRT seg-sex (dia_alvo = HOJE BRT)
+    #   08:00 UTC ter-sab = 05h BRT ter-sab (dia_alvo = ONTEM BRT = ref date original)
+    # day-of-week 2-6 (ter-sab UTC) garante que ref date BRT cai em seg-sex.
+    - cron: '0 0,2,8 * * 2-6'
     #
     # Validacao de bordas:
-    #  Seg 19h BRT = 22h UTC seg (dia 1) -> '0 22-23 * * 1-5' dispara
-    #  Seg 23h BRT = 02h UTC ter (dia 2) -> '0 0-8 * * 2-6' dispara
-    #  Sex 19h BRT = 22h UTC sex (dia 5) -> '0 22-23 * * 1-5' dispara
-    #  Sex 23h BRT = 02h UTC sab (dia 6) -> '0 0-8 * * 2-6' dispara
-    #  Sab 05h BRT = 08h UTC sab (dia 6) -> '0 0-8 * * 2-6' dispara (ultima tentativa do ciclo sex)
-    #  Sab 19h BRT = 22h UTC sab (dia 6) -> '0 22-23 * * 1-5' BLOQUEIA (6 nao esta em 1-5)
-    #  Dom 19h BRT = 22h UTC dom (dia 0) -> '0 22-23 * * 1-5' BLOQUEIA
-    #  Seg 05h BRT = 08h UTC seg (dia 1) -> '0 0-8 * * 2-6' BLOQUEIA (1 nao esta em 2-6)
+    #  Seg 21h BRT = 00h UTC ter (dia 2) -> dispara, ref date = seg (HOJE)
+    #  Seg 23h BRT = 02h UTC ter (dia 2) -> dispara, ref date = seg (HOJE)
+    #  Ter 05h BRT = 08h UTC ter (dia 2) -> dispara, ref date = seg (ONTEM)
+    #  Sex 21h BRT = 00h UTC sab (dia 6) -> dispara, ref date = sex (HOJE)
+    #  Sex 23h BRT = 02h UTC sab (dia 6) -> dispara, ref date = sex (HOJE)
+    #  Sab 05h BRT = 08h UTC sab (dia 6) -> dispara, ref date = sex (ONTEM)
+    #  Dom 21h BRT = 00h UTC seg (dia 1) -> BLOQUEIA (1 nao esta em 2-6)
+    #  Seg 05h BRT = 08h UTC seg (dia 1) -> BLOQUEIA
     #
     # Feriados B3 moveis (Carnaval, Corpus Christi, 25-jan-SP, etc.) nao sao
     # cobertos por cron syntax: o guard B3 corta em ~30s em feriado.

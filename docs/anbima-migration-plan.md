@@ -183,8 +183,10 @@ roda e captura parcial ou zero -- e so tenta de novo 24h depois. Sem retry
 inteligente intra-dia.
 
 Solucao: novo workflow `.github/workflows/anbima_b3_probe.yml` que cicla
-de hora em hora 19h-05h BRT (cron `'0 0-8,22-23 * * *'` UTC) e so importa
-quando TODOS os 5 arquivos do dia estao publicados:
+de hora em hora 19h-05h BRT (cron `'0 0-8,22-23 * * *'` UTC, depois
+ajustado em duas variantes seg-sex / ter-sab para nao disparar em fds;
+ver Fase 4.2 para o cron atual de 3 slots fixos) e so importa quando
+TODOS os 5 arquivos do dia estao publicados:
 
 1. ANBIMA Debentures (`db<YYMMDD>.txt`)
 2. ANBIMA ETTJ (`CZ-down.asp?Dt_Ref=...`)
@@ -253,6 +255,58 @@ Importante: marker eh por **dia_alvo**, nao por timestamp absoluto. Se o
 dia_alvo mudar entre runs (ex: 05h BRT vira ONTEM e 19h BRT vira HOJE),
 o marker nao bloqueia o novo ciclo. A recuperacao retroativa do
 gap-fill ANBIMA + overwrite janela B3 continua intocada.
+
+### Fase 4.2 -- Migracao probe horario -> probe 3 slots fixos (PR atual)
+
+Problema motivador: o cron original cobria 11 triggers por dia util B3
+(19h, 20h, 21h, 22h, 23h, 00h, 01h, 02h, 03h, 04h, 05h BRT). Apos uma
+execucao bem-sucedida (tipicamente 21h-23h, quando ANBIMA fecha
+publicacao), os ~9 slots restantes apenas leem o marker e encerram em
+~37s -- ainda assim cada um consome Actions minutes, polui o log de
+operacoes e dispara webhooks/notificacoes ruido.
+
+Solucao: trocar o cron para 3 horarios fixos por dia util B3:
+- 21h BRT (00h UTC do dia seguinte) -- primeira tentativa, alvo = HOJE
+- 23h BRT (02h UTC do dia seguinte) -- retry se 21h falhou
+- 05h BRT (08h UTC do dia seguinte) -- ultima tentativa do ciclo,
+  alvo = ONTEM (= mesma ref date dos slots das 21h/23h da vespera)
+
+Cron novo: `'0 0,2,8 * * 2-6'` (UTC). Day-of-week 2-6 (ter-sab UTC)
+garante que a ref date BRT cai sempre em seg-sex BRT, eliminando
+triggers de dom/seg UTC que iriam para fim de semana e seriam barrados
+pelo guard de qualquer jeito.
+
+Mapeamento (BRT = UTC-3):
+- Slot 00 UTC dia X (ter-sab) -> 21h BRT dia X-1 -> ref date BRT = X-1 (HOJE)
+- Slot 02 UTC dia X (ter-sab) -> 23h BRT dia X-1 -> ref date BRT = X-1 (HOJE)
+- Slot 08 UTC dia X (ter-sab) -> 05h BRT dia X   -> ref date BRT = X-1 (ONTEM)
+
+Para todos os 3 slots, ref date BRT = X-1 (UTC). Pra essa ref ser
+seg-sex BRT, X (UTC) precisa ser ter-sab (2-6). OK.
+
+Motivacao quantitativa:
+- Actions minutes: de ate 11 triggers/dia util para 3 (reducao ~73%).
+- Triggers ruidosos: ~9 no-ops/dia util eliminados.
+- Log de operacoes: 3 execucoes/dia util tornam o historico de Actions
+  imediatamente legivel (ANBIMA publica entre 19h-22h BRT na maioria
+  dos dias; 21h captura o caso comum, 23h cobre dia comprido, 05h cobre
+  publicacao tardia ja na madrugada).
+
+Garantias preservadas:
+- Mesma probabilidade de sucesso eventual: o slot das 05h cobre o caso
+  extremo em que ANBIMA so publica depois das 23h BRT. Se mesmo o 05h
+  falhar, o dia eh descartado e capturado retroativamente no ciclo do
+  proximo dia util B3 pelo gap-fill ANBIMA (`scripts/list_target_dates.py`)
+  + overwrite janela 5 du B3 (comportamento inalterado).
+- Marker `data/.probe_state.json` continua barrando re-execucoes do
+  mesmo dia_alvo (sucesso as 21h -> 23h e 05h encerram em ~37s).
+- Guard B3 continua ativo: feriados B3 em dia util seg-sex passam pelo
+  cron (que so olha day-of-week, nao calendario B3) e sao cortados em
+  runtime com exit 0.
+- `workflow_dispatch` com `force=true` ou `target_date` preservado.
+- Zero alteracao em scripts Python (probe_files.py, fetch_anbima.py,
+  fetch_b3_*.py, compute_spreads.py, build_dashboard.py,
+  list_target_dates.py, b3_calendar.py).
 
 ## 8. Regras invioladas
 
