@@ -93,73 +93,74 @@ chaves, `titpub_status=ok`).
 Resultado: **plano A executavel sem bloqueios**. Browser automation, fallback
 sintetico e API autenticada permanecem fora do escopo.
 
-## 5. `fetch_anbima.py` (sem mudancas nesta PR)
+## 5. `fetch_anbima.py`
 
-O script atual ja' atende todos os requisitos do plano A:
+O script atende todos os requisitos do plano A:
 
 - requests apenas (sem playwright/selenium)
 - uma funcao por fonte (`fetch_db`, `fetch_ettj`, `fetch_titulos_publicos`)
 - parsers dedicados (`parse_db`, `parse_ettj`, `parse_ettj_pre`,
   `parse_titulos_publicos`, `parse_titpub_rows`) que retornam estruturas
   consumidas direto por `compute_spreads.py`/`build_dashboard.py`
-- User-Agent identificavel (`anbima-debentures-monitor/1.0`)
-- Retry exponencial 4x (2s/4s/8s/16s) -- mais conservador que o minimo
-  pedido (3x 2/4/8); mantido como esta'
-- Falha barulhento: HTTP 5xx/timeout -> raise; HTTP 4xx (exceto 404 do db
-  que sai com exit 2 = "ainda nao publicado") -> raise. 404 do ms.txt
-  marca `titpub_status='404'` e segue.
+- User-Agent identificavel (`anbima-debentures-monitor/1.0`) com fallback
+  para UA Mozilla/Chrome em caso de 4xx (nao-404) ou 5xx persistente
+  (adicionado na fase 2; algumas vezes a ANBIMA bloqueia UAs nao-browser)
+- Retry exponencial 4x (2s/4s/8s/16s) por UA -- mais conservador que o
+  minimo pedido (3x 2/4/8); mantido como esta'
+- Falha barulhento: HTTP 5xx/timeout -> retry com UA Mozilla, se falhar
+  raise (exit 1); HTTP 4xx exceto 404 -> retry com UA Mozilla, se falhar
+  raise; 404 do db -> exit 2 ("ainda nao publicado", caller skipa).
+  404 do ms.txt marca `titpub_status='404'` e segue.
 
-Por isso esta PR NAO refatora o fetcher; apenas adiciona o workflow + esta
-documentacao.
-
-## 6. Workflow `daily_update.yml` (PoC nesta PR)
+## 6. Workflow `daily_update.yml` (producao)
 
 Localizacao: `.github/workflows/daily_update.yml`.
 
 Caracteristicas:
-- Trigger: `cron: '0 2 * * 2-6'` (02:00 UTC ter-sab = 23:00 BRT seg-sex,
-  mesmo cron do `b3_trades.yml`) + `workflow_dispatch`.
-- Job: `validate-anbima-pipeline`, `runs-on: ubuntu-latest`,
-  `timeout-minutes: 15`.
+- Trigger: `cron: '0 2 * * *'` (02:00 UTC todos os dias = 23:00 BRT) +
+  `workflow_dispatch`. Roda em fds/feriado tambem -- ANBIMA responde 404 e
+  o workflow trata como skip (idem Routine).
+- Job: `anbima-daily-update`, `runs-on: ubuntu-latest`, `timeout-minutes: 15`.
 - Steps:
-  1. Checkout (sem credenciais persistidas -- nao precisa, nao commita)
-  2. Setup Python 3.11 com cache de pip
-  3. `pip install -r requirements.txt`
-  4. Resolve datas alvo (default: hoje BRT + D-1..D-4; override por input)
-  5. Para cada data: `fetch_anbima.py` -> exit 2 = skip; `compute_spreads.py`
-  6. `build_dashboard.py`
-  7. Imprime diff vs main + tamanho dos JSONs no GitHub Step Summary
-  8. Upload do diretorio gerado como artifact (retencao 7 dias)
-- **NAO commita nada**. Modo PoC, exclusivamente para validar paridade vs
-  Routine durante a fase 1 da transicao.
+  1. Checkout com `persist-credentials: true` (workflow commita).
+  2. Setup Python 3.11 com cache de pip.
+  3. `pip install -r requirements.txt`.
+  4. Resolve datas alvo via `scripts/list_target_dates.py` (5 dias uteis B3
+     contando HOJE, pulando fds/Sexta-Feira Santa/Carnaval/Corpus Christi/
+     25-jan/20-nov/demais feriados nacionais).
+  5. Para cada data:
+     - Idempotencia: `history/<D>.json` existente -> skip sem refetch.
+     - `fetch_anbima.py` -> exit 2 (404) = skip; exit != 0 = falha real.
+     - `compute_spreads.py` se fetch OK; contabiliza como snapshot NOVO.
+  6. Se `new_count > 0`: `build_dashboard.py`, depois commit & push:
+     - `git pull --rebase origin main` (race com `b3_trades.yml`); rebase
+       falhando -> exit 1 (sem mascarar conflito).
+     - `git add data/ history/ data.json index.html`.
+     - Commit message: `feat: ANBIMA snapshot <data1>[, <data2>, ...] (run via daily_update.yml)`.
+  7. Se `new_count == 0`: pula build/commit, loga "sem dados novos".
+  8. Step summary + upload de artifacts (debug, retencao 7 dias).
 
-Roda em paralelo a Routine e ao `b3_trades.yml`. Como nao escreve no repo,
-nao colide com o `git pull --rebase` do workflow B3.
+`permissions: contents: write`. Race com `b3_trades.yml` mitigada pelo
+`git pull --rebase origin main` antes do push.
 
 ## 7. Transicao em 3 fases
 
-### Fase 1 -- Validar (esta PR)
-- Mergear `daily_update.yml` como PoC (nao commita).
-- Deixar rodar 5-10 dias em paralelo com a Routine.
-- Inspecionar artifacts: comparar `history/<data>.json` e `data/*.json`
-  gerados pelo PoC com os commitados pela Routine. Devem bater
-  (deterministico).
-- Inspecionar Step Summary: `git status --porcelain` deve mostrar apenas
-  arquivos esperados (`history/<hoje>.json` novo, `data/*.json` regenerados,
-  `index.html` regenerado).
+### Fase 1 -- Validar (PR #125 + #126, MERGED)
+- `daily_update.yml` em modo PoC (nao commita, gera artifact).
+- Validado em paralelo com a Routine durante 2 dias; artifacts batendo com
+  os commits da Routine. Bug de exit code sob `set -e` corrigido em #126.
 
-### Fase 2 -- Promover a producao (PR separado)
-Depois de N execucoes da fase 1 batendo com a Routine:
-- Adicionar step de commit & push ao `daily_update.yml`, espelhando o
-  padrao do `b3_trades.yml`:
-  - `git config user.name 'github-actions[bot]'`
-  - `git add data/ history/ data.json index.html`
-  - `git pull --rebase origin main` (evita race com `b3_trades.yml`)
-  - `git push`
-- Trocar `permissions: contents: read` para `contents: write` e remover
-  `persist-credentials: false` do checkout.
-- Manter Routine ativa em paralelo por +3 dias para confirmar que o commit
-  do workflow nao quebra nada.
+### Fase 2 -- Promover a producao (esta PR, MERGED)
+Promove `daily_update.yml` para substituir 100% a Routine. Mudancas:
+- `permissions: contents: write`; `persist-credentials: true`.
+- Cron `'0 2 * * *'` (todos os dias, nao so seg-sex).
+- Janela em dias uteis B3 via `scripts/list_target_dates.py` (em vez de
+  dias corridos via bash inline).
+- Idempotencia por `history/<D>.json` (skip sem refetch).
+- Step de commit & push com `git pull --rebase` antes; commit message
+  estruturada listando as datas capturadas.
+- `fetch_anbima.py`: fallback UA Mozilla/Chrome quando UA identificavel
+  falha com 4xx (nao-404) ou 5xx persistente.
 
 ### Fase 3 -- Desativar Routine (manual, fora do repo)
 - Lucas desativa a Routine `trig_01HLZMAUHzPjeKPytm6YfnUd` no painel

@@ -41,6 +41,13 @@ USER_AGENT = (
     "anbima-debentures-monitor/1.0 "
     "(+https://github.com/lucastlsabara/anbima-debentures-monitor)"
 )
+# UA "navegador" usado APENAS como fallback de ultima tentativa quando o UA
+# identificavel resulta em 4xx/5xx persistente. ANBIMA ocasionalmente bloqueia
+# UAs nao-browser; tentar uma vez mais com UA Chrome antes de declarar falha.
+MOZILLA_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
 HTTP_TIMEOUT = 30
 # Retry exponencial só para falhas transitórias de rede (timeout, conexão,
 # 5xx). 404 nunca repete — é resposta legítima da ANBIMA quando o arquivo
@@ -49,12 +56,12 @@ HTTP_RETRY_ATTEMPTS = 4
 HTTP_RETRY_BACKOFF_SEC = (2, 4, 8, 16)
 
 
-def _http_get(url: str) -> requests.Response:
-    """GET com retry exponencial em falhas transitórias e User-Agent custom.
+def _http_get_once(url: str, user_agent: str) -> requests.Response:
+    """GET com retry exponencial em falhas transitorias, UA configuravel.
 
     Erros que disparam retry: requests.ConnectionError, requests.Timeout,
-    HTTPError com status 5xx ou 429. HTTPError 4xx (exceto 429) é repassado
-    direto — caller decide (404 = warn-and-skip, demais = raise).
+    HTTPError com status 5xx ou 429. HTTPError 4xx (exceto 429) e repassado
+    direto -- caller decide (404 = warn-and-skip, demais = raise).
     """
     last_exc: Exception | None = None
     for attempt in range(HTTP_RETRY_ATTEMPTS):
@@ -62,7 +69,7 @@ def _http_get(url: str) -> requests.Response:
             r = requests.get(
                 url,
                 timeout=HTTP_TIMEOUT,
-                headers={"User-Agent": USER_AGENT},
+                headers={"User-Agent": user_agent},
             )
         except (requests.ConnectionError, requests.Timeout) as e:
             last_exc = e
@@ -88,6 +95,35 @@ def _http_get(url: str) -> requests.Response:
             )
             time.sleep(wait)
     raise last_exc if last_exc else RuntimeError(f"falha inesperada em {url}")
+
+
+def _http_get(url: str) -> requests.Response:
+    """GET com UA identificavel; se falhar com 4xx/5xx (exceto 404), tenta
+    UMA vez com UA Mozilla/Chrome antes de propagar o erro.
+
+    404 propaga sem fallback -- e resposta legitima da ANBIMA quando o arquivo
+    do dia ainda nao foi publicado, e o caller trata via exit 2 (warn-and-skip).
+    Demais falhas (4xx nao-404, 5xx persistente, timeout, ConnectionError):
+    fallback UA Mozilla; se mesmo assim falhar, propaga (exit 1 no caller).
+    """
+    try:
+        return _http_get_once(url, USER_AGENT)
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            raise
+        print(
+            f"[fetch] {url}: falha com UA padrao ({e}); "
+            f"retry final com UA Mozilla/Chrome",
+            file=sys.stderr,
+        )
+        return _http_get_once(url, MOZILLA_UA)
+    except (requests.ConnectionError, requests.Timeout) as e:
+        print(
+            f"[fetch] {url}: falha de rede ({type(e).__name__}); "
+            f"retry final com UA Mozilla/Chrome",
+            file=sys.stderr,
+        )
+        return _http_get_once(url, MOZILLA_UA)
 
 DB_HEADER = [
     "codigo", "nome", "vencimento", "indice", "taxa_compra", "taxa_venda",
