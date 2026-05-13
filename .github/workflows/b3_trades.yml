@@ -9,6 +9,11 @@ name: B3 Trades
 # porque a sandbox dela bloqueia arquivos.b3.com.br por allowlist (resposta
 # 403 com header x-deny-reason: host_not_allowed). O cron foi removido em
 # #80 baseado nessa premissa errada — restaurado aqui.
+#
+# Cron exclui fds; feriados B3 (Carnaval, Sexta Santa, Corpus Christi,
+# Tiradentes, etc.) sao filtrados pelo step "Guard" via
+# b3_calendar.is_b3_business_day. Em dia nao-util o job termina verde com
+# todos os steps subsequentes skipados.
 
 on:
   schedule:
@@ -60,8 +65,20 @@ jobs:
           # + numpy/scipy/pandas (compute_spreads usado por build_dashboard).
           pip install -r requirements.txt
 
+      - name: Guard - verifica se hoje eh dia util B3
+        id: guard
+        run: |
+          DU=$(python3 -c "from datetime import datetime; from zoneinfo import ZoneInfo; from b3_calendar import is_b3_business_day; hoje = datetime.now(ZoneInfo('America/Sao_Paulo')).date(); print('true' if is_b3_business_day(hoje) else 'false')")
+          echo "is_business_day=$DU" >> "$GITHUB_OUTPUT"
+          if [ "$DU" = "true" ]; then
+            echo "[guard] hoje BRT eh dia util B3 -- prosseguindo"
+          else
+            echo "[guard] hoje BRT NAO eh dia util B3 (fim de semana ou feriado) -- pulando todos os steps"
+          fi
+
       - name: Resolve mode
         id: mode
+        if: steps.guard.outputs.is_business_day == 'true'
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
             MODE=fetch_day
@@ -72,7 +89,7 @@ jobs:
           echo "Modo selecionado: $MODE"
 
       - name: Validate backfill inputs
-        if: steps.mode.outputs.mode == 'backfill'
+        if: steps.guard.outputs.is_business_day == 'true' && steps.mode.outputs.mode == 'backfill'
         run: |
           START='${{ inputs.start_date }}'
           END='${{ inputs.end_date }}'
@@ -87,40 +104,43 @@ jobs:
           echo "Backfill range: $START -> $END"
 
       - name: Run fetch_day (trade-by-trade)
-        if: steps.mode.outputs.mode == 'fetch_day'
+        if: steps.guard.outputs.is_business_day == 'true' && steps.mode.outputs.mode == 'fetch_day'
         run: |
           echo "Rodando fetch_b3_trades.py (5 dias uteis B3)"
           python fetch_b3_trades.py
 
       - name: Run fetch_day (consolidated)
-        if: steps.mode.outputs.mode == 'fetch_day'
+        if: steps.guard.outputs.is_business_day == 'true' && steps.mode.outputs.mode == 'fetch_day'
         run: |
           echo "Rodando fetch_b3_trades_consolidated.py (5 dias uteis B3)"
           python fetch_b3_trades_consolidated.py
 
       - name: Run backfill (trade-by-trade)
-        if: steps.mode.outputs.mode == 'backfill'
+        if: steps.guard.outputs.is_business_day == 'true' && steps.mode.outputs.mode == 'backfill'
         run: |
           echo "Rodando backfill_b3_trades.py ${{ inputs.start_date }} ${{ inputs.end_date }}"
           python backfill_b3_trades.py '${{ inputs.start_date }}' '${{ inputs.end_date }}'
 
       - name: Run backfill (consolidated)
-        if: steps.mode.outputs.mode == 'backfill'
+        if: steps.guard.outputs.is_business_day == 'true' && steps.mode.outputs.mode == 'backfill'
         run: |
           echo "Rodando backfill_b3_trades_consolidated.py ${{ inputs.start_date }} ${{ inputs.end_date }}"
           python backfill_b3_trades_consolidated.py '${{ inputs.start_date }}' '${{ inputs.end_date }}'
 
       - name: Podar historico
+        if: steps.guard.outputs.is_business_day == 'true'
         run: |
           echo "Aplicando politica de retencao 60 du B3 em data/b3_trades*/"
           python scripts/podar_historico.py
 
       - name: Rebuild dashboard
+        if: steps.guard.outputs.is_business_day == 'true'
         run: |
           echo "Regenerando index.html com BUILD_VERSION atualizado"
           python build_dashboard.py
 
       - name: Commit & push
+        if: steps.guard.outputs.is_business_day == 'true'
         env:
           MODE: ${{ steps.mode.outputs.mode }}
         run: |
