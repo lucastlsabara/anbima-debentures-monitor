@@ -356,6 +356,7 @@
   .tabulator .tabulator-cell.neg { color:var(--neg); }
   /* Aba Trades B3 */
   .trd-status { color:var(--muted); font-size:11.5px; margin-left:8px; }
+  .date-error { color:var(--neg); font-size:11.5px; margin-left:8px; }
   .trd-spinner {
     display:inline-block; width:12px; height:12px; margin-right:6px;
     border:2px solid var(--border-strong); border-top-color:var(--accent);
@@ -531,6 +532,7 @@
       <label>Data Atual:
         <input type="text" id="disp-date-atual" placeholder="DD-MM-YYYY">
       </label>
+      <span id="disp-date-error" class="date-error hide"></span>
     </div>
     <div class="controls filter-row">
       <label>Indexador:
@@ -706,6 +708,7 @@
         <input type="text" id="trd-date-fim" placeholder="DD-MM-YYYY">
       </label>
       <span id="trd-status" class="trd-status"></span>
+      <span id="trd-date-error" class="date-error hide"></span>
     </div>
   </div>
   <div id="trd-empty" class="empty hide"></div>
@@ -749,6 +752,7 @@
         </select>
       </label>
       <span id="tr2-status" class="trd-status"></span>
+      <span id="tr2-date-error" class="date-error hide"></span>
     </div>
     <div class="controls tr2-search-row">
       <label class="tr2-pk-label-strong" for="tr2-picker">Buscar papel:</label>
@@ -1670,12 +1674,14 @@ async function renderDispersao() {
   const dates = DISP_INDEX.dates;
   if (GLOBAL_DATE_ATUAL) {
     DISP_DATE_ATUAL = _nearestEnabledDate(GLOBAL_DATE_ATUAL, dates) || dates[dates.length - 1];
+    // Default: Data Anterior fica VAZIA. So' preserva se outra aba ja' definiu
+    // GLOBAL_DATE_ANTERIOR e a data continua valida (estritamente menor que Atual).
     DISP_DATE_ANTERIOR = GLOBAL_DATE_ANTERIOR
       ? _nearestEnabledDate(GLOBAL_DATE_ANTERIOR, dates.filter(d => d < DISP_DATE_ATUAL))
-      : defaultAnteriorFor(DISP_DATE_ATUAL, dates);
+      : null;
   } else {
     DISP_DATE_ATUAL = dates[dates.length - 1];
-    DISP_DATE_ANTERIOR = defaultAnteriorFor(DISP_DATE_ATUAL, dates);
+    DISP_DATE_ANTERIOR = null;
   }
   GLOBAL_DATE_ATUAL = DISP_DATE_ATUAL;
   GLOBAL_DATE_ANTERIOR = DISP_DATE_ANTERIOR;
@@ -1698,9 +1704,21 @@ async function renderDispersao() {
     onChange: (_, d) => { if (d) onDispDateChange("atual", d); },
   });
   DISP_FP_ANTERIOR = flatpickr("#disp-date-anterior", {
-    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y", enable: dates.filter(d => d < DISP_DATE_ATUAL),
+    dateFormat:"Y-m-d", altInput:true, altFormat:"d-m-Y",
+    allowInput: true,
+    enable: dates.filter(d => d < DISP_DATE_ATUAL),
     defaultDate: DISP_DATE_ANTERIOR || undefined,
-    onChange: (_, d) => { if (d) onDispDateChange("anterior", d); },
+    onChange: (_, d) => {
+      if (!d) {
+        DISP_DATE_ANTERIOR = null;
+        _dispClearDateError();
+        timelinePause();
+        _updatePlayRangeIndicator();
+        _syncDatesFrom("disp", DISP_DATE_ATUAL, DISP_DATE_ANTERIOR);
+        return;
+      }
+      onDispDateChange("anterior", d);
+    },
   });
   _registerDateSync({
     key: "disp",
@@ -1745,21 +1763,45 @@ async function renderDispersao() {
 function onDispDateChange(which, d) {
   if (which === "atual") {
     DISP_DATE_ATUAL = d;
-    // Auto-pick: Data Anterior = último dia útil disponível < Atual.
-    DISP_DATE_ANTERIOR = defaultAnteriorFor(DISP_DATE_ATUAL, DISP_INDEX.dates);
+    // Data Anterior fica VAZIA por padrao. Se a anterior corrente colidir
+    // com a nova atual (>=), descarta. Caso contrario preserva.
+    if (DISP_DATE_ANTERIOR && DISP_DATE_ANTERIOR >= DISP_DATE_ATUAL) {
+      DISP_DATE_ANTERIOR = null;
+    }
     if (DISP_FP_ANTERIOR) {
       DISP_FP_ANTERIOR.set("enable", DISP_INDEX.dates.filter(x => x < DISP_DATE_ATUAL));
       if (DISP_DATE_ANTERIOR) DISP_FP_ANTERIOR.setDate(DISP_DATE_ANTERIOR, false);
       else DISP_FP_ANTERIOR.clear(false);
     }
+    _dispClearDateError();
     timelinePause();
     loadAndRenderDispersion(DISP_DATE_ATUAL);
   } else {
-    DISP_DATE_ANTERIOR = d;
+    if (d === DISP_DATE_ATUAL) {
+      _dispShowDateError("Data Anterior não pode ser igual a Data Atual.");
+      DISP_DATE_ANTERIOR = null;
+      if (DISP_FP_ANTERIOR) DISP_FP_ANTERIOR.clear(false);
+    } else {
+      _dispClearDateError();
+      DISP_DATE_ANTERIOR = d;
+    }
     timelinePause();
   }
   _updatePlayRangeIndicator();
   _syncDatesFrom("disp", DISP_DATE_ATUAL, DISP_DATE_ANTERIOR);
+}
+
+function _dispShowDateError(msg) {
+  const el = document.getElementById("disp-date-error");
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove("hide");
+}
+function _dispClearDateError() {
+  const el = document.getElementById("disp-date-error");
+  if (!el) return;
+  el.textContent = "";
+  el.classList.add("hide");
 }
 
 function _updatePlayRangeIndicator() {
@@ -2000,10 +2042,14 @@ function setupTimeline() {
 }
 
 function _datesInDispRange() {
+  // Data Anterior vazia -> apenas Data Atual (1 dia, sem play range).
+  // Data Anterior preenchida -> intervalo [Anterior, Atual] inclusive.
   const all = (DISP_INDEX && DISP_INDEX.dates) || [];
-  const start = DISP_DATE_ANTERIOR || all[0];
   const end = DISP_DATE_ATUAL || all[all.length - 1];
-  const i0 = all.indexOf(start), i1 = all.indexOf(end);
+  if (!DISP_DATE_ANTERIOR) {
+    return all.indexOf(end) >= 0 ? [end] : [];
+  }
+  const i0 = all.indexOf(DISP_DATE_ANTERIOR), i1 = all.indexOf(end);
   if (i0 < 0 || i1 < 0 || i0 > i1) return [];
   return all.slice(i0, i1 + 1);
 }
@@ -2266,44 +2312,29 @@ function buildMovTable() {
     if (!parts.length) return true;
     return parts.some(p => s.includes(p));
   };
-  // Numeric: numero puro = IGUALDADE ESTRITA; operadores '>', '>=', '<',
-  // '<=', '=', '==' explicitos; range "A-B" inclusivo. Tolera espacos e
-  // virgula decimal. Termo nao parseavel: nao filtra (retorna true).
+  // Numeric: match SUBSTRING no valor stringificado da linha (sem normalizar
+  // formato pt-BR), com retrocompat para operadores '>', '>=', '<', '<='.
+  // Exemplo: rowValue=4560, term='456' -> '4560'.includes('456') -> true.
   const numericFilter = (term, value) => {
     if (term == null) return true;
     if (typeof term !== "string" && typeof term !== "number") return true;
     const s = String(term).trim();
     if (s === "") return true;
-    const num = "(-?\\d+(?:[.,]\\d+)?)";
-    const v = (value == null) ? NaN : Number(value);
-    const mOp = s.match(new RegExp("^(>=|<=|==|=|>|<)\\s*" + num + "\\s*$"));
+    const mOp = s.match(/^(>=?|<=?)\s*(-?\d*[.,]?\d+)\s*$/);
     if (mOp) {
-      if (Number.isNaN(v)) return false;
-      const op = mOp[1];
       const ref = parseFloat(mOp[2].replace(",", "."));
-      if (op === ">")  return v > ref;
-      if (op === "<")  return v < ref;
-      if (op === ">=") return v >= ref;
-      if (op === "<=") return v <= ref;
-      if (op === "=" || op === "==") return v === ref;
-    }
-    // Numero puro (inclui "-N"): igualdade estrita. Avaliado antes de range
-    // para que "-5" sozinho seja igualdade.
-    const mNum = s.match(new RegExp("^" + num + "$"));
-    if (mNum) {
+      if (Number.isNaN(ref)) return false;
+      const v = (value == null) ? NaN : Number(value);
       if (Number.isNaN(v)) return false;
-      const ref = parseFloat(mNum[1].replace(",", "."));
-      return v === ref;
+      switch (mOp[1]) {
+        case ">":  return v > ref;
+        case ">=": return v >= ref;
+        case "<":  return v < ref;
+        case "<=": return v <= ref;
+      }
     }
-    const mRange = s.match(new RegExp("^" + num + "\\s*-\\s*" + num + "$"));
-    if (mRange) {
-      if (Number.isNaN(v)) return false;
-      let a = parseFloat(mRange[1].replace(",", "."));
-      let b = parseFloat(mRange[2].replace(",", "."));
-      if (a > b) { const t = a; a = b; b = t; }
-      return v >= a && v <= b;
-    }
-    return true;
+    if (value == null) return false;
+    return String(value).includes(s);
   };
   const setorOpts = (() => {
     const all = new Set();
@@ -2356,11 +2387,11 @@ function buildMovTable() {
         formatter: c => c.getValue() ? brDate(c.getValue()) : "-" },
       { title:"Duration", field:"duration_anos", width:90, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: "2, >2",
+        headerFilterPlaceholder: "ex: 2 ou >2",
         formatter: c => fmtAnos(c.getValue()) },
       { title:"PU (R$)", field:"pu", width:120, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: "1000, >1000",
+        headerFilterPlaceholder: "ex: 1000 ou >1000",
         formatter: c => {
           const v = c.getValue();
           if (v == null) return "—";
@@ -2369,23 +2400,23 @@ function buildMovTable() {
         } },
       { title:"Taxa", field:"taxa", width:78, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: "5, >5",
+        headerFilterPlaceholder: "ex: 5 ou >5",
         formatter: c => fmtPct(c.getValue()) },
       { title:"%PAR", field:"pct_pu_par", width:84, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: "100, >100",
+        headerFilterPlaceholder: "ex: 100 ou >100",
         formatter: fmtPctPar },
       { title:"Spread Anterior", field:"spread_ref_pp", width:130, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: "1.5, >1.5",
+        headerFilterPlaceholder: "ex: 1.5 ou >1.5",
         formatter: fmtSpread },
       { title:"Spread Atual", field:"spread_pp", width:120, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: "1.5, >1.5",
+        headerFilterPlaceholder: "ex: 1.5 ou >1.5",
         formatter: fmtSpread },
       { title:"Δ Spread (bps)", field:"delta_bps", width:130, hozAlign:"right",
         headerFilter: "input", headerFilterFunc: numericFilter,
-        headerFilterPlaceholder: "10, >10",
+        headerFilterPlaceholder: "ex: 10 ou >10",
         formatter: fmtDelta },
     ],
   });
@@ -3678,43 +3709,28 @@ function trd_likeCI(term, value) {
 }
 
 function trd_numericFilter(term, value) {
+  // Match SUBSTRING no valor stringificado da linha (sem normalizar formato
+  // pt-BR), com retrocompat para operadores '>', '>=', '<', '<='.
+  // Exemplo: rowValue=4560, term='456' -> '4560'.includes('456') -> true.
   if (term == null) return true;
   if (typeof term !== "string" && typeof term !== "number") return true;
   const s = String(term).trim();
   if (s === "") return true;
-  const num = "(-?\\d+(?:[.,]\\d+)?)";
-  const v = (value == null) ? NaN : Number(value);
-  // Operadores explicitos: >, >=, <, <=, =, ==
-  const mOp = s.match(new RegExp("^(>=|<=|==|=|>|<)\\s*" + num + "\\s*$"));
+  const mOp = s.match(/^(>=?|<=?)\s*(-?\d*[.,]?\d+)\s*$/);
   if (mOp) {
-    if (Number.isNaN(v)) return false;
-    const op = mOp[1];
     const ref = parseFloat(mOp[2].replace(",", "."));
-    if (op === ">")  return v > ref;
-    if (op === "<")  return v < ref;
-    if (op === ">=") return v >= ref;
-    if (op === "<=") return v <= ref;
-    if (op === "=" || op === "==") return v === ref;
-  }
-  // Numero puro (inclui "-N"): IGUALDADE ESTRITA. Avaliado antes de range
-  // para que "-5" sozinho seja igualdade, nao seja interpretado como range.
-  const mNum = s.match(new RegExp("^" + num + "$"));
-  if (mNum) {
+    if (Number.isNaN(ref)) return false;
+    const v = (value == null) ? NaN : Number(value);
     if (Number.isNaN(v)) return false;
-    const ref = parseFloat(mNum[1].replace(",", "."));
-    return v === ref;
+    switch (mOp[1]) {
+      case ">":  return v > ref;
+      case ">=": return v >= ref;
+      case "<":  return v < ref;
+      case "<=": return v <= ref;
+    }
   }
-  // Range "A-B" (dois numeros separados por "-"): inclusivo nos dois lados.
-  const mRange = s.match(new RegExp("^" + num + "\\s*-\\s*" + num + "$"));
-  if (mRange) {
-    if (Number.isNaN(v)) return false;
-    let a = parseFloat(mRange[1].replace(",", "."));
-    let b = parseFloat(mRange[2].replace(",", "."));
-    if (a > b) { const t = a; a = b; b = t; }
-    return v >= a && v <= b;
-  }
-  // Termo nao parseavel: nao filtra.
-  return true;
+  if (value == null) return false;
+  return String(value).includes(s);
 }
 
 async function renderTradesB3() {
@@ -3742,35 +3758,61 @@ async function renderTradesB3() {
 
   const latest = TRD_MANIFEST.latest_date || dates[dates.length - 1];
   const earliest = TRD_MANIFEST.earliest_date || dates[0];
-  TRD_DATE_INI = latest;
+  // Default: Data Anterior VAZIA (mostra so' Data Atual); Data Atual = latest.
+  TRD_DATE_INI = null;
   TRD_DATE_FIM = latest;
 
   if (TRD_FP_INI) TRD_FP_INI.destroy();
   if (TRD_FP_FIM) TRD_FP_FIM.destroy();
   TRD_FP_INI = flatpickr("#trd-date-ini", {
     dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
-    enable: dates, defaultDate: TRD_DATE_INI, minDate: earliest, maxDate: TRD_DATE_FIM || latest,
+    allowInput: true,
+    enable: dates.filter(d => d !== TRD_DATE_FIM),
+    defaultDate: TRD_DATE_INI || undefined,
+    minDate: earliest, maxDate: TRD_DATE_FIM || latest,
     onChange: (_, d) => {
-      if (!d) return;
+      if (!d) {
+        TRD_DATE_INI = null;
+        trd_clearDateError();
+        trd_scheduleRecalc();
+        return;
+      }
+      if (d === TRD_DATE_FIM) {
+        trd_showDateError("Data Anterior não pode ser igual a Data Atual.");
+        if (TRD_FP_INI) TRD_FP_INI.clear(false);
+        TRD_DATE_INI = null;
+        trd_scheduleRecalc();
+        return;
+      }
+      trd_clearDateError();
       TRD_DATE_INI = d;
       if (TRD_DATE_FIM && TRD_DATE_INI > TRD_DATE_FIM) {
         TRD_DATE_FIM = TRD_DATE_INI;
+        TRD_DATE_INI = null;
         if (TRD_FP_FIM) TRD_FP_FIM.setDate(TRD_DATE_FIM, false);
+        if (TRD_FP_INI) TRD_FP_INI.clear(false);
       }
-      if (TRD_FP_FIM) TRD_FP_FIM.set("minDate", TRD_DATE_INI);
       trd_scheduleRecalc();
     },
   });
   TRD_FP_FIM = flatpickr("#trd-date-fim", {
     dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
-    enable: dates, defaultDate: TRD_DATE_FIM, minDate: TRD_DATE_INI || earliest, maxDate: latest,
+    enable: dates, defaultDate: TRD_DATE_FIM, minDate: earliest, maxDate: latest,
     onChange: (_, d) => {
       if (!d) return;
       TRD_DATE_FIM = d;
-      if (TRD_DATE_INI && TRD_DATE_FIM < TRD_DATE_INI) {
-        TRD_DATE_INI = TRD_DATE_FIM;
-        if (TRD_FP_INI) TRD_FP_INI.setDate(TRD_DATE_INI, false);
+      if (TRD_DATE_INI && TRD_DATE_INI === TRD_DATE_FIM) {
+        TRD_DATE_INI = null;
+        if (TRD_FP_INI) TRD_FP_INI.clear(false);
+        trd_showDateError("Data Anterior não pode ser igual a Data Atual.");
+      } else if (TRD_DATE_INI && TRD_DATE_FIM < TRD_DATE_INI) {
+        TRD_DATE_INI = null;
+        if (TRD_FP_INI) TRD_FP_INI.clear(false);
+        trd_clearDateError();
+      } else {
+        trd_clearDateError();
       }
+      if (TRD_FP_INI) TRD_FP_INI.set("enable", dates.filter(x => x !== TRD_DATE_FIM));
       if (TRD_FP_INI) TRD_FP_INI.set("maxDate", TRD_DATE_FIM);
       trd_scheduleRecalc();
     },
@@ -3779,13 +3821,26 @@ async function renderTradesB3() {
   await trd_load();
 }
 
+function trd_showDateError(msg) {
+  const el = document.getElementById("trd-date-error");
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove("hide");
+}
+function trd_clearDateError() {
+  const el = document.getElementById("trd-date-error");
+  if (!el) return;
+  el.textContent = "";
+  el.classList.add("hide");
+}
+
 let TRD_RECALC_TIMER = null;
 function trd_scheduleRecalc() {
   if (TRD_RECALC_TIMER) clearTimeout(TRD_RECALC_TIMER);
   TRD_RECALC_TIMER = setTimeout(() => {
     TRD_RECALC_TIMER = null;
-    if (!TRD_DATE_INI || !TRD_DATE_FIM) return;
-    if (TRD_DATE_INI > TRD_DATE_FIM) {
+    if (!TRD_DATE_FIM) return;
+    if (TRD_DATE_INI && TRD_DATE_INI > TRD_DATE_FIM) {
       const tmp = TRD_DATE_INI; TRD_DATE_INI = TRD_DATE_FIM; TRD_DATE_FIM = tmp;
     }
     trd_load();
@@ -3793,9 +3848,15 @@ function trd_scheduleRecalc() {
 }
 
 function trd_datesInRange() {
+  // Data Anterior vazia -> apenas Data Atual.
+  // Data Anterior preenchida -> intervalo [Anterior, Atual] inclusive.
   const out = [];
   for (const e of (TRD_MANIFEST.dates || [])) {
-    if (e.date >= TRD_DATE_INI && e.date <= TRD_DATE_FIM) out.push(e);
+    if (TRD_DATE_INI == null) {
+      if (e.date === TRD_DATE_FIM) out.push(e);
+    } else {
+      if (e.date >= TRD_DATE_INI && e.date <= TRD_DATE_FIM) out.push(e);
+    }
   }
   return out;
 }
@@ -4008,7 +4069,7 @@ function _trd_buildTradesTable(containerId, rows) {
       { title: "Qtd", field: "qtd", width: 90, hozAlign: "right",
         formatter: c => trd_fmtIntBR(c.getValue()),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "100, >100" },
+        headerFilterPlaceholder: "ex: 100 ou >100" },
       { title: "Preço", field: "price", width: 110, hozAlign: "right",
         formatter: c => {
           const v = c.getValue();
@@ -4017,7 +4078,7 @@ function _trd_buildTradesTable(containerId, rows) {
             { minimumFractionDigits: 2, maximumFractionDigits: 6 });
         },
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "1000, >1000" },
+        headerFilterPlaceholder: "ex: 1000 ou >1000" },
       { title: "Vol (R$)", field: "vol", width: 130, hozAlign: "right",
         formatter: c => {
           const v = c.getValue();
@@ -4026,11 +4087,11 @@ function _trd_buildTradesTable(containerId, rows) {
             { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         },
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "1000000, >1000000" },
+        headerFilterPlaceholder: "ex: 1000000 ou >1000000" },
       { title: "Taxa", field: "rate", width: 110, hozAlign: "right",
         formatter: c => trd_fmtRate(c.getValue()),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "5, >5" },
+        headerFilterPlaceholder: "ex: 5 ou >5" },
       { title: "Origem", field: "origin", width: 170,
         headerFilter: "input", headerFilterFunc: trd_likeCI },
       { title: "Cód. Trade", field: "trade_code", width: 120,
@@ -4274,37 +4335,64 @@ async function tr2_initDatesAndLoad() {
   }
   const latest = manifest.latest_date || dates[dates.length - 1];
   const earliest = manifest.earliest_date || dates[0];
-  // Preserva range corrente se as datas existirem na nova fonte; senao
-  // colapsa para o latest da fonte ativa.
-  if (!TR2_DATE_INI || !dates.includes(TR2_DATE_INI)) TR2_DATE_INI = latest;
+  // Default: Data Anterior fica VAZIA (mostra so' Data Atual); Data Atual
+  // preenchida com a data mais recente. Preserva range corrente entre trocas
+  // de fonte apenas se ambas as datas continuarem existindo na nova fonte.
+  if (TR2_DATE_INI != null && !dates.includes(TR2_DATE_INI)) TR2_DATE_INI = null;
   if (!TR2_DATE_FIM || !dates.includes(TR2_DATE_FIM)) TR2_DATE_FIM = latest;
 
   if (TR2_FP_INI) TR2_FP_INI.destroy();
   if (TR2_FP_FIM) TR2_FP_FIM.destroy();
   TR2_FP_INI = flatpickr("#tr2-date-ini", {
     dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
-    enable: dates, defaultDate: TR2_DATE_INI, minDate: earliest, maxDate: TR2_DATE_FIM || latest,
+    allowInput: true,
+    enable: dates.filter(d => d !== TR2_DATE_FIM),
+    defaultDate: TR2_DATE_INI || undefined,
+    minDate: earliest, maxDate: TR2_DATE_FIM || latest,
     onChange: (_, d) => {
-      if (!d) return;
+      if (!d) {
+        TR2_DATE_INI = null;
+        tr2_clearDateError();
+        tr2_scheduleRecalc();
+        return;
+      }
+      if (d === TR2_DATE_FIM) {
+        tr2_showDateError("Data Anterior não pode ser igual a Data Atual.");
+        if (TR2_FP_INI) TR2_FP_INI.clear(false);
+        TR2_DATE_INI = null;
+        tr2_scheduleRecalc();
+        return;
+      }
+      tr2_clearDateError();
       TR2_DATE_INI = d;
       if (TR2_DATE_FIM && TR2_DATE_INI > TR2_DATE_FIM) {
         TR2_DATE_FIM = TR2_DATE_INI;
+        TR2_DATE_INI = null;
         if (TR2_FP_FIM) TR2_FP_FIM.setDate(TR2_DATE_FIM, false);
+        if (TR2_FP_INI) TR2_FP_INI.clear(false);
       }
-      if (TR2_FP_FIM) TR2_FP_FIM.set("minDate", TR2_DATE_INI);
       tr2_scheduleRecalc();
     },
   });
   TR2_FP_FIM = flatpickr("#tr2-date-fim", {
     dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
-    enable: dates, defaultDate: TR2_DATE_FIM, minDate: TR2_DATE_INI || earliest, maxDate: latest,
+    enable: dates, defaultDate: TR2_DATE_FIM, minDate: earliest, maxDate: latest,
     onChange: (_, d) => {
       if (!d) return;
       TR2_DATE_FIM = d;
-      if (TR2_DATE_INI && TR2_DATE_FIM < TR2_DATE_INI) {
-        TR2_DATE_INI = TR2_DATE_FIM;
-        if (TR2_FP_INI) TR2_FP_INI.setDate(TR2_DATE_INI, false);
+      if (TR2_DATE_INI && TR2_DATE_INI === TR2_DATE_FIM) {
+        // FIM colapsou em cima do INI -> limpa INI (mostra so' Atual).
+        TR2_DATE_INI = null;
+        if (TR2_FP_INI) TR2_FP_INI.clear(false);
+        tr2_showDateError("Data Anterior não pode ser igual a Data Atual.");
+      } else if (TR2_DATE_INI && TR2_DATE_FIM < TR2_DATE_INI) {
+        TR2_DATE_INI = null;
+        if (TR2_FP_INI) TR2_FP_INI.clear(false);
+        tr2_clearDateError();
+      } else {
+        tr2_clearDateError();
       }
+      if (TR2_FP_INI) TR2_FP_INI.set("enable", dates.filter(x => x !== TR2_DATE_FIM));
       if (TR2_FP_INI) TR2_FP_INI.set("maxDate", TR2_DATE_FIM);
       tr2_scheduleRecalc();
     },
@@ -4313,14 +4401,27 @@ async function tr2_initDatesAndLoad() {
   await tr2_load();
 }
 
+function tr2_showDateError(msg) {
+  const el = document.getElementById("tr2-date-error");
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove("hide");
+}
+function tr2_clearDateError() {
+  const el = document.getElementById("tr2-date-error");
+  if (!el) return;
+  el.textContent = "";
+  el.classList.add("hide");
+}
+
 // Auto-recalc com debounce de 300ms apos mudanca de range. Listener direto
 // no flatpickr substitui o antigo botao Aplicar (ja removido do HTML).
 function tr2_scheduleRecalc() {
   if (TR2_RECALC_TIMER) clearTimeout(TR2_RECALC_TIMER);
   TR2_RECALC_TIMER = setTimeout(() => {
     TR2_RECALC_TIMER = null;
-    if (!TR2_DATE_INI || !TR2_DATE_FIM) return;
-    if (TR2_DATE_INI > TR2_DATE_FIM) {
+    if (!TR2_DATE_FIM) return;
+    if (TR2_DATE_INI && TR2_DATE_INI > TR2_DATE_FIM) {
       const tmp = TR2_DATE_INI; TR2_DATE_INI = TR2_DATE_FIM; TR2_DATE_FIM = tmp;
     }
     tr2_load();
@@ -4328,10 +4429,16 @@ function tr2_scheduleRecalc() {
 }
 
 function tr2_datesInRange(manifest) {
+  // Data Anterior vazia -> apenas Data Atual.
+  // Data Anterior preenchida -> intervalo [Anterior, Atual] inclusive.
   if (!manifest || !manifest.dates) return [];
   const out = [];
   for (const e of manifest.dates) {
-    if (e.date >= TR2_DATE_INI && e.date <= TR2_DATE_FIM) out.push(e);
+    if (TR2_DATE_INI == null) {
+      if (e.date === TR2_DATE_FIM) out.push(e);
+    } else {
+      if (e.date >= TR2_DATE_INI && e.date <= TR2_DATE_FIM) out.push(e);
+    }
   }
   return out;
 }
@@ -4873,12 +4980,23 @@ function tr2_renderAllCharts() {
     (granularity === "day")  ? "por dia"  :
     (granularity === "week") ? "por semana" : "por mês";
   const barId = "tr2-bar-all";
+  const scatterId = "tr2-scatter-rate";
+  // Scatter Taxa x Tempo so faz sentido para trade-by-trade (consolidated
+  // nao tem timestamp intraday nem campo `rate` 1:1 com trade).
+  const showScatter = (TR2_SOURCE !== "consolidated");
   chartsBox.innerHTML =
     `<div class="panel tr2-cat-row">` +
       `<h2>Volume R$ ${escapeHtml(titleSuffix)}</h2>` +
       `<div id="${barId}" class="chart"></div>` +
-    `</div>`;
+    `</div>` +
+    (showScatter
+      ? `<div class="panel tr2-cat-row">` +
+          `<h2>Taxa × Tempo (bolha = Volume R$)</h2>` +
+          `<div id="${scatterId}" class="chart"></div>` +
+        `</div>`
+      : "");
   tr2_renderUnifiedStackedBarChart(granularity, barId);
+  if (showScatter) tr2_renderScatterRateChart(scatterId);
 
   tr2_renderTable();
 }
@@ -4963,31 +5081,31 @@ function _tr2_buildConsTable(containerId, rows) {
       { title: "Quantidade", field: "quantidade", width: 120, hozAlign: "right",
         formatter: fmtInt,
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "100, >100" },
+        headerFilterPlaceholder: "ex: 100 ou >100" },
       { title: "Nº Negócios", field: "n_negocios", width: 110, hozAlign: "right",
         formatter: fmtInt,
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "10, >10" },
+        headerFilterPlaceholder: "ex: 10 ou >10" },
       { title: "PMP", field: "pmp", width: 110, hozAlign: "right",
         formatter: fmtNum(6),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "1000, >1000" },
+        headerFilterPlaceholder: "ex: 1000 ou >1000" },
       { title: "Preço", field: "preco", width: 110, hozAlign: "right",
         formatter: fmtNum(6),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "1000, >1000" },
+        headerFilterPlaceholder: "ex: 1000 ou >1000" },
       { title: "Mínimo", field: "preco_min", width: 110, hozAlign: "right",
         formatter: fmtNum(6),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "1000, >1000" },
+        headerFilterPlaceholder: "ex: 1000 ou >1000" },
       { title: "Máximo", field: "preco_max", width: 110, hozAlign: "right",
         formatter: fmtNum(6),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "1000, >1000" },
+        headerFilterPlaceholder: "ex: 1000 ou >1000" },
       { title: "Volume Total (R$)", field: "volume_total", width: 160, hozAlign: "right",
         formatter: fmtNum(2),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "1000000, >1000000" },
+        headerFilterPlaceholder: "ex: 1000000 ou >1000000" },
       { title: "Grupo", field: "grupo", width: 120,
         formatter: fmtGrupo,
         headerFilter: "input", headerFilterFunc: trd_likeCI },
@@ -4995,20 +5113,19 @@ function _tr2_buildConsTable(containerId, rows) {
   });
 }
 
-function tr2_renderUnifiedStackedBarChart(granularity, divId) {
-  // Modo da legenda depende de #emissores distintos em TR2_SELECTED:
-  //  - 1 emissor:   1 cor por TICKER, legenda 1:1 ticker (alfabetica).
-  //  - >1 emissor:  1 cor por EMISSOR, legenda 1:1 emissor (PR #95 M6).
+// Modo/ordem/cores compartilhados entre o chart de Volume R$ (bar empilhada)
+// e o scatter Taxa x Tempo da Pesquisa de Trades:
+//  - singleIssuerMode = 1 emissor selecionado -> 1 cor por TICKER.
+//  - multi -> 1 cor por EMISSOR (ordem de 1a aparicao).
+// Ordem dos traces e' alfabetica por ticker (single) ou agrupada por
+// emissor + alfabetica por ticker dentro (multi).
+function _trd_colorForTrace() {
   const distinctIssuers = new Set();
   for (const v of TR2_SELECTED.values()) {
     distinctIssuers.add(v.issuer || "(sem emissor)");
   }
   const singleIssuerMode = distinctIssuers.size === 1;
 
-  // Ordem dos traces:
-  //  - singleIssuerMode: alfabetica por ticker (mesma ordem da legenda).
-  //  - multi: por emissor (ordem de 1a aparicao em TR2_SELECTED), e
-  //    dentro do emissor por ticker — empilhamento agrupa por cor.
   const orderedSelected = [];
   if (singleIssuerMode) {
     const all = [...TR2_SELECTED.values()]
@@ -5027,6 +5144,35 @@ function tr2_renderUnifiedStackedBarChart(granularity, divId) {
       for (const v of arr) orderedSelected.push({ sel: v });
     }
   }
+
+  const tickerColor = new Map();
+  const issuerColor = new Map();
+  if (singleIssuerMode) {
+    let cIdx = 0;
+    for (const { sel } of orderedSelected) {
+      tickerColor.set(sel.ticker, PALETTE_QUAL[cIdx % PALETTE_QUAL.length]);
+      cIdx += 1;
+    }
+  } else {
+    let cIdx = 0;
+    for (const { sel } of orderedSelected) {
+      const k = sel.issuer || "(sem emissor)";
+      if (!issuerColor.has(k)) {
+        issuerColor.set(k, PALETTE_QUAL[cIdx % PALETTE_QUAL.length]);
+        cIdx += 1;
+      }
+    }
+  }
+
+  const colorFor = (sel) => singleIssuerMode
+    ? tickerColor.get(sel.ticker)
+    : issuerColor.get(sel.issuer || "(sem emissor)");
+
+  return { singleIssuerMode, orderedSelected, colorFor };
+}
+
+function tr2_renderUnifiedStackedBarChart(granularity, divId) {
+  const { singleIssuerMode, orderedSelected, colorFor } = _trd_colorForTrace();
 
   // Coleta labels de bucket cronologicamente ordenados (categorias do eixo X).
   // Eixo "category" elimina buracos de FDS/feriado automaticamente.
@@ -5053,28 +5199,6 @@ function tr2_renderUnifiedStackedBarChart(granularity, divId) {
   const sortedTs = Array.from(labelByTs.keys()).sort((a, b) => a - b);
   const categoryarray = sortedTs.map(ts => labelByTs.get(ts));
 
-  // Cor:
-  //  - singleIssuerMode: 1 cor por TICKER (idx = posicao alfabetica em `built`).
-  //  - multi: 1 cor por EMISSOR (ordem de aparicao em `built`).
-  const tickerColor = new Map();
-  const issuerColor = new Map();
-  if (singleIssuerMode) {
-    let cIdx = 0;
-    for (const { sel } of built) {
-      tickerColor.set(sel.ticker, PALETTE_QUAL[cIdx % PALETTE_QUAL.length]);
-      cIdx += 1;
-    }
-  } else {
-    let cIdx = 0;
-    for (const { sel } of built) {
-      const k = sel.issuer || "(sem emissor)";
-      if (!issuerColor.has(k)) {
-        issuerColor.set(k, PALETTE_QUAL[cIdx % PALETTE_QUAL.length]);
-        cIdx += 1;
-      }
-    }
-  }
-
   // Legenda:
   //  - singleIssuerMode: 1 entrada por ticker (showlegend=true em todos,
   //    name=ticker, legendgroup=ticker).
@@ -5085,19 +5209,18 @@ function tr2_renderUnifiedStackedBarChart(granularity, divId) {
   const isCons = TR2_SOURCE === "consolidated";
   const traces = built.map(({ sel, series }) => {
     const issuer = sel.issuer || "(sem emissor)";
-    let name, legendgroup, showlegend, color;
+    let name, legendgroup, showlegend;
     if (singleIssuerMode) {
       name = sel.ticker;
       legendgroup = sel.ticker;
       showlegend = true;
-      color = tickerColor.get(sel.ticker);
     } else {
       name = issuer;
       legendgroup = issuer;
       showlegend = !issuerLegendDone.has(issuer);
       if (showlegend) issuerLegendDone.add(issuer);
-      color = issuerColor.get(issuer);
     }
+    const color = colorFor(sel);
     // Tooltip: trade-by-trade mostra `N` (numero de linhas, i.e. trades
     // brutos agregados no bucket). Consolidated soma `nTrades` declarado
     // pela B3 quando disponivel, com fallback para `n` (linhas de
@@ -5157,6 +5280,105 @@ function tr2_renderUnifiedStackedBarChart(granularity, divId) {
     yaxis: Object.assign({}, base.yaxis, {
       tickformat: "~s", separatethousands: true,
     }),
+  });
+  Plotly.newPlot(divId, traces, layout, PLOTLY_CONFIG);
+}
+
+function tr2_renderScatterRateChart(divId) {
+  // Scatter Taxa x Tempo: cada trade vira 1 bolinha em (datetime, rate).
+  // Tamanho proporcional ao Volume R$ (sizemode=area). Cor segue a mesma
+  // logica do bar de Volume R$ (1 emissor -> cor por ticker; multi -> cor
+  // por emissor). Hovertemplate com ticker, emissor, data/hora, taxa e
+  // volume formatado em pt-BR.
+  const { singleIssuerMode, orderedSelected, colorFor } = _trd_colorForTrace();
+  const rowsAll = _tr2_filteredRows();
+
+  // Agrupa rows por ticker, preservando so' o que tem rate + date + time.
+  const byTicker = new Map();
+  let maxVol = 0;
+  for (const r of rowsAll) {
+    if (!r || !TR2_SELECTED.has(r.ticker)) continue;
+    if (typeof r.rate !== "number") continue;
+    if (!r.date || !r.time) continue;
+    if (!byTicker.has(r.ticker)) byTicker.set(r.ticker, []);
+    byTicker.get(r.ticker).push(r);
+    if (typeof r.vol === "number" && r.vol > maxVol) maxVol = r.vol;
+  }
+
+  // sizeref convencional de Plotly bubbles: 2*max/(desired^2). Calibrado
+  // para tamanho maximo ~40px de area. sizemin garante minimo visivel.
+  const desiredMaxPx = 40;
+  const sizeref = maxVol > 0
+    ? (2.0 * maxVol / (desiredMaxPx * desiredMaxPx))
+    : 1;
+
+  const issuerLegendDone = new Set();
+  const traces = [];
+  for (const { sel } of orderedSelected) {
+    const rs = byTicker.get(sel.ticker);
+    if (!rs || !rs.length) continue;
+    const issuer = sel.issuer || "(sem emissor)";
+    let name, legendgroup, showlegend;
+    if (singleIssuerMode) {
+      name = sel.ticker; legendgroup = sel.ticker; showlegend = true;
+    } else {
+      name = issuer; legendgroup = issuer;
+      showlegend = !issuerLegendDone.has(issuer);
+      if (showlegend) issuerLegendDone.add(issuer);
+    }
+    const color = colorFor(sel);
+    const xs = rs.map(r => `${r.date} ${r.time}`);
+    const ys = rs.map(r => r.rate);
+    const sizes = rs.map(r => (typeof r.vol === "number" && r.vol > 0) ? r.vol : 0);
+    const customdata = rs.map(r => [
+      sel.ticker,
+      issuer,
+      brDate(r.date),
+      r.time,
+      r.rate.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%",
+      trd_fmtMoneyFull(r.vol),
+    ]);
+    traces.push({
+      type: "scatter",
+      mode: "markers",
+      name, legendgroup, showlegend,
+      x: xs, y: ys,
+      marker: {
+        color,
+        size: sizes,
+        sizemode: "area",
+        sizeref,
+        sizemin: 6,
+        line: { width: 0 },
+        opacity: 0.78,
+      },
+      customdata,
+      hovertemplate:
+        "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>" +
+        "%{customdata[2]} %{customdata[3]}<br>" +
+        "Taxa: %{customdata[4]}<br>" +
+        "Vol: %{customdata[5]}<extra></extra>",
+    });
+  }
+
+  if (!traces.length) {
+    tr2_renderEmptyState(divId, "Sem trades com taxa no período selecionado.");
+    return;
+  }
+
+  const base = PLOTLY_LAYOUT();
+  const layout = Object.assign({}, base, {
+    margin: { t: 30, r: 140, b: 60, l: 60 },
+    showlegend: true,
+    legend: { x: 1.02, y: 1, xanchor: "left", yanchor: "top",
+              bgcolor: "rgba(0,0,0,0)", font: { size: 11 } },
+    xaxis: Object.assign({}, base.xaxis, { type: "date", tickangle: -25 }),
+    yaxis: Object.assign({}, base.yaxis, {
+      ticksuffix: "%",
+      tickformat: ".2f",
+      separatethousands: true,
+    }),
+    hoverlabel: { namelength: -1 },
   });
   Plotly.newPlot(divId, traces, layout, PLOTLY_CONFIG);
 }
