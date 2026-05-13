@@ -149,7 +149,8 @@ jobs:
           fi
           DATE_TAG=$(date -u +%Y-%m-%d)
           git commit -m "data: b3 trades update ${DATE_TAG} (workflow ${MODE})"
-          # Pull --rebase antes do push: evita race com a Routine ANBIMA que
-          # tambem commita em main (data/*.json, history/*.json, index.html).
+          # Pull --rebase antes do push: este workflow eh backup manual, mas
+          # pode rodar concorrente com o probe canonico (anbima_b3_probe.yml)
+          # que tambem commita em main (data/*.json, history/*.json, index.html).
           git pull --rebase origin main
           git push

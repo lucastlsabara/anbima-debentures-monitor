@@ -143,7 +143,14 @@ Caracteristicas:
 `permissions: contents: write`. Race com `b3_trades.yml` mitigada pelo
 `git pull --rebase origin main` antes do push.
 
-## 7. Transicao em 3 fases
+## 7. Transicao em fases
+
+> **Status (mai/2026)**: fases 1, 2 e 4 MERGED. Fase 3 (desativar Routine no
+> claude.ai) ainda eh acao manual fora do repo. A producao hoje roda 100%
+> pelo workflow `anbima_b3_probe.yml` (Fase 4); `daily_update.yml` e
+> `b3_trades.yml` foram rebaixados para backup manual (`workflow_dispatch`
+> apenas, sem cron). Fase 4.1 (PR atual) adicionou idempotencia diaria por
+> marker `data/.probe_state.json` -- ver secao 9 abaixo.
 
 ### Fase 1 -- Validar (PR #125 + #126, MERGED)
 - `daily_update.yml` em modo PoC (nao commita, gera artifact).
@@ -168,7 +175,7 @@ Promove `daily_update.yml` para substituir 100% a Routine. Mudancas:
 - Atualizar README.md trocando "Trigger: Routine no Claude.ai" por
   "Trigger: GitHub Actions (.github/workflows/daily_update.yml)".
 
-### Fase 4 -- Probe horario unificado (ANBIMA + B3)
+### Fase 4 -- Probe horario unificado (ANBIMA + B3, PR #133, MERGED)
 
 Problema motivador: cron fixo 23h BRT em `daily_update.yml` e `b3_trades.yml`.
 Quando a ANBIMA atrasa publicacao (pos-feriado, dia comprido), o workflow
@@ -210,6 +217,42 @@ Reuso de codigo: zero alteracao em `fetch_anbima.py`, `fetch_b3_trades.py`,
 `b3_calendar.py`, `scripts/list_target_dates.py`, `scripts/podar_historico.py`.
 Novidades: `scripts/probe_files.py` (HEAD + GET range para ANBIMA, POST
 page=1 size=1 para B3) e o workflow `anbima_b3_probe.yml`.
+
+### Fase 4.1 -- Idempotencia diaria por marker (PR atual)
+
+Problema motivador: apos um run bem-sucedido as 19h BRT, os runs das 20h,
+21h, ..., 05h continuavam executando todo o pipeline (probe HTTP + B3
+overwrite + build), gastando Actions minutes e batendo nas APIs sem
+necessidade. Probe nao detecta mudanca de versao do arquivo, entao o
+overwrite ate refazia o mesmo trabalho.
+
+Solucao: marker `data/.probe_state.json` versionado em git com schema:
+
+```json
+{
+  "last_successful_date": "YYYY-MM-DD",
+  "last_success_ts": "YYYY-MM-DDTHH:MM:SS-03:00"
+}
+```
+
+Step `Check already-completed` no workflow le o marker antes do probe:
+- Se `last_successful_date == target_date`: encerra verde sem rodar o
+  resto (`steps.idempotencia.outputs.already_done=true` propaga para
+  todos os steps subsequentes via `if:`).
+- Se nao bate, marker ausente, ou JSON invalido: prossegue normal.
+
+Apos podar historico (e antes de detectar mudancas), o step
+`Atualiza marker de idempotencia` reescreve `data/.probe_state.json` com
+o dia alvo atual + timestamp BRT. O proprio marker entra como diff e
+garante commit (pelo menos do marker) sempre que o pipeline completar.
+
+`workflow_dispatch` ganha input `force` (boolean) que ignora o marker --
+util para reprocessar manualmente um dia atipico.
+
+Importante: marker eh por **dia_alvo**, nao por timestamp absoluto. Se o
+dia_alvo mudar entre runs (ex: 05h BRT vira ONTEM e 19h BRT vira HOJE),
+o marker nao bloqueia o novo ciclo. A recuperacao retroativa do
+gap-fill ANBIMA + overwrite janela B3 continua intocada.
 
 ## 8. Regras invioladas
 
