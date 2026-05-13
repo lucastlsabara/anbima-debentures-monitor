@@ -2,19 +2,21 @@
 
 Dashboard diário do mercado secundário de debêntures (ANBIMA + B3),
 atualizado automaticamente via GitHub Actions. **Um único workflow
-canônico** roda de hora em hora 19h-05h BRT, espera todos os 5 arquivos
-do dia ficarem disponíveis, importa ANBIMA + B3 num só commit e o
-GitHub Pages re-deploya o site sozinho:
+canônico** tenta importar em 3 horários fixos por dia útil B3 — 21h e
+23h BRT da data referência + 05h BRT do dia seguinte —, espera todos
+os 5 arquivos do dia ficarem disponíveis, importa ANBIMA + B3 num só
+commit e o GitHub Pages re-deploya o site sozinho:
 
 - [`.github/workflows/anbima_b3_probe.yml`](.github/workflows/anbima_b3_probe.yml)
-  — **canônico (Fase 4)**. Cron `0 0-8,22-23 * * *` (22-08 UTC = 19h BRT
-  até 05h BRT do dia seguinte). A cada hora: determina dia_alvo (HOJE
-  BRT se hora ≥ 19, senão ONTEM BRT), guard B3 (fds/feriado → exit 0),
-  **check idempotência diária** (`data/.probe_state.json` — se já rodou
-  com sucesso pro dia_alvo, encerra em segundos), probe HTTP dos 5
-  arquivos (ANBIMA Debentures + ETTJ + TPF + B3 Trade + B3
-  ConsolidatedRecords); se todos OK: gap-fill ANBIMA + overwrite B3 +
-  rebuild dashboard + atualiza marker + commit & push.
+  — **canônico (Fase 4)**. Cron `0 0,2,8 * * 2-6` (00, 02 e 08 UTC
+  ter-sáb = 21h, 23h e 05h BRT da janela seg-sex BRT). A cada slot:
+  determina dia_alvo (HOJE BRT se hora ≥ 19, senão ONTEM BRT), guard
+  B3 (fds/feriado → exit 0), **check idempotência diária**
+  (`data/.probe_state.json` — se já rodou com sucesso pro dia_alvo,
+  encerra em ~37s), probe HTTP dos 5 arquivos (ANBIMA Debentures +
+  ETTJ + TPF + B3 Trade + B3 ConsolidatedRecords); se todos OK:
+  gap-fill ANBIMA + overwrite B3 + rebuild dashboard + atualiza marker
+  + commit & push.
 - [`.github/workflows/daily_update.yml`](.github/workflows/daily_update.yml)
   e [`.github/workflows/b3_trades.yml`](.github/workflows/b3_trades.yml)
   — **backup manual** (apenas `workflow_dispatch`, sem cron). Use só
@@ -130,11 +132,15 @@ Brava, Origem.
 
 Workflow: [`.github/workflows/anbima_b3_probe.yml`](.github/workflows/anbima_b3_probe.yml).
 
-- **Cron**: `0 0-8,22-23 * * *` (UTC) = **19h BRT até 05h BRT do dia
-  seguinte**, todos os dias. Guard B3 filtra fds/feriado em runtime.
+- **Cron**: `0 0,2,8 * * 2-6` (UTC) = **3 horários fixos por dia útil
+  B3**: 21h BRT e 23h BRT da data referência + 05h BRT do dia seguinte
+  (00h, 02h e 08h UTC ter-sáb). Day-of-week 2-6 elimina triggers de
+  dom/seg UTC, que mapeariam ref dates de fim de semana. Guard B3
+  filtra feriados B3 em runtime.
 - **Determinação do `target_date`**: HOJE BRT se hora ≥ 19, senão ONTEM
-  BRT. Quando o dia_alvo muda no meio do ciclo (ex: 05h vira ONTEM, 19h
-  vira HOJE), o probe re-inicia para a nova data automaticamente.
+  BRT. O slot das 05h BRT cai em ONTEM e captura a mesma data
+  referência dos slots das 21h/23h da véspera (recuperação dentro do
+  mesmo ciclo).
 - **Idempotência diária**: marker `data/.probe_state.json` versionado
   em git com schema:
   ```json
@@ -144,13 +150,14 @@ Workflow: [`.github/workflows/anbima_b3_probe.yml`](.github/workflows/anbima_b3_
   }
   ```
   Antes do probe, o workflow lê o marker; se `last_successful_date ==
-  target_date`, encerra verde em segundos (não faz HTTP, não chama B3,
-  não rebuilda). Apos uma execução bem-sucedida, as próximas runs do
-  mesmo ciclo são no-ops. Quando o dia_alvo muda, o marker não bloqueia.
+  target_date`, encerra verde em ~37s (não faz HTTP, não chama B3, não
+  rebuilda). Após uma execução bem-sucedida (ex: 21h), os slots
+  seguintes do mesmo ciclo (23h e 05h) são no-ops. Quando o dia_alvo
+  muda, o marker não bloqueia.
 - **Probe HTTP**: [`scripts/probe_files.py`](scripts/probe_files.py)
   verifica disponibilidade dos 5 arquivos do dia (ANBIMA Debentures +
   ETTJ + TPF + B3 Trade + B3 ConsolidatedRecords). Se todos OK → import.
-  Se algum faltando → exit 0 sem commitar (próxima hora tenta de novo).
+  Se algum faltando → exit 0 sem commitar (próximo slot tenta de novo).
 - **Import** (só se probe all OK):
   - **ANBIMA** (gap-fill 5 dias úteis B3): para cada data, pula se
     `history/<D>.json` já existe; senão `fetch_anbima.py` + `compute_spreads.py`.
@@ -161,16 +168,17 @@ Workflow: [`.github/workflows/anbima_b3_probe.yml`](.github/workflows/anbima_b3_
   - `build_dashboard.py` regenera `data/*.json` + `index.html`.
   - Atualiza marker `data/.probe_state.json` com o dia_alvo + ts BRT.
   - `git pull --rebase --autostash origin main` + commit + push.
-- **Recuperação retroativa**: se o dia D não publica até 05h BRT do
-  dia D+1, o ciclo do dia D+1 captura D automaticamente via gap-fill
-  ANBIMA (`scripts/list_target_dates.py` retorna `[D+1, D, D-1, D-2, D-3]`)
-  e a janela 5du do B3 sobrescreve. Zero ação manual.
+- **Recuperação retroativa**: se os 3 slots do dia D (21h, 23h, 05h+1)
+  todos falham, o dia D é descartado e recuperado automaticamente no
+  ciclo do próximo dia útil B3 via gap-fill ANBIMA
+  (`scripts/list_target_dates.py` retorna `[D+1, D, D-1, D-2, D-3]`) e
+  a janela 5du do B3 sobrescreve. Zero ação manual.
 
 Tratamento de erro por data:
 
 | Cenário | Comportamento |
 |---|---|
-| ANBIMA ainda não publicou (`db<YYMMDD>.txt` 404) | probe responde "faltando", workflow encerra verde sem commit; próxima hora tenta de novo |
+| ANBIMA ainda não publicou (`db<YYMMDD>.txt` 404) | probe responde "faltando", workflow encerra verde sem commit; próximo slot tenta de novo |
 | ms.txt 404 (títulos públicos) | warn-and-skip; `titpub_status='404'` no snapshot, `titpub_rows=[]` (debêntures + ETTJ continuam) |
 | ms.txt com Data Referência interna divergente da target | warn; `titpub_status='data_divergente'`, rows parseadas normalmente |
 | HTTP 5xx ou erro de rede | raise (job marca failure → notificação do GitHub) |
@@ -228,8 +236,9 @@ python3 -m http.server 8000
 
 Tanto `fetch_anbima.py` quanto `compute_spreads.py` aceitam `--date YYYY-MM-DD`
 (opcional). Quando omitido, usam **hoje (BRT)**. A pipeline canônica
-(`anbima_b3_probe.yml`) cicla de hora em hora 19h-05h BRT e só importa
-quando o probe confirma que todos os 5 arquivos do dia foram publicados.
+(`anbima_b3_probe.yml`) tenta importar em 3 horários fixos por dia útil
+B3 (21h, 23h e 05h BRT) e só importa quando o probe confirma que todos
+os 5 arquivos do dia foram publicados.
 Em sábado, domingo ou feriado, hoje continua sendo o próprio dia: a ANBIMA
 retorna 404 e o script termina com exit code 2 (comportamento esperado).
 O calendário B3 (`b3_calendar.py`) continua disponível via
