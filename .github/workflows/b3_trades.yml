@@ -1,23 +1,19 @@
 name: B3 Trades
 
-# Coleta trades de renda fixa (DEB/CRA/CRI/CFF/COE) da B3 e regenera
-# index.html. Roda na infra do GitHub (egress liberado pra arquivos.b3.com.br),
-# committa de volta ao repo e dispensa execucao local.
+# Workflow de backup/fallback manual da coleta de trades B3 (DEB/CRA/CRI/CFF/COE)
+# + consolidated records.
 #
-# Schedule: 02:00 UTC ter-sab = 23:00 BRT seg-sex (dias uteis BR), acompanha
-# a janela ANBIMA das 23h. A routine do Claude.ai NAO disparava este fetch
-# porque a sandbox dela bloqueia arquivos.b3.com.br por allowlist (resposta
-# 403 com header x-deny-reason: host_not_allowed). O cron foi removido em
-# #80 baseado nessa premissa errada — restaurado aqui.
+# A partir da Fase 4 (probe horario), o pipeline canonico passa a ser
+# .github/workflows/anbima_b3_probe.yml -- que roda de hora em hora 19h-05h
+# BRT e ja faz fetch_b3_trades.py + fetch_b3_trades_consolidated.py quando
+# todos os 5 arquivos do dia estao publicados.
 #
-# Cron exclui fds; feriados B3 (Carnaval, Sexta Santa, Corpus Christi,
-# Tiradentes, etc.) sao filtrados pelo step "Guard" via
-# b3_calendar.is_b3_business_day. Em dia nao-util o job termina verde com
-# todos os steps subsequentes skipados.
+# Este workflow continua disponivel via workflow_dispatch para:
+#   - Reprocessar um dia/range especifico via mode=backfill
+#   - Disparar coleta isolada (so B3) sem esperar o probe
+# Logica interna intacta (fetch_day / backfill / podar_historico / rebuild).
 
 on:
-  schedule:
-    - cron: '0 2 * * 2-6'
   workflow_dispatch:
     inputs:
       mode:

@@ -1,0 +1,297 @@
+name: ANBIMA + B3 Probe & Import
+
+# Workflow UNICO que substitui o cron de daily_update.yml e b3_trades.yml.
+#
+# Cicla de hora em hora 19h-05h BRT (22-08 UTC). A cada execucao:
+#   1. Determina o dia alvo (HOJE BRT se hora>=19, senao ONTEM BRT).
+#   2. Guard B3: se nao for dia util B3, sai 0 sem fazer nada.
+#   3. Probe: verifica disponibilidade dos 5 arquivos (ANBIMA Debentures,
+#      ANBIMA ETTJ, ANBIMA TPF, B3 Trade, B3 ConsolidatedRecords).
+#   4. Se TODOS os 5 estao publicados: importa ANBIMA (gap-fill 5 du B3),
+#      importa B3 (overwrite janela 5 du B3), rebuild dashboard, commit & push.
+#   5. Se ALGUM faltando: loga e termina verde sem commitar. Proxima tentativa
+#      eh na proxima hora pelo cron. Dias antigos pendentes sao recuperados
+#      automaticamente pelo gap-fill ANBIMA + overwrite janela B3.
+
+on:
+  schedule:
+    # 22-08 UTC todos os dias = 19h BRT (mesmo dia) ate 05h BRT (dia seguinte).
+    # Guard B3 filtra fds/feriado depois. Cobrir todos os dias permite que o
+    # ciclo da terca (dia util) que comeca 19h BRT segunda nao perca o slot
+    # caso segunda seja feriado de outra natureza, etc.
+    - cron: '0 0-8,22-23 * * *'
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: 'Data alvo YYYY-MM-DD (vazio = derivar de HOJE BRT conforme horario)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  probe-and-import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'requirements.txt'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Determine target date (HOJE/ONTEM BRT conforme hora)
+        id: target
+        env:
+          INPUT_DATE: ${{ inputs.target_date }}
+        run: |
+          set -eu
+          TARGET_DATE=$(python3 - <<'PY'
+          import os
+          from datetime import datetime, timedelta
+          from zoneinfo import ZoneInfo
+
+          inp = (os.environ.get("INPUT_DATE") or "").strip()
+          if inp:
+              # Valida formato; deixa o probe falhar adiante caso seja invalido.
+              datetime.strptime(inp, "%Y-%m-%d")
+              print(inp)
+          else:
+              agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+              if agora.hour >= 19:
+                  alvo = agora.date()
+              else:
+                  alvo = agora.date() - timedelta(days=1)
+              print(alvo.isoformat())
+          PY
+          )
+          echo "target_date=$TARGET_DATE" >> "$GITHUB_OUTPUT"
+          echo "[target] dia alvo: $TARGET_DATE"
+
+      - name: Guard - verifica se target_date eh dia util B3
+        id: guard
+        env:
+          TARGET_DATE: ${{ steps.target.outputs.target_date }}
+        run: |
+          set -eu
+          DU=$(python3 -c "
+          import os
+          from datetime import date
+          from b3_calendar import is_b3_business_day
+          d = date.fromisoformat(os.environ['TARGET_DATE'])
+          print('true' if is_b3_business_day(d) else 'false')
+          ")
+          echo "is_business_day=$DU" >> "$GITHUB_OUTPUT"
+          if [ "$DU" = "true" ]; then
+            echo "[guard] $TARGET_DATE eh dia util B3 -- prosseguindo para probe"
+          else
+            echo "[guard] $TARGET_DATE NAO eh dia util B3 (fds ou feriado) -- encerrando verde"
+          fi
+
+      - name: Probe - verifica disponibilidade dos 5 arquivos
+        id: probe
+        if: steps.guard.outputs.is_business_day == 'true'
+        env:
+          TARGET_DATE: ${{ steps.target.outputs.target_date }}
+        run: |
+          set -u
+          python3 scripts/probe_files.py \
+            --date "$TARGET_DATE" \
+            --github-output "$GITHUB_OUTPUT" && RC=0 || RC=$?
+          if [ "$RC" -eq 0 ]; then
+            echo "[probe] todos os 5 arquivos disponiveis -- prosseguindo para import"
+          elif [ "$RC" -eq 2 ]; then
+            echo "[probe] algum arquivo faltando -- encerrando verde sem importar"
+          else
+            echo "::error::probe_files.py falhou com exit=$RC (erro real, nao 'faltando')"
+            exit "$RC"
+          fi
+
+      - name: Resolve datas alvo ANBIMA (5 du B3)
+        id: dates
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
+        env:
+          TARGET_DATE: ${{ steps.target.outputs.target_date }}
+        run: |
+          set -eu
+          DATES=$(python3 scripts/list_target_dates.py --date "$TARGET_DATE")
+          echo "Datas alvo ANBIMA:"
+          echo "$DATES"
+          {
+            echo 'dates<<EOF'
+            echo "$DATES"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Import ANBIMA (gap-fill 5 du B3)
+        id: import_anbima
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
+        run: |
+          set -u
+          mkdir -p raw
+          FAIL_COUNT=0
+          OK_COUNT=0
+          SKIP_404_COUNT=0
+          SKIP_EXISTING_COUNT=0
+          NEW_DATES=""
+          while IFS= read -r d; do
+            [ -z "$d" ] && continue
+            echo "::group::ANBIMA $d"
+            if [ -f "history/${d}.json" ]; then
+              echo "[skip] history/${d}.json ja existe; pulando."
+              SKIP_EXISTING_COUNT=$((SKIP_EXISTING_COUNT+1))
+              echo "::endgroup::"
+              continue
+            fi
+            python3 fetch_anbima.py --date "$d" --out parsed.json && RC=0 || RC=$?
+            if [ "$RC" -eq 2 ]; then
+              echo "[skip] $d: ANBIMA 404 (fds/feriado ou ainda nao publicado)"
+              SKIP_404_COUNT=$((SKIP_404_COUNT+1))
+              echo "::endgroup::"
+              continue
+            fi
+            if [ "$RC" -ne 0 ]; then
+              echo "::error::fetch_anbima.py falhou para $d (exit=$RC)"
+              FAIL_COUNT=$((FAIL_COUNT+1))
+              echo "::endgroup::"
+              continue
+            fi
+            python3 compute_spreads.py --date "$d" --in parsed.json --out data.json
+            OK_COUNT=$((OK_COUNT+1))
+            if [ -z "$NEW_DATES" ]; then
+              NEW_DATES="$d"
+            else
+              NEW_DATES="${NEW_DATES}, ${d}"
+            fi
+            echo "::endgroup::"
+          done <<< "${{ steps.dates.outputs.dates }}"
+          echo "[anbima] novos=$OK_COUNT existentes=$SKIP_EXISTING_COUNT 404=$SKIP_404_COUNT falhas=$FAIL_COUNT"
+          if [ "$FAIL_COUNT" -gt 0 ]; then
+            echo "::error::${FAIL_COUNT} data(s) ANBIMA falharam no fetch/spread (erro real, nao-404)"
+            exit 1
+          fi
+          echo "new_count=$OK_COUNT" >> "$GITHUB_OUTPUT"
+          echo "new_dates=$NEW_DATES" >> "$GITHUB_OUTPUT"
+
+      - name: Import B3 Trade (overwrite janela 5 du B3)
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
+        run: |
+          echo "Rodando fetch_b3_trades.py (5 dias uteis B3)"
+          python fetch_b3_trades.py
+
+      - name: Import B3 ConsolidatedRecords (overwrite janela 5 du B3)
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
+        run: |
+          echo "Rodando fetch_b3_trades_consolidated.py (5 dias uteis B3)"
+          python fetch_b3_trades_consolidated.py
+
+      - name: Podar historico B3 (retencao 60 du)
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
+        run: |
+          echo "Aplicando politica de retencao 60 du B3 em data/b3_trades*/"
+          python scripts/podar_historico.py
+
+      - name: Detecta mudancas em data/ e history/
+        id: changes
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
+        run: |
+          set -eu
+          if git status --porcelain data/ history/ data.json 2>/dev/null | grep -q .; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "[changes] ha mudancas em data/, history/ ou data.json"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "[changes] nenhuma mudanca detectada"
+          fi
+
+      - name: Rebuild dashboard
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true' && steps.changes.outputs.has_changes == 'true'
+        run: |
+          echo "Regenerando data/*.json + index.html"
+          python build_dashboard.py
+
+      - name: Commit & push
+        id: commit
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true' && steps.changes.outputs.has_changes == 'true'
+        env:
+          TARGET_DATE: ${{ steps.target.outputs.target_date }}
+        run: |
+          set -eu
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! git pull --rebase --autostash origin main; then
+            echo "::error::git pull --rebase falhou (conflito?); abortando push"
+            exit 1
+          fi
+          git add data/ history/ data.json index.html
+          if git diff --cached --quiet; then
+            echo "Sem mudancas a commitar (apos rebase)"
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "feat: ANBIMA + B3 snapshot ${TARGET_DATE} (via probe)"
+          git push
+          SHA=$(git rev-parse HEAD)
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "[commit] $SHA"
+
+      - name: Step summary
+        if: always()
+        env:
+          TARGET_DATE: ${{ steps.target.outputs.target_date }}
+          IS_DU: ${{ steps.guard.outputs.is_business_day }}
+          PROBE_ALL: ${{ steps.probe.outputs.all_available }}
+          PROBE_AVAIL: ${{ steps.probe.outputs.available_count }}
+          PROBE_TOTAL: ${{ steps.probe.outputs.total_count }}
+          PROBE_MISSING: ${{ steps.probe.outputs.missing }}
+          ANBIMA_NEW: ${{ steps.import_anbima.outputs.new_count }}
+          ANBIMA_DATES: ${{ steps.import_anbima.outputs.new_dates }}
+          HAS_CHANGES: ${{ steps.changes.outputs.has_changes }}
+          COMMITTED: ${{ steps.commit.outputs.committed }}
+          COMMIT_SHA: ${{ steps.commit.outputs.commit_sha }}
+        run: |
+          {
+            echo "## ANBIMA + B3 Probe & Import"
+            echo ""
+            echo "**Dia alvo:** \`${TARGET_DATE}\`"
+            echo "**Dia util B3:** ${IS_DU:-n/a}"
+            echo ""
+            echo "### Probe"
+            if [ -n "${PROBE_TOTAL:-}" ]; then
+              echo "- Disponiveis: **${PROBE_AVAIL}/${PROBE_TOTAL}**"
+              echo "- Todos OK: \`${PROBE_ALL}\`"
+              if [ -n "${PROBE_MISSING:-}" ]; then
+                echo "- Faltando: ${PROBE_MISSING}"
+              fi
+            else
+              echo "- Probe nao executado (guard barrou)"
+            fi
+            echo ""
+            echo "### Import"
+            echo "- Snapshots ANBIMA novos: ${ANBIMA_NEW:-0}"
+            if [ -n "${ANBIMA_DATES:-}" ]; then
+              echo "- Datas ANBIMA novas: ${ANBIMA_DATES}"
+            fi
+            echo "- B3 Trade + ConsolidatedRecords: overwrite janela 5 du (se import rodou)"
+            echo ""
+            echo "### Commit"
+            echo "- Mudancas detectadas: ${HAS_CHANGES:-false}"
+            echo "- Commit realizado: ${COMMITTED:-false}"
+            if [ -n "${COMMIT_SHA:-}" ]; then
+              echo "- SHA: \`${COMMIT_SHA}\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -168,6 +168,49 @@ Promove `daily_update.yml` para substituir 100% a Routine. Mudancas:
 - Atualizar README.md trocando "Trigger: Routine no Claude.ai" por
   "Trigger: GitHub Actions (.github/workflows/daily_update.yml)".
 
+### Fase 4 -- Probe horario unificado (ANBIMA + B3)
+
+Problema motivador: cron fixo 23h BRT em `daily_update.yml` e `b3_trades.yml`.
+Quando a ANBIMA atrasa publicacao (pos-feriado, dia comprido), o workflow
+roda e captura parcial ou zero -- e so tenta de novo 24h depois. Sem retry
+inteligente intra-dia.
+
+Solucao: novo workflow `.github/workflows/anbima_b3_probe.yml` que cicla
+de hora em hora 19h-05h BRT (cron `'0 0-8,22-23 * * *'` UTC) e so importa
+quando TODOS os 5 arquivos do dia estao publicados:
+
+1. ANBIMA Debentures (`db<YYMMDD>.txt`)
+2. ANBIMA ETTJ (`CZ-down.asp?Dt_Ref=...`)
+3. ANBIMA TPF (`ms<YYMMDD>.txt`)
+4. B3 Trade (POST `/bdi/table/Trade/<date>/<date>/1/1`)
+5. B3 ConsolidatedRecords (POST `/bdi/table/ConsolidatedRecords/<date>/<date>/1/1`)
+
+Fluxo por execucao:
+- Determina dia alvo: se hora BRT >= 19h, alvo = HOJE; senao alvo = ONTEM.
+- Guard B3: se nao for dia util B3, sai 0 sem nada.
+- Probe via `scripts/probe_files.py --date <alvo>`. Exit 0 se todos OK;
+  exit 2 se algum faltando (workflow segue verde, proximo cron tenta de novo);
+  exit 1 em erro real (rede, sandbox, etc).
+- Se todos OK: roda gap-fill ANBIMA (`scripts/list_target_dates.py` ->
+  loop `fetch_anbima.py` skip se `history/<D>.json` ja existe), overwrite
+  B3 (`fetch_b3_trades.py` + `fetch_b3_trades_consolidated.py`),
+  `podar_historico.py`, `build_dashboard.py`, commit + push.
+
+Workflows antigos:
+- `daily_update.yml`: cron removido, vira backup manual (workflow_dispatch).
+- `b3_trades.yml`: cron removido, vira backup manual (workflow_dispatch).
+
+Recuperacao de dias atipicos: dia D que falha (ANBIMA atrasou alem das 05h
+BRT do dia D+1) eh recuperado automaticamente no ciclo do dia D+1 porque
+o gap-fill ANBIMA processa `[D+1, D, D-1, D-2, D-3]` e a janela 5du do B3
+sobrescreve. Sem manual.
+
+Reuso de codigo: zero alteracao em `fetch_anbima.py`, `fetch_b3_trades.py`,
+`fetch_b3_trades_consolidated.py`, `compute_spreads.py`, `build_dashboard.py`,
+`b3_calendar.py`, `scripts/list_target_dates.py`, `scripts/podar_historico.py`.
+Novidades: `scripts/probe_files.py` (HEAD + GET range para ANBIMA, POST
+page=1 size=1 para B3) e o workflow `anbima_b3_probe.yml`.
+
 ## 8. Regras invioladas
 
 - Nenhum dado sintetico. Se ANBIMA quebrar, workflow falha barulhento
