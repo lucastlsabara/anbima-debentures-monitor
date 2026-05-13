@@ -143,7 +143,7 @@ jobs:
           # Pull --rebase antes de stage/commit: minimiza janela de race com
           # b3_trades.yml (mesmo cron, tambem commita em main). Se rebase
           # falhar (conflito), exit 1 -- nao mascara.
-          if ! git pull --rebase origin main; then
+          if ! git pull --rebase --autostash origin main; then
             echo "::error::git pull --rebase falhou (conflito?); abortando push"
             exit 1
           fi
