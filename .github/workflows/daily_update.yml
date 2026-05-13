@@ -90,8 +90,7 @@ jobs:
           while IFS= read -r d; do
             [ -z "$d" ] && continue
             echo "::group::ANBIMA fetch+spread $d"
-            python3 fetch_anbima.py --date "$d" --out parsed.json
-            RC=$?
+            python3 fetch_anbima.py --date "$d" --out parsed.json && RC=0 || RC=$?
             if [ "$RC" -eq 2 ]; then
               echo "[poc] $d: ANBIMA 404 (arquivo nao publicado ainda) -- skip"
               SKIP_COUNT=$((SKIP_COUNT+1))
