@@ -1,0 +1,228 @@
+name: B3 Trades Intraday Refresh
+
+# Workflow paralelo ao canonico (anbima_b3_probe.yml) que faz refresh apenas
+# do Trade-by-Trade da B3 a cada 30min durante o pregao. COMPLEMENTAR (nao
+# substitui) o canonico das 21h/23h/05h. NAO baixa ANBIMA, ETTJ, TPF nem
+# ConsolidatedRecords. NAO toca o marker de idempotencia diaria
+# (data/.probe_state.json) nem poda historico — essas funcoes pertencem
+# exclusivamente ao canonico.
+#
+# Motivacao: a B3 publica Trade-by-Trade a cada 15min durante o pregao,
+# mas o canonico aguarda os 5 arquivos (incluindo ConsolidatedRecords, que
+# so sai ao fim do dia) antes de importar qualquer coisa. Resultado: o site
+# nao reflete trades intraday ate o ciclo noturno. Este workflow preenche
+# essa lacuna.
+#
+# Comportamento em D+1: o canonico das 21h sobrescreve o trade-by-trade do
+# dia com a versao final (igual ou marginalmente maior) e adiciona
+# ConsolidatedRecords + ANBIMA + ETTJ + TPF.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 18 slots: 10:00 ate 18:30 BRT seg-sex (cada 30min)
+    #  +1 slot: 19:00 BRT seg-sex (fim de pregao)
+    # Total: 19 disparos/dia util max. BRT = UTC-3.
+    # Cron em 2 linhas porque GitHub Actions nao suporta delimitar hora de
+    # fim parcial; '0,30 13-22 * * 1-5' incluiria 19:30 BRT (fora da janela).
+    # day-of-week 1-5 = seg-sex UTC: como BRT esta atras de UTC e a janela
+    # esta toda dentro do mesmo dia da semana BRT/UTC (10h-19h BRT = 13h-22h
+    # UTC), nao ha virada de dia da semana. Guard B3 corta feriados em runtime.
+    - cron: '0,30 13-21 * * 1-5'
+    - cron: '0 22 * * 1-5'
+
+permissions:
+  contents: write
+
+# Compartilha grupo com o canonico (anbima_b3_probe.yml) como safety net:
+# se algum dia janelas se sobreporem, evita dois push concorrentes em main.
+concurrency:
+  group: anbima-b3-pipeline
+  cancel-in-progress: false
+
+jobs:
+  intraday-refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'requirements.txt'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Resolve target_date (HOJE BRT)
+        id: target
+        run: |
+          set -eu
+          TARGET_DATE=$(python3 - <<'PY'
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+          print(agora.date().isoformat())
+          PY
+          )
+          echo "target_date=$TARGET_DATE" >> "$GITHUB_OUTPUT"
+          echo "TARGET_DATE=$TARGET_DATE" >> "$GITHUB_ENV"
+          echo "[target] HOJE BRT: $TARGET_DATE"
+
+      - name: Guard - verifica se HOJE BRT eh dia util B3
+        id: guard
+        env:
+          TARGET_DATE: ${{ steps.target.outputs.target_date }}
+        run: |
+          set -eu
+          DU=$(python3 -c "
+          import os
+          from datetime import date
+          from b3_calendar import is_b3_business_day
+          d = date.fromisoformat(os.environ['TARGET_DATE'])
+          print('true' if is_b3_business_day(d) else 'false')
+          ")
+          echo "is_business_day=$DU" >> "$GITHUB_OUTPUT"
+          if [ "$DU" = "true" ]; then
+            echo "[guard] $TARGET_DATE eh dia util B3 -- prosseguindo para fetch"
+          else
+            echo "[guard] $TARGET_DATE NAO eh dia util B3 (fds ou feriado) -- encerrando verde"
+          fi
+
+      - name: Fetch B3 Trade-by-Trade (HOJE BRT)
+        if: steps.guard.outputs.is_business_day == 'true'
+        env:
+          TARGET_DATE: ${{ steps.target.outputs.target_date }}
+        run: |
+          set -eu
+          echo "Rodando fetch_b3_trades.py $TARGET_DATE (modo unitario)"
+          python3 fetch_b3_trades.py "$TARGET_DATE"
+
+      - name: Detecta mudanca em data/b3_trades/<target>.json
+        id: changes
+        if: steps.guard.outputs.is_business_day == 'true'
+        env:
+          TARGET_DATE: ${{ steps.target.outputs.target_date }}
+        run: |
+          set -eu
+          FILE="data/b3_trades/${TARGET_DATE}.json"
+          # git status --porcelain cobre tracked (M) + untracked (??) — necessario
+          # porque no primeiro fetch do dia o arquivo eh novo. git diff --quiet
+          # sozinho ignoraria untracked e marcaria erradamente como no-op.
+          if git status --porcelain "$FILE" 2>/dev/null | grep -q .; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "[changes] $FILE mudou (ou eh novo) -- prosseguindo para rebuild"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "no-op (arquivo identico ao commit anterior): $FILE"
+          fi
+
+      - name: Rebuild dashboard
+        if: steps.guard.outputs.is_business_day == 'true' && steps.changes.outputs.has_changes == 'true'
+        run: |
+          echo "Regenerando data/*.json + index.html"
+          python3 build_dashboard.py
+
+      - name: Commit & push
+        id: commit
+        if: steps.guard.outputs.is_business_day == 'true' && steps.changes.outputs.has_changes == 'true'
+        env:
+          TARGET_DATE: ${{ steps.target.outputs.target_date }}
+        run: |
+          set -eu
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          HORA=$(python3 -c "
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          print(datetime.now(ZoneInfo('America/Sao_Paulo')).strftime('%H:%M BRT'))
+          ")
+          if ! git pull --rebase --autostash origin main; then
+            echo "::error::git pull --rebase falhou (conflito?); abortando push"
+            exit 1
+          fi
+          # Stage apenas o que o intraday muda: data/ (b3_trades/<target>.json +
+          # derivados gerados pelo build_dashboard) e index.html. NAO mexe em
+          # history/, data.json ou data/.probe_state.json — sao territorio do canonico.
+          git add data/ index.html
+          if git diff --cached --quiet; then
+            echo "Sem mudancas a commitar (apos rebase)"
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "chore: B3 intraday refresh ${TARGET_DATE} ${HORA}"
+          git push
+          SHA=$(git rev-parse HEAD)
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+          echo "commit_hora=$HORA" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "[commit] $SHA - $HORA"
+
+      - name: Step summary
+        if: always()
+        env:
+          TARGET_DATE: ${{ steps.target.outputs.target_date }}
+          IS_DU: ${{ steps.guard.outputs.is_business_day }}
+          HAS_CHANGES: ${{ steps.changes.outputs.has_changes }}
+          COMMITTED: ${{ steps.commit.outputs.committed }}
+          COMMIT_HORA: ${{ steps.commit.outputs.commit_hora }}
+          COMMIT_SHA: ${{ steps.commit.outputs.commit_sha }}
+        run: |
+          set -u
+          STATS=$(python3 - <<'PY'
+          import json, os, pathlib
+          target = os.environ.get('TARGET_DATE', '')
+          path = pathlib.Path(f"data/b3_trades/{target}.json")
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          hora = datetime.now(ZoneInfo('America/Sao_Paulo')).strftime('%H:%M BRT')
+          print(f"hora_agora={hora}")
+          if target and path.exists():
+              try:
+                  data = json.loads(path.read_text(encoding='utf-8'))
+                  n = (data.get('stats') or {}).get('n_trades', '?')
+                  size_kb = path.stat().st_size / 1024
+                  print(f"n_trades={n}")
+                  print(f"size_kb={size_kb:.1f}")
+              except Exception as e:
+                  print("n_trades=erro_parse")
+                  print("size_kb=erro_parse")
+          else:
+              print("n_trades=n/a")
+              print("size_kb=n/a")
+          PY
+          )
+          HORA_AGORA=$(echo "$STATS" | sed -n 's/^hora_agora=//p')
+          N_TRADES=$(echo "$STATS" | sed -n 's/^n_trades=//p')
+          SIZE_KB=$(echo "$STATS" | sed -n 's/^size_kb=//p')
+          {
+            echo "## B3 Trades Intraday Refresh"
+            echo ""
+            echo "**Data alvo (HOJE BRT):** \`${TARGET_DATE}\`"
+            echo "**Hora BRT do summary:** \`${HORA_AGORA}\`"
+            echo "**Dia util B3:** ${IS_DU:-n/a}"
+            echo ""
+            echo "### Arquivo \`data/b3_trades/${TARGET_DATE}.json\`"
+            echo "- Trades baixados: **${N_TRADES}**"
+            echo "- Tamanho do JSON: **${SIZE_KB} KB**"
+            echo ""
+            echo "### Resultado"
+            if [ "${IS_DU:-false}" != "true" ]; then
+              echo "- **SKIP**: nao eh dia util B3 (fds/feriado)"
+            elif [ "${HAS_CHANGES:-false}" != "true" ]; then
+              echo "- **NO-OP**: arquivo identico ao commit anterior (sem rebuild/commit)"
+            elif [ "${COMMITTED:-false}" = "true" ]; then
+              echo "- **COMMIT**: \`${COMMIT_SHA}\` em \`${COMMIT_HORA}\`"
+            else
+              echo "- **NO COMMIT**: rebuild rodou mas \`git add\` nao detectou mudanca apos rebase"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

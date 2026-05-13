@@ -60,6 +60,12 @@ on:
 permissions:
   contents: write
 
+# Compartilha grupo com b3_trades_intraday.yml como safety net: se algum dia
+# janelas se sobreporem, evita dois push concorrentes em main.
+concurrency:
+  group: anbima-b3-pipeline
+  cancel-in-progress: false
+
 jobs:
   probe-and-import:
     runs-on: ubuntu-latest

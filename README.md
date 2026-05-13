@@ -1,11 +1,14 @@
 # anbima-debentures-monitor
 
 Dashboard diário do mercado secundário de debêntures (ANBIMA + B3),
-atualizado automaticamente via GitHub Actions. **Um único workflow
-canônico** tenta importar em 3 horários fixos por dia útil B3 — 21h e
-23h BRT da data referência + 05h BRT do dia seguinte —, espera todos
-os 5 arquivos do dia ficarem disponíveis, importa ANBIMA + B3 num só
-commit e o GitHub Pages re-deploya o site sozinho:
+atualizado automaticamente via GitHub Actions. **Dois workflows
+complementares**: o **canônico** tenta importar em 3 horários fixos
+por dia útil B3 — 21h e 23h BRT da data referência + 05h BRT do dia
+seguinte —, espera todos os 5 arquivos do dia ficarem disponíveis e
+importa ANBIMA + B3 num só commit; o **intraday** roda a cada 30min
+durante o pregão (10h-19h BRT seg-sex) e atualiza só o Trade-by-Trade
+da B3 do dia para que o site reflita os negócios em tempo quase real.
+O GitHub Pages re-deploya o site sozinho a cada push:
 
 - [`.github/workflows/anbima_b3_probe.yml`](.github/workflows/anbima_b3_probe.yml)
   — **canônico (Fase 4)**. Cron `0 0,2,8 * * 2-6` (00, 02 e 08 UTC
@@ -17,6 +20,19 @@ commit e o GitHub Pages re-deploya o site sozinho:
   ETTJ + TPF + B3 Trade + B3 ConsolidatedRecords); se todos OK:
   gap-fill ANBIMA + overwrite B3 + rebuild dashboard + atualiza marker
   + commit & push.
+- [`.github/workflows/b3_trades_intraday.yml`](.github/workflows/b3_trades_intraday.yml)
+  — **refresh intraday do Trade-by-Trade da B3 (Fase 5)**.
+  **Complementar** ao canônico, não substitui. Cron `0,30 13-21 * * 1-5`
+  + `0 22 * * 1-5` (UTC) = a cada 30min entre 10h-19h BRT seg-sex (19
+  disparos/dia útil máx). Também disponível via "Run workflow" no
+  GitHub Actions UI (sem inputs — usa HOJE BRT automaticamente). A
+  cada slot: guard B3 (fds/feriado → exit 0), fetch SOMENTE
+  Trade-by-Trade do dia (`fetch_b3_trades.py <HOJE>`), rebuild
+  dashboard e commit & push com prefixo `chore: B3 intraday refresh ...`.
+  **Não toca** `data/.probe_state.json`, ANBIMA, ETTJ, TPF, nem
+  ConsolidatedRecords — esses ficam no canônico. Concurrency group
+  `anbima-b3-pipeline` compartilhado com o canônico evita push
+  simultâneo se janelas se sobreporem.
 - [`.github/workflows/daily_update.yml`](.github/workflows/daily_update.yml)
   e [`.github/workflows/b3_trades.yml`](.github/workflows/b3_trades.yml)
   — **backup manual** (apenas `workflow_dispatch`, sem cron). Use só
@@ -195,6 +211,57 @@ Tratamento de erro por data:
    - `force` (boolean, default `false`): ignora o marker de idempotência.
      Útil para reprocessar manualmente um dia atípico ou após correção
      retroativa na ANBIMA/B3.
+
+## Automação intraday Trade-by-Trade (`b3_trades_intraday.yml`)
+
+Workflow: [`.github/workflows/b3_trades_intraday.yml`](.github/workflows/b3_trades_intraday.yml).
+
+**Complementar** ao canônico — não substitui. Resolve a lacuna em que o
+canônico das 21h/23h/05h fica preso esperando os 5 arquivos (em
+particular ConsolidatedRecords, que só sai ao fim do dia) antes de
+importar qualquer coisa, deixando o site sem trades intraday até a
+madrugada.
+
+- **Cron**: duas linhas UTC para cobrir 10h-19h BRT seg-sex.
+  - `0,30 13-21 * * 1-5` (UTC) = 18 slots de 10:00 até 18:30 BRT (cada 30min).
+  - `0 22 * * 1-5` (UTC) = 1 slot adicional em 19:00 BRT (fim de pregão).
+  - Total: 19 disparos/dia útil máximo. Cron em 2 linhas porque GitHub
+    Actions não suporta delimitar hora de fim parcial; `0,30 13-22 * * 1-5`
+    incluiria 19:30 BRT (fora da janela). Day-of-week 1-5 = seg-sex UTC:
+    como a janela toda fica em um mesmo dia da semana BRT/UTC (13h-22h UTC
+    = 10h-19h BRT), não há virada de dia.
+- **Disparo manual**: "Run workflow" na aba Actions → `b3_trades_intraday.yml`.
+  Sem inputs — usa HOJE BRT automaticamente.
+- **Steps**: guard B3 em HOJE BRT (fds/feriado → exit 0); roda
+  `fetch_b3_trades.py <HOJE>` (modo unitário, **só Trade-by-Trade**);
+  detecta mudança em `data/b3_trades/<HOJE>.json` via
+  `git status --porcelain` (cobre arquivo novo + modificado); se mudou,
+  roda `build_dashboard.py`, faz `git pull --rebase --autostash origin
+  main`, `git add data/ index.html` e commit & push com mensagem
+  `chore: B3 intraday refresh <YYYY-MM-DD> <HH:MM BRT>`.
+- **Restrições invioladas**:
+  - Não baixa ANBIMA (`db.txt`/ETTJ/`ms.txt`) nem ConsolidatedRecords.
+  - Não toca `data/.probe_state.json` (marker pertence exclusivamente ao
+    canônico — pipelines são complementares e independentes nesse aspecto).
+  - Não poda histórico (`data/b3_trades/` antigos, `data/dispersion/`,
+    `history/`) — função do canônico via `scripts/podar_historico.py`.
+  - Não gera dados sintéticos. Falha de rede / 5xx → `fetch_b3_trades.py`
+    sai não-zero e o workflow falha barulhento (notificação do GitHub).
+    403/404 (FDS/feriado/dia ainda não publicado) é pulado em silêncio
+    pelo próprio script, preservando o arquivo existente.
+- **Concurrency**: grupo `anbima-b3-pipeline`, `cancel-in-progress: false`.
+  O mesmo grupo está em `anbima_b3_probe.yml` como safety net — se algum
+  dia janelas se sobreporem, evita dois push concorrentes em main.
+- **Convivência com canônico**: janelas não se sobrepõem (gap de 2h entre
+  19:00 BRT intraday e 21:00 BRT canônico). Em D+1, o canônico das 21h
+  sobrescreve o trade-by-trade do dia com a versão final (igual ou
+  marginalmente maior) e adiciona ConsolidatedRecords + ANBIMA + ETTJ + TPF.
+- **Limitação explícita**: o intraday SÓ atualiza
+  `data/b3_trades/<HOJE>.json` + rebuild do dashboard. Setor × Prazo,
+  Heatmap, Dispersão, Visão Geral e Títulos Públicos continuam refletindo
+  o último dia importado pelo canônico até o próximo ciclo dele.
+- Commits do intraday usam prefixo `chore: B3 intraday refresh ...` para
+  diferenciar do canônico (`feat: ANBIMA + B3 snapshot ...`) no `git log`.
 
 ### Workflows backup manuais
 
