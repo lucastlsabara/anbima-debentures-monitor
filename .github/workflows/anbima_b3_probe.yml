@@ -69,7 +69,9 @@ concurrency:
 jobs:
   probe-and-import:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 90min = wall-clock 1h do fetch_b3_trades_consolidated.py + 30min de
+    # buffer (setup, ANBIMA, B3 Trade, podar, rebuild dashboard, commit & push).
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
@@ -279,6 +281,12 @@ jobs:
           python fetch_b3_trades.py
 
       - name: Import B3 ConsolidatedRecords (overwrite janela 5 du B3)
+        id: import_consolidated
+        # continue-on-error: se exit 1 (parcial), steps downstream (commit & push)
+        # ainda rodam para salvar o que foi conseguido. O step "Atualiza marker"
+        # checa outcome != 'failure' das etapas de import, entao parcial NAO
+        # atualiza marker (proxima retry reprocessa).
+        continue-on-error: true
         if: steps.guard.outputs.is_business_day == 'true' && steps.idempotencia.outputs.already_done != 'true' && steps.probe.outputs.all_available == 'true'
         run: |
           echo "Rodando fetch_b3_trades_consolidated.py (5 dias uteis B3)"
@@ -291,7 +299,10 @@ jobs:
           python scripts/podar_historico.py
 
       - name: Atualiza marker de idempotencia (data/.probe_state.json)
-        if: steps.guard.outputs.is_business_day == 'true' && steps.idempotencia.outputs.already_done != 'true' && steps.probe.outputs.all_available == 'true'
+        # Inclui check do outcome do import_consolidated: se for 'failure'
+        # (parcial -- continue-on-error mantem o workflow rodando), o marker
+        # NAO eh atualizado, garantindo que a proxima retry reprocesse.
+        if: steps.guard.outputs.is_business_day == 'true' && steps.idempotencia.outputs.already_done != 'true' && steps.probe.outputs.all_available == 'true' && steps.import_consolidated.outcome == 'success'
         env:
           TARGET_DATE: ${{ steps.target.outputs.target_date }}
         run: |

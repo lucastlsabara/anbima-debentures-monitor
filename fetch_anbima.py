@@ -18,12 +18,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 from datetime import date, datetime
 from pathlib import Path
 
 import requests
 
+from _http_utils import request_with_retry
 from b3_calendar import resolve_default_date
 
 ROOT = Path(__file__).parent
@@ -48,53 +48,16 @@ MOZILLA_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
-HTTP_TIMEOUT = 30
-# Retry exponencial só para falhas transitórias de rede (timeout, conexão,
-# 5xx). 404 nunca repete — é resposta legítima da ANBIMA quando o arquivo
-# do dia ainda não foi publicado, e o caller já trata como warn-and-skip.
-HTTP_RETRY_ATTEMPTS = 4
-HTTP_RETRY_BACKOFF_SEC = (2, 4, 8, 16)
-
-
 def _http_get_once(url: str, user_agent: str) -> requests.Response:
-    """GET com retry exponencial em falhas transitorias, UA configuravel.
-
-    Erros que disparam retry: requests.ConnectionError, requests.Timeout,
-    HTTPError com status 5xx ou 429. HTTPError 4xx (exceto 429) e repassado
-    direto -- caller decide (404 = warn-and-skip, demais = raise).
+    """GET via request_with_retry (timeout (15, 120)s + retry 2/4/8 em
+    Timeout/ConnectionError/5xx). 4xx (incluindo 404) propaga sem retry --
+    caller decide (404 = warn-and-skip; demais = raise).
     """
-    last_exc: Exception | None = None
-    for attempt in range(HTTP_RETRY_ATTEMPTS):
-        try:
-            r = requests.get(
-                url,
-                timeout=HTTP_TIMEOUT,
-                headers={"User-Agent": user_agent},
-            )
-        except (requests.ConnectionError, requests.Timeout) as e:
-            last_exc = e
-        else:
-            if r.status_code < 400 or r.status_code in (404,):
-                # Sucesso ou 404 (resposta legítima a propagar para o caller).
-                if r.status_code >= 400:
-                    r.raise_for_status()
-                return r
-            if r.status_code in (429,) or r.status_code >= 500:
-                last_exc = requests.HTTPError(
-                    f"HTTP {r.status_code} em {url}", response=r,
-                )
-            else:
-                # Outros 4xx (401, 403, etc.) — não tem o que tentar de novo.
-                r.raise_for_status()
-        if attempt < HTTP_RETRY_ATTEMPTS - 1:
-            wait = HTTP_RETRY_BACKOFF_SEC[attempt]
-            print(
-                f"[fetch] {url}: {type(last_exc).__name__}; "
-                f"retry em {wait}s (tentativa {attempt + 2}/{HTTP_RETRY_ATTEMPTS})",
-                file=sys.stderr,
-            )
-            time.sleep(wait)
-    raise last_exc if last_exc else RuntimeError(f"falha inesperada em {url}")
+    return request_with_retry(
+        "GET",
+        url,
+        headers={"User-Agent": user_agent},
+    )
 
 
 def _http_get(url: str) -> requests.Response:
