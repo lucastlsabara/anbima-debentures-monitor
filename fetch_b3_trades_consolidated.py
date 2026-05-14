@@ -235,8 +235,11 @@ def _update_manifest(date_iso: str, n_rows: int, filename: str) -> None:
     if MANIFEST_PATH.exists():
         try:
             manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            manifest = {}
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"manifest corrompido em {MANIFEST_PATH} ({exc}); "
+                "abortando para preservar historico — investigar markers de merge/stash"
+            ) from exc
     else:
         manifest = {}
 
