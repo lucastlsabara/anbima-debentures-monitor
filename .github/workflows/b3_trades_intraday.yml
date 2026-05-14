@@ -20,16 +20,16 @@ name: B3 Trades Intraday Refresh
 on:
   workflow_dispatch:
   schedule:
-    # 18 slots: 10:00 ate 18:30 BRT seg-sex (cada 30min)
-    #  +1 slot: 19:00 BRT seg-sex (fim de pregao)
-    # Total: 19 disparos/dia util max. BRT = UTC-3.
+    # 16 slots: 10:00 ate 17:30 BRT seg-sex (cada 30min)
+    #  +1 slot: 18:00 BRT seg-sex (fim da janela)
+    # Total: 17 disparos/dia util max. BRT = UTC-3.
     # Cron em 2 linhas porque GitHub Actions nao suporta delimitar hora de
-    # fim parcial; '0,30 13-22 * * 1-5' incluiria 19:30 BRT (fora da janela).
+    # fim parcial; '0,30 13-21 * * 1-5' incluiria 18:30 BRT (fora da janela).
     # day-of-week 1-5 = seg-sex UTC: como BRT esta atras de UTC e a janela
-    # esta toda dentro do mesmo dia da semana BRT/UTC (10h-19h BRT = 13h-22h
+    # esta toda dentro do mesmo dia da semana BRT/UTC (10h-18h BRT = 13h-21h
     # UTC), nao ha virada de dia da semana. Guard B3 corta feriados em runtime.
-    - cron: '0,30 13-21 * * 1-5'
-    - cron: '0 22 * * 1-5'
+    - cron: '0,30 13-20 * * 1-5'
+    - cron: '0 21 * * 1-5'
 
 permissions:
   contents: write
