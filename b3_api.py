@@ -10,6 +10,10 @@ Convencao de erros: 403/404 viram B3UnavailableError (FDS/feriado/dia
 ainda nao publicado — caller pula). 403 com header `x-deny-reason` vira
 SandboxBlockedError (bloqueio de allowlist do ambiente, nao da B3 —
 caller deve propagar).
+
+post_page com page=1, page_size=1 funciona como "ping" leve para extrair
+metadados (lastUpdateDate + totalRecords) sem baixar o dataset inteiro;
+ver fetch_metadata().
 """
 
 from __future__ import annotations
@@ -94,6 +98,58 @@ def post_page(
     return r.json()
 
 
+def _coerce_int(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def extract_total_records(envelope: dict) -> int | None:
+    """Extrai totalRecords do envelope da B3, tentando localizacoes conhecidas.
+
+    A B3 nao documenta o esquema; o campo aparece em `table` na maioria das
+    respostas, mas variantes ja foram observadas. Devolve None se ausente
+    em todas as localizacoes (caller trata como cache miss).
+    """
+    table = envelope.get("table") if isinstance(envelope, dict) else None
+    page = envelope.get("page") if isinstance(envelope, dict) else None
+    candidates = []
+    if isinstance(table, dict):
+        candidates.extend([table.get("totalRecords"), table.get("totalRows")])
+    if isinstance(page, dict):
+        candidates.extend([page.get("totalRecords"), page.get("totalRows")])
+    candidates.extend([envelope.get("totalRecords"), envelope.get("totalRows")])
+    for c in candidates:
+        n = _coerce_int(c)
+        if n is not None:
+            return n
+    return None
+
+
+def fetch_metadata(table: str, date_iso: str) -> dict:
+    """Fetch leve so para metadados (page=1, page_size=1).
+
+    Retorna dict com:
+      - last_update: str ISO timestamp da B3 (ou None se ausente)
+      - total_records: int (ou None se ausente)
+      - raw_envelope: dict bruto do envelope (debugging)
+
+    Reusa post_page e propaga B3UnavailableError / SandboxBlockedError /
+    requests.HTTPError nas mesmas condicoes.
+    """
+    response = post_page(table, date_iso, page=1, page_size=1)
+    last_update = response.get("lastUpdateDate") if isinstance(response, dict) else None
+    total_records = extract_total_records(response if isinstance(response, dict) else {})
+    return {
+        "last_update": last_update,
+        "total_records": total_records,
+        "raw_envelope": response,
+    }
+
+
 def last_n_business_days(n: int, today: date | None = None) -> list[date]:
     """N ultimos dias uteis B3, ordem ascendente.
 
@@ -123,14 +179,15 @@ def refresh_recent_days(
     Tenta todos os dias antes de retornar. Exit code != 0 se QUALQUER dia
     falhar (falha de rede apos retry; 403/404 nao conta como falha).
     `fetch_day_fn(date_iso)` deve devolver dict com chave `status` em
-    {'updated', 'unavailable'}; pode levantar exceptions para sinalizar
-    falha real (caller registra e segue).
+    {'updated', 'cached', 'unavailable'}; pode levantar exceptions para
+    sinalizar falha real (caller registra e segue).
     """
     days = last_n_business_days(n)
     header = f"Refresh{(' ' + label) if label else ''} dos ultimos {len(days)} dias uteis B3"
     print(f"{header}: {days[0]} a {days[-1]}")
 
     updated = 0
+    cached = 0
     unavailable = 0
     failed = 0
 
@@ -138,8 +195,11 @@ def refresh_recent_days(
         date_iso = d.isoformat()
         try:
             result = fetch_day_fn(date_iso)
-            if result["status"] == "updated":
+            status = result["status"]
+            if status == "updated":
                 updated += 1
+            elif status == "cached":
+                cached += 1
             else:
                 unavailable += 1
         except Exception as exc:
@@ -153,8 +213,9 @@ def refresh_recent_days(
 
     print()
     print(
-        f"Resumo: {updated} atualizado(s), {unavailable} indisponivel(eis) "
-        f"(FDS/feriado/nao publicado), {failed} falha(s)"
+        f"Resumo: {updated} atualizado(s), {cached} cached, "
+        f"{unavailable} indisponivel(eis) (FDS/feriado/nao publicado), "
+        f"{failed} falha(s)"
     )
 
     return 0 if failed == 0 else 1
