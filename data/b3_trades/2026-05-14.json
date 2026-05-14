@@ -1,0 +1,1 @@
+{"date":"2026-05-14","fetched_at":"2026-05-14T10:08:31.567310+00:00","last_b3_update":"2026-05-14T00:00:38.01","columns":["instrument","issuer","ticker","setor","qtd","price","vol","rate","origin","time","trade_code","isin","settlement_dt","situation"],"rows":[],"stats":{"n_trades":0,"n_pages_fetched":1,"instruments_count":{},"vol_brl_total":0.0}}
