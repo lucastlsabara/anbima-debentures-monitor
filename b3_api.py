@@ -12,7 +12,7 @@ SandboxBlockedError (bloqueio de allowlist do ambiente, nao da B3 —
 caller deve propagar).
 
 post_page com page=1, page_size=1 funciona como "ping" leve para extrair
-metadados (lastUpdateDate + totalRecords) sem baixar o dataset inteiro;
+metadados (lastUpdateDate + table.pageCount) sem baixar o dataset inteiro;
 ver fetch_metadata().
 """
 
@@ -98,34 +98,26 @@ def post_page(
     return r.json()
 
 
-def _coerce_int(value) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def extract_total_records(envelope: dict) -> int | None:
-    """Extrai totalRecords do envelope da B3, tentando localizacoes conhecidas.
+    """Extrai o total de registros do envelope B3.
 
-    A B3 nao documenta o esquema; o campo aparece em `table` na maioria das
-    respostas, mas variantes ja foram observadas. Devolve None se ausente
-    em todas as localizacoes (caller trata como cache miss).
+    A B3 nao expoe 'totalRecords' nem 'totalRows' no top-level do envelope.
+    Em vez disso retorna 'table.pageCount' que e o numero de PAGINAS dado o
+    page_size da requisicao. Como fetch_metadata sempre chama com
+    page_size=1, pageCount equivale exatamente ao numero de linhas (records).
+
+    Validado empiricamente em 14/05/2026 batendo o endpoint
+    POST https://arquivos.b3.com.br/bdi/table/Trade/{D}/{D}/1/1 com varias
+    datas e comparando com os JSONs locais salvos.
     """
-    table = envelope.get("table") if isinstance(envelope, dict) else None
-    page = envelope.get("page") if isinstance(envelope, dict) else None
-    candidates = []
-    if isinstance(table, dict):
-        candidates.extend([table.get("totalRecords"), table.get("totalRows")])
-    if isinstance(page, dict):
-        candidates.extend([page.get("totalRecords"), page.get("totalRows")])
-    candidates.extend([envelope.get("totalRecords"), envelope.get("totalRows")])
-    for c in candidates:
-        n = _coerce_int(c)
-        if n is not None:
-            return n
+    if not isinstance(envelope, dict):
+        return None
+    table = envelope.get("table")
+    if not isinstance(table, dict):
+        return None
+    page_count = table.get("pageCount")
+    if isinstance(page_count, int):
+        return page_count
     return None
 
 
