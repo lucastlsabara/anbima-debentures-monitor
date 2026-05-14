@@ -264,7 +264,7 @@ def _update_manifest(date_iso: str, n_rows: int, filename: str) -> None:
 def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS) -> int:
     """Refresh dos N du B3 mais recentes com wall-clock budget.
 
-    Wall-clock budget (env `B3_CONSOLIDATED_BUDGET_SECONDS`, default 3600s)
+    Wall-clock budget (env `B3_CONSOLIDATED_BUDGET_SECONDS`, default 9000s)
     complementa o HTTP timeout: cobre LENTIDAO genuina e bugs de paginacao
     onde requests individuais respondem mas o conjunto extrapola. Quando
     estoura, dias restantes sao pulados; arquivos existentes preservados.
@@ -276,7 +276,7 @@ def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS) -> int:
         workflow usa esse contraste para nao marcar o marker de
         idempotencia em parcial (proxima retry reprocessa).
     """
-    budget_seconds = int(os.environ.get("B3_CONSOLIDATED_BUDGET_SECONDS", "3600"))
+    budget_seconds = int(os.environ.get("B3_CONSOLIDATED_BUDGET_SECONDS", "9000"))
     start_time = time.monotonic()
     days = last_n_business_days(n)
     print(
