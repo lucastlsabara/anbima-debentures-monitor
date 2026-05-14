@@ -34,10 +34,14 @@ on:
 permissions:
   contents: write
 
-# Compartilha grupo com o canonico (anbima_b3_probe.yml) como safety net:
-# se algum dia janelas se sobreporem, evita dois push concorrentes em main.
+# Concurrency separada do canonico (anbima_b3_probe.yml usa
+# anbima-b3-pipeline). Os dois workflows mexem em arquivos diferentes
+# (canonico: D-1..D-4 + ANBIMA + Consolidated; intraday: apenas D-0),
+# entao podem rodar em paralelo sem race em dados. O unico risco real
+# eh push concorrente em main, tratado pelo pull rebase antes do push
+# no step de commit.
 concurrency:
-  group: anbima-b3-pipeline
+  group: anbima-b3-intraday
   cancel-in-progress: false
 
 jobs:
@@ -146,21 +150,24 @@ jobs:
           from zoneinfo import ZoneInfo
           print(datetime.now(ZoneInfo('America/Sao_Paulo')).strftime('%H:%M BRT'))
           ")
-          if ! git pull --rebase --autostash origin main; then
-            echo "::error::git pull --rebase falhou (conflito?); abortando push"
-            exit 1
-          fi
           # Stage apenas o que o intraday muda: data/ (b3_trades/<target>.json +
           # derivados gerados pelo build_dashboard) e index.html. NAO mexe em
           # history/, data.json ou data/.probe_state.json — sao territorio do canonico.
           git add data/ index.html
           if git diff --cached --quiet; then
-            echo "Sem mudancas a commitar (apos rebase)"
+            echo "Sem mudancas a commitar"
             echo "committed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git commit -m "chore: B3 intraday refresh ${TARGET_DATE} ${HORA}"
-          git push
+          # Rebase contra main pos-commit: evita race com push concorrente do
+          # canonico (que agora roda em concurrency group separado).
+          if ! git pull --rebase origin main; then
+            echo "::error::git pull --rebase falhou (conflito?); abortando"
+            git rebase --abort || true
+            exit 1
+          fi
+          git push origin main
           SHA=$(git rev-parse HEAD)
           echo "committed=true" >> "$GITHUB_OUTPUT"
           echo "commit_hora=$HORA" >> "$GITHUB_OUTPUT"
