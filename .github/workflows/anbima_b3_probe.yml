@@ -2,8 +2,8 @@ name: ANBIMA + B3 Probe & Import
 
 # Workflow UNICO que substitui o cron de daily_update.yml e b3_trades.yml.
 #
-# Roda em 4 horarios fixos por dia util B3: 20h BRT, 23h BRT (mesmo dia ref) +
-# 02h BRT, 05h BRT (madrugada apos, ref = dia util anterior).
+# Roda em 3 horarios fixos por dia util B3: 21h BRT (mesmo dia ref) +
+# 00h BRT, 03h BRT (madrugada apos, ref = dia util anterior).
 # Idempotencia diaria garante 1 execucao real; retries automaticos se algum falhar.
 # A cada execucao:
 #   1. Determina o dia alvo (HOJE BRT se hora>=19, senao ONTEM BRT).
@@ -12,7 +12,7 @@ name: ANBIMA + B3 Probe & Import
 #      last_successful_date == dia alvo, encerra verde sem rodar o resto.
 #      Garante 1 execucao bem-sucedida por dia_alvo, evitando rerodar probe
 #      + B3 overwrite nas horas seguintes do mesmo ciclo. Quando o dia_alvo
-#      muda (ex: passa de 05h pra 19h BRT), o marker nao bloqueia.
+#      muda (ex: passa de 03h pra 19h BRT), o marker nao bloqueia.
 #   4. Probe: verifica disponibilidade dos 5 arquivos (ANBIMA Debentures,
 #      ANBIMA ETTJ, ANBIMA TPF, B3 Trade, B3 ConsolidatedRecords).
 #   5. Se TODOS os 5 estao publicados: importa ANBIMA (gap-fill 5 du B3),
@@ -28,25 +28,24 @@ name: ANBIMA + B3 Probe & Import
 
 on:
   schedule:
-    # 4 disparos por dia util B3. Idempotencia diaria garante 1 execucao real;
-    # slots subsequentes encerram verde se target_date ja foi completado.
+    # 3 disparos por dia util B3:
+    # 21h BRT (HOJE) | 00h BRT do dia seguinte (ONTEM) | 03h BRT do dia seguinte (ONTEM)
     # BRT = UTC-3. Cron em UTC.
-    - cron: '0 23 * * 1-5'  # 20:00 BRT seg-sex -> ref = HOJE (mesmo dia BRT)
-    - cron: '0 2 * * 2-6'   # 23:00 BRT seg-sex -> ref = HOJE (vira dia em UTC mas BRT ainda eh o mesmo dia)
-    - cron: '0 5 * * 2-6'   # 02:00 BRT ter-sab -> ref = ONTEM (madrugada apos dia util)
-    - cron: '0 8 * * 2-6'   # 05:00 BRT ter-sab -> ref = ONTEM
+    # Slot 21h tenta primeiro; 00h e 03h sao retry automatico se 21h falhou.
+    # Marker de idempotencia em data/.probe_state.json garante 1 execucao bem-sucedida por target_date.
+    - cron: '0 0 * * 2-6'   # 21:00 BRT seg-sex -> ref = HOJE BRT
+    - cron: '0 3 * * 2-6'   # 00:00 BRT ter-sab -> ref = ONTEM (ultimo dia util)
+    - cron: '0 6 * * 2-6'   # 03:00 BRT ter-sab -> ref = ONTEM (ultimo dia util)
     #
     # Validacao de bordas:
-    #  Seg 20h BRT = 23h UTC seg (dia 1) -> dispara, ref = seg (HOJE)
-    #  Seg 23h BRT = 02h UTC ter (dia 2) -> dispara, ref = seg (HOJE, hour=23 >= 19)
-    #  Ter 02h BRT = 05h UTC ter (dia 2) -> dispara, ref = seg (ONTEM, hour=2 < 19)
-    #  Ter 05h BRT = 08h UTC ter (dia 2) -> dispara, ref = seg (ONTEM)
-    #  Sex 20h BRT = 23h UTC sex (dia 5) -> dispara, ref = sex (HOJE)
-    #  Sex 23h BRT = 02h UTC sab (dia 6) -> dispara, ref = sex (HOJE)
-    #  Sab 02h BRT = 05h UTC sab (dia 6) -> dispara, ref = sex (ONTEM)
-    #  Sab 05h BRT = 08h UTC sab (dia 6) -> dispara, ref = sex (ONTEM)
-    #  Dom 02h BRT = 05h UTC dom (dia 0) -> BLOQUEIA (0 nao esta em 2-6)
-    #  Seg 02h BRT = 05h UTC seg (dia 1) -> BLOQUEIA (1 nao esta em 2-6)
+    #  Seg 21h BRT = 00h UTC ter (dia 2) -> dispara, ref = seg (HOJE, hour=21 >= 19)
+    #  Ter 00h BRT = 03h UTC ter (dia 2) -> dispara, ref = seg (ONTEM, hour=0 < 19)
+    #  Ter 03h BRT = 06h UTC ter (dia 2) -> dispara, ref = seg (ONTEM, hour=3 < 19)
+    #  Sex 21h BRT = 00h UTC sab (dia 6) -> dispara, ref = sex (HOJE)
+    #  Sab 00h BRT = 03h UTC sab (dia 6) -> dispara, ref = sex (ONTEM)
+    #  Sab 03h BRT = 06h UTC sab (dia 6) -> dispara, ref = sex (ONTEM)
+    #  Dom 03h BRT = 06h UTC dom (dia 0) -> BLOQUEIA (0 nao esta em 2-6)
+    #  Seg 03h BRT = 06h UTC seg (dia 1) -> BLOQUEIA (1 nao esta em 2-6)
     #
     # Feriados B3 moveis (Carnaval, Corpus Christi, 25-jan-SP, etc.) nao sao
     # cobertos por cron syntax: o guard B3 corta em ~30s em feriado.
@@ -74,9 +73,9 @@ concurrency:
 jobs:
   probe-and-import:
     runs-on: ubuntu-latest
-    # 90min = wall-clock 1h do fetch_b3_trades_consolidated.py + 30min de
-    # buffer (setup, ANBIMA, B3 Trade, podar, rebuild dashboard, commit & push).
-    timeout-minutes: 90
+    # 180min (3h) = wall-clock 2h30 do fetch_b3_trades_consolidated.py + 30min
+    # de buffer (setup, ANBIMA, B3 Trade, podar, rebuild dashboard, commit & push).
+    timeout-minutes: 180
 
     steps:
       - name: Checkout
