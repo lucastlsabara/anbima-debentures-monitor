@@ -360,6 +360,24 @@ jobs:
             echo "::error::git pull --rebase falhou (conflito?); abortando push"
             exit 1
           fi
+
+          # --autostash silencia conflito de stash pop: rebase finaliza com
+          # exit 0 mesmo quando o pop deixa markers <<<<<<</=======/>>>>>>>
+          # nos arquivos. Sem este guard, `git add data/` aceita os markers e
+          # corrompe main (caso 14/05/2026 -> #146 follow-up). Aborta o slot
+          # quando detecta unmerged paths OU markers; proximo slot do cron
+          # (intervalo de 3h) reprocessa. Trade-off: troca falha rara-mas-
+          # catastrofica por falha frequente-mas-benigna. Se conflitos
+          # virarem cronicos (>1-2 aborts/semana), revisar a estrategia.
+          if [ -n "$(git ls-files --unmerged)" ] || \
+             git grep -lE '^(<<<<<<< |======= |>>>>>>> )' \
+                 -- data/ history/ index.html data.json 2>/dev/null; then
+            echo "::error::Conflito de stash pop detectado (markers ou arquivos unmerged). Abortando para nao corromper main."
+            git ls-files --unmerged || true
+            git status
+            exit 1
+          fi
+
           git add data/ history/ data.json index.html
           if git diff --cached --quiet; then
             echo "Sem mudancas a commitar (apos rebase)"
