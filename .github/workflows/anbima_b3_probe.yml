@@ -2,8 +2,10 @@ name: ANBIMA + B3 Probe & Import
 
 # Workflow UNICO que substitui o cron de daily_update.yml e b3_trades.yml.
 #
-# Roda em 3 horarios fixos por dia util B3: 21h BRT e 23h BRT do dia
-# referencia + 05h BRT do dia seguinte (00, 02 e 08 UTC). A cada execucao:
+# Roda em 4 horarios fixos por dia util B3: 20h BRT, 23h BRT (mesmo dia ref) +
+# 02h BRT, 05h BRT (madrugada apos, ref = dia util anterior).
+# Idempotencia diaria garante 1 execucao real; retries automaticos se algum falhar.
+# A cada execucao:
 #   1. Determina o dia alvo (HOJE BRT se hora>=19, senao ONTEM BRT).
 #   2. Guard B3: se nao for dia util B3, sai 0 sem fazer nada.
 #   3. Idempotencia diaria: le data/.probe_state.json; se
@@ -26,22 +28,25 @@ name: ANBIMA + B3 Probe & Import
 
 on:
   schedule:
-    # 3 horarios fixos por dia util B3, em UTC. BRT = UTC-3:
-    #   00:00 UTC ter-sab = 21h BRT seg-sex (dia_alvo = HOJE BRT)
-    #   02:00 UTC ter-sab = 23h BRT seg-sex (dia_alvo = HOJE BRT)
-    #   08:00 UTC ter-sab = 05h BRT ter-sab (dia_alvo = ONTEM BRT = ref date original)
-    # day-of-week 2-6 (ter-sab UTC) garante que ref date BRT cai em seg-sex.
-    - cron: '0 0,2,8 * * 2-6'
+    # 4 disparos por dia util B3. Idempotencia diaria garante 1 execucao real;
+    # slots subsequentes encerram verde se target_date ja foi completado.
+    # BRT = UTC-3. Cron em UTC.
+    - cron: '0 23 * * 1-5'  # 20:00 BRT seg-sex -> ref = HOJE (mesmo dia BRT)
+    - cron: '0 2 * * 2-6'   # 23:00 BRT seg-sex -> ref = HOJE (vira dia em UTC mas BRT ainda eh o mesmo dia)
+    - cron: '0 5 * * 2-6'   # 02:00 BRT ter-sab -> ref = ONTEM (madrugada apos dia util)
+    - cron: '0 8 * * 2-6'   # 05:00 BRT ter-sab -> ref = ONTEM
     #
     # Validacao de bordas:
-    #  Seg 21h BRT = 00h UTC ter (dia 2) -> dispara, ref date = seg (HOJE)
-    #  Seg 23h BRT = 02h UTC ter (dia 2) -> dispara, ref date = seg (HOJE)
-    #  Ter 05h BRT = 08h UTC ter (dia 2) -> dispara, ref date = seg (ONTEM)
-    #  Sex 21h BRT = 00h UTC sab (dia 6) -> dispara, ref date = sex (HOJE)
-    #  Sex 23h BRT = 02h UTC sab (dia 6) -> dispara, ref date = sex (HOJE)
-    #  Sab 05h BRT = 08h UTC sab (dia 6) -> dispara, ref date = sex (ONTEM)
-    #  Dom 21h BRT = 00h UTC seg (dia 1) -> BLOQUEIA (1 nao esta em 2-6)
-    #  Seg 05h BRT = 08h UTC seg (dia 1) -> BLOQUEIA
+    #  Seg 20h BRT = 23h UTC seg (dia 1) -> dispara, ref = seg (HOJE)
+    #  Seg 23h BRT = 02h UTC ter (dia 2) -> dispara, ref = seg (HOJE, hour=23 >= 19)
+    #  Ter 02h BRT = 05h UTC ter (dia 2) -> dispara, ref = seg (ONTEM, hour=2 < 19)
+    #  Ter 05h BRT = 08h UTC ter (dia 2) -> dispara, ref = seg (ONTEM)
+    #  Sex 20h BRT = 23h UTC sex (dia 5) -> dispara, ref = sex (HOJE)
+    #  Sex 23h BRT = 02h UTC sab (dia 6) -> dispara, ref = sex (HOJE)
+    #  Sab 02h BRT = 05h UTC sab (dia 6) -> dispara, ref = sex (ONTEM)
+    #  Sab 05h BRT = 08h UTC sab (dia 6) -> dispara, ref = sex (ONTEM)
+    #  Dom 02h BRT = 05h UTC dom (dia 0) -> BLOQUEIA (0 nao esta em 2-6)
+    #  Seg 02h BRT = 05h UTC seg (dia 1) -> BLOQUEIA (1 nao esta em 2-6)
     #
     # Feriados B3 moveis (Carnaval, Corpus Christi, 25-jan-SP, etc.) nao sao
     # cobertos por cron syntax: o guard B3 corta em ~30s em feriado.
