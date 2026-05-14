@@ -21,6 +21,7 @@ from typing import Callable
 
 import requests
 
+from _http_utils import request_with_retry
 from b3_calendar import is_b3_business_day, today_brt
 
 
@@ -38,8 +39,6 @@ B3_HEADERS = {
     ),
 }
 
-HTTP_RETRY_BACKOFF_SEC = (2, 4, 8)
-DEFAULT_TIMEOUT = 60
 DEFAULT_MAX_RETRIES = 3
 
 
@@ -59,47 +58,40 @@ def post_page(
     page: int,
     page_size: int,
     *,
-    timeout: int = DEFAULT_TIMEOUT,
     max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> dict:
     """POST {HTTP_BASE_URL}/{table}/{date}/{date}/{page}/{page_size}.
 
-    Retry exponencial (HTTP_RETRY_BACKOFF_SEC) em falhas transitorias.
-    403/404 -> B3UnavailableError. 403 com x-deny-reason ->
-    SandboxBlockedError. 5xx -> retry e depois RuntimeError.
+    Toda chamada HTTP passa por `request_with_retry` (timeout default
+    (15, 120)s + retry exponencial 2/4/8s em Timeout/ConnectionError/5xx).
+    403 com x-deny-reason -> SandboxBlockedError; 403/404 ->
+    B3UnavailableError; 5xx persistente -> requests.HTTPError propagado.
     """
     url = (
         f"{HTTP_BASE_URL}/{table}/{date_iso}/{date_iso}/{page}/{page_size}"
     )
-    last_exc: Exception | None = None
-    for attempt in range(max_retries):
-        try:
-            r = requests.post(url, headers=B3_HEADERS, json={}, timeout=timeout)
-            deny_reason = r.headers.get("x-deny-reason")
-            if r.status_code == 403 and deny_reason:
+    try:
+        r = request_with_retry(
+            "POST",
+            url,
+            headers=B3_HEADERS,
+            json={},
+            max_attempts=max_retries,
+        )
+    except requests.HTTPError as exc:
+        resp = exc.response
+        if resp is not None:
+            deny_reason = resp.headers.get("x-deny-reason")
+            if resp.status_code == 403 and deny_reason:
                 raise SandboxBlockedError(
                     f"HTTP 403 bloqueado pela sandbox (x-deny-reason={deny_reason}): "
                     f"host arquivos.b3.com.br fora da allowlist. Rode este script "
                     f"em ambiente com egress livre (ex: GitHub Actions)."
-                )
-            if r.status_code in (403, 404):
-                raise B3UnavailableError(f"HTTP {r.status_code}")
-            if r.status_code >= 500:
-                raise requests.HTTPError(f"HTTP {r.status_code}")
-            r.raise_for_status()
-            return r.json()
-        except (B3UnavailableError, SandboxBlockedError):
-            raise
-        except (requests.Timeout, requests.HTTPError, requests.ConnectionError) as exc:
-            last_exc = exc
-            if attempt == max_retries - 1:
-                break
-            backoff = HTTP_RETRY_BACKOFF_SEC[
-                min(attempt, len(HTTP_RETRY_BACKOFF_SEC) - 1)
-            ]
-            print(f"  [retry {attempt + 1}/{max_retries}] {exc}; aguardando {backoff}s")
-            time.sleep(backoff)
-    raise RuntimeError(f"Falha apos {max_retries} tentativas: {last_exc}")
+                ) from exc
+            if resp.status_code in (403, 404):
+                raise B3UnavailableError(f"HTTP {resp.status_code}") from exc
+        raise
+    return r.json()
 
 
 def last_n_business_days(n: int, today: date | None = None) -> list[date]:

@@ -39,6 +39,7 @@ Schema das 17 colunas (ordem fixa retornada pela B3):
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from datetime import date, datetime, timezone
@@ -48,7 +49,6 @@ from b3_api import (
     B3UnavailableError,
     last_n_business_days,
     post_page,
-    refresh_recent_days as _refresh_recent_days,
 )
 
 
@@ -159,6 +159,8 @@ def fetch_day(date_iso: str) -> dict:
         "date": date_iso,
         "status": "updated",
         "n_rows": len(rows),
+        "n_pages": pages_fetched,
+        "size_mb": size_mb,
     }
 
 
@@ -193,7 +195,81 @@ def _update_manifest(date_iso: str, n_rows: int, filename: str) -> None:
 
 
 def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS) -> int:
-    return _refresh_recent_days(fetch_day, n, label="consolidated")
+    """Refresh dos N du B3 mais recentes com wall-clock budget.
+
+    Wall-clock budget (env `B3_CONSOLIDATED_BUDGET_SECONDS`, default 3600s)
+    complementa o HTTP timeout: cobre LENTIDAO genuina e bugs de paginacao
+    onde requests individuais respondem mas o conjunto extrapola. Quando
+    estoura, dias restantes sao pulados; arquivos existentes preservados.
+
+    Exit code:
+      - 0: TODOS os N dias completados (status 'updated' OU 'unavailable'
+        legitimo da B3 — FDS/feriado/dia ainda nao publicado).
+      - 1: qualquer dia pulado por wall-clock OU falha apos retries. O
+        workflow usa esse contraste para nao marcar o marker de
+        idempotencia em parcial (proxima retry reprocessa).
+    """
+    budget_seconds = int(os.environ.get("B3_CONSOLIDATED_BUDGET_SECONDS", "3600"))
+    start_time = time.monotonic()
+    days = last_n_business_days(n)
+    print(
+        f"Refresh consolidated dos ultimos {len(days)} dias uteis B3: "
+        f"{days[0]} a {days[-1]}"
+    )
+    print(f"Wall-clock budget: {budget_seconds}s")
+    print("HTTP timeout: (15, 120)s, max 3 tentativas")
+
+    completed_days: list[str] = []
+    skipped_days: list[tuple[str, str]] = []
+
+    for i, d in enumerate(days):
+        date_iso = d.isoformat()
+        elapsed = time.monotonic() - start_time
+        if elapsed > budget_seconds:
+            print(
+                f"[wall-clock] Budget esgotado ({elapsed:.0f}s > "
+                f"{budget_seconds}s), pulando dias restantes",
+                file=sys.stderr,
+            )
+            for remaining in days[i:]:
+                rem_iso = remaining.isoformat()
+                skipped_days.append((rem_iso, "wall-clock budget esgotado"))
+                print(f"[skip] Dia {rem_iso} pulado: wall-clock budget esgotado")
+            break
+
+        try:
+            result = fetch_day(date_iso)
+        except Exception as exc:
+            skipped_days.append((date_iso, f"falha apos retries: {exc}"))
+            print(
+                f"[skip] Dia {date_iso} pulado: falha apos retries: {exc}",
+                file=sys.stderr,
+            )
+            continue
+
+        if result["status"] == "updated":
+            completed_days.append(date_iso)
+            print(
+                f"[ok] Dia {date_iso} ({result['n_pages']} paginas, "
+                f"{result['size_mb']:.2f}MB)"
+            )
+        else:
+            # 'unavailable' (B3UnavailableError 403/404): FDS/feriado/nao
+            # publicado. Conta como completed: nao temos o que fazer aqui,
+            # gap-fill em proxima execucao se a B3 publicar.
+            completed_days.append(date_iso)
+            print(f"[ok] Dia {date_iso} (indisponivel na B3 -- FDS/feriado/nao publicado)")
+
+        if i < len(days) - 1:
+            time.sleep(1.0)
+
+    elapsed_total = time.monotonic() - start_time
+    print(
+        f"[summary] Completados: {len(completed_days)}/{len(days)} | "
+        f"Pulados: {len(skipped_days)} | Tempo: {elapsed_total:.0f}s"
+    )
+
+    return 0 if len(completed_days) == len(days) else 1
 
 
 def main(argv: list[str]) -> int:
