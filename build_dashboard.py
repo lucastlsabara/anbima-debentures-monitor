@@ -43,6 +43,7 @@ DU_POR_ANO = 252.0
 ROOT = Path(__file__).parent
 HIST_DIR = ROOT / "history"
 DATA_DIR = ROOT / "data"
+B3_CONS_DIR = DATA_DIR / "b3_trades_consolidated"
 
 # Indexadores efetivamente exibidos no dashboard. Para reincluir % do DI ou
 # IGP-M+ no futuro, basta acrescentá-los aqui — os snapshots em history/
@@ -357,7 +358,122 @@ def build_overview(snaps: list[dict]) -> dict:
         "by_date": by_date,
         "by_pair": pairs,
         "diagnostico_metodo": snaps[-1].get("diagnostico_metodo") if snaps else None,
+        "vg_b3_consolidated": build_vg_b3_consolidated(),
     }
+
+
+# ----------------------------------------------------------------------------
+# vg_b3_consolidated — pre-agregação da seção B3 da Visão Geral
+# ----------------------------------------------------------------------------
+# Lê data/b3_trades_consolidated/<date>.json (schema fixo da B3
+# ConsolidatedRecords, 17 colunas) e pré-computa, por data, os campos usados
+# pela Visão Geral: KPIs (Volume Total, Nº Trades), série diária com split
+# Intra/Extragrupo (chart stacked) e Top 20 Emissores/Papéis com %
+# Extragrupo. Filtra somente DEB. `grupo == "INTRAGRUPO"` é intragrupo;
+# qualquer outro valor (`EXTRAGRUPO`, `-`) é extragrupo.
+
+_CONS_COL_TICKER = 2
+_CONS_COL_INSTR = 3
+_CONS_COL_EMISSOR = 5
+_CONS_COL_N_NEG = 13
+_CONS_COL_VOLUME = 14
+_CONS_COL_GRUPO = 15
+
+
+def _is_intragrupo(g) -> bool:
+    if g is None:
+        return False
+    return str(g).strip().upper() == "INTRAGRUPO"
+
+
+def _top_n_aggregate(rows: list, key_idx: int, *, top_n: int = 20,
+                     extra_field: str | None = None) -> list[dict]:
+    """Agrega `rows` (já filtrado por DEB) por chave e retorna top N por volume.
+
+    Cada agregado expõe volume_total, volume_extra, pct_extra e n_trades. O
+    parâmetro `extra_field` controla se inclui o `emissor` no dict (top
+    papéis), que não faz sentido para top emissores (a chave já é o emissor).
+    """
+    agg: dict[str, dict] = {}
+    for r in rows:
+        key = r[key_idx]
+        if not key:
+            continue
+        cur = agg.get(key)
+        if cur is None:
+            cur = {
+                "_key": key,
+                "_emissor": r[_CONS_COL_EMISSOR],
+                "volume_total": 0.0,
+                "volume_extra": 0.0,
+                "n_trades": 0,
+            }
+            agg[key] = cur
+        vol = r[_CONS_COL_VOLUME] or 0.0
+        cur["volume_total"] += vol
+        if not _is_intragrupo(r[_CONS_COL_GRUPO]):
+            cur["volume_extra"] += vol
+        n = r[_CONS_COL_N_NEG]
+        if isinstance(n, (int, float)):
+            cur["n_trades"] += int(n)
+    items = sorted(agg.values(), key=lambda d: d["volume_total"], reverse=True)
+    out: list[dict] = []
+    for d in items[:top_n]:
+        vt = d["volume_total"]
+        pct = round(d["volume_extra"] / vt * 100.0, 1) if vt > 0 else 0.0
+        row = {
+            "volume_total": round(vt, 2),
+            "volume_extra": round(d["volume_extra"], 2),
+            "pct_extra": pct,
+            "n_trades": d["n_trades"],
+        }
+        if extra_field == "papel":
+            row["ticker"] = d["_key"]
+            row["emissor"] = d["_emissor"]
+        else:
+            row["emissor"] = d["_key"]
+        out.append(row)
+    return out
+
+
+def build_vg_b3_consolidated() -> dict:
+    if not B3_CONS_DIR.exists():
+        return {"by_date": {}, "dates": []}
+    by_date: dict[str, dict] = {}
+    for path in sorted(B3_CONS_DIR.glob("*.json")):
+        if path.name == "manifest.json":
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            print(f"[warn ] {path} inválido, pulando", file=sys.stderr)
+            continue
+        date = payload.get("date") or path.stem
+        rows = payload.get("rows") or []
+        deb_rows = [r for r in rows if r[_CONS_COL_INSTR] == "DEB"]
+        vol_intra = 0.0
+        vol_extra = 0.0
+        n_trades = 0
+        for r in deb_rows:
+            v = r[_CONS_COL_VOLUME] or 0.0
+            if _is_intragrupo(r[_CONS_COL_GRUPO]):
+                vol_intra += v
+            else:
+                vol_extra += v
+            n = r[_CONS_COL_N_NEG]
+            if isinstance(n, (int, float)):
+                n_trades += int(n)
+        by_date[date] = {
+            "volume_total_brl": round(vol_intra + vol_extra, 2),
+            "volume_intra_brl": round(vol_intra, 2),
+            "volume_extra_brl": round(vol_extra, 2),
+            "n_trades": n_trades,
+            "n_instrumentos": len(deb_rows),
+            "top_emissores": _top_n_aggregate(deb_rows, _CONS_COL_EMISSOR),
+            "top_papeis": _top_n_aggregate(deb_rows, _CONS_COL_TICKER,
+                                           extra_field="papel"),
+        }
+    return {"by_date": by_date, "dates": sorted(by_date.keys())}
 
 
 # ----------------------------------------------------------------------------
