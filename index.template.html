@@ -455,7 +455,6 @@
   <a href="#/heatmap" data-tab="heatmap">Debêntures: Setor × Prazo</a>
   <a href="#/dispersao" data-tab="dispersao">Debêntures: Gráfico</a>
   <a href="#/trades" data-tab="trades">Pesquisa de Trades</a>
-  <a href="#/trades-b3" data-tab="trades-b3">Todos Trades</a>
   <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
 </nav>
 
@@ -697,37 +696,6 @@
   </div>
 </section>
 
-<!-- ===================== Tab: Trades B3 ===================== -->
-<section id="tab-trades-b3" class="tab hide">
-  <div class="panel">
-    <div class="controls">
-      <label>Data Anterior:
-        <input type="text" id="trd-date-ini" placeholder="DD-MM-YYYY">
-      </label>
-      <label>Data Atual:
-        <input type="text" id="trd-date-fim" placeholder="DD-MM-YYYY">
-      </label>
-      <span id="trd-status" class="trd-status"></span>
-      <span id="trd-date-error" class="date-error hide"></span>
-    </div>
-  </div>
-  <div id="trd-empty" class="empty hide"></div>
-  <div id="trd-error" class="empty hide">
-    <div id="trd-error-msg"></div>
-    <button id="trd-retry" type="button" class="play-btn" style="margin-top:10px">Tentar novamente</button>
-  </div>
-  <div id="trd-content">
-    <div class="panel" id="trd-volume-chart-card">
-      <h2>Volume Total por Dia</h2>
-      <div id="trd-volume-chart" class="chart" style="height:340px"></div>
-    </div>
-    <div class="panel">
-      <h2>Trades</h2>
-      <div id="trd-table"></div>
-    </div>
-  </div>
-</section>
-
 <!-- ===================== Tab: Pesquisa de Trades ===================== -->
 <section id="tab-trades" class="tab hide">
   <div class="panel">
@@ -770,6 +738,16 @@
   <div id="tr2-error" class="empty hide">
     <div id="tr2-error-msg"></div>
     <button id="tr2-retry" type="button" class="play-btn" style="margin-top:10px">Tentar novamente</button>
+  </div>
+  <div id="tr2-mode-a" class="hide">
+    <div class="panel" id="trd-volume-chart-card">
+      <h2>Volume Total por Dia</h2>
+      <div id="trd-volume-chart" class="chart" style="height:340px"></div>
+    </div>
+    <div class="panel">
+      <h2>Trades</h2>
+      <div id="trd-table"></div>
+    </div>
   </div>
   <div id="tr2-content">
     <div id="tr2-charts"></div>
@@ -939,13 +917,15 @@ function adaptiveTextColor(bgHex) {
 /* ============================================================
  *  hash routing
  * ============================================================ */
-const TABS = ["visao","dispersao","movimentacoes","heatmap","titulos-publicos","trades-b3","trades"];
+const TABS = ["visao","dispersao","movimentacoes","heatmap","titulos-publicos","trades"];
 const loaded = new Set();
 
-// Aba "Curvas Históricas" foi consolidada em "Títulos Públicos" — redireciona
-// rota antiga para evitar bookmarks quebrados.
+// Rotas antigas redirecionadas para evitar bookmarks quebrados:
+//   #/curvas    -> Títulos Públicos (consolidacao da Curvas Históricas).
+//   #/trades-b3 -> Pesquisa de Trades (Todos Trades foi unificada nessa aba).
 function _resolveTab(name) {
   if (name === "curvas") return "titulos-publicos";
+  if (name === "trades-b3") return "trades";
   return TABS.includes(name) ? name : "visao";
 }
 
@@ -1030,7 +1010,6 @@ async function renderTab(name) {
   if (name === "movimentacoes") return renderMovimentacoes();
   if (name === "heatmap") return renderHeatmap();
   if (name === "titulos-publicos") return renderTitulosPublicos();
-  if (name === "trades-b3") return renderTradesB3();
   if (name === "trades") return renderTrades();
 }
 
@@ -3641,16 +3620,14 @@ function refreshTpView() {
 }
 
 /* ============================================================
- *  Tab 6 — Trades B3
+ *  Helpers de trades B3 (compartilhados entre os modos da aba
+ *  "Pesquisa de Trades" e usados como base para o MODO A — tabela
+ *  completa + volume por dia — que substitui a antiga aba "Todos
+ *  Trades". O dispatch entre MODO A (sem selecao) e MODO B (com
+ *  selecao de papel/emissor) acontece em tr2_renderAllCharts.
  * ============================================================ */
-let TRD_MANIFEST = null;
-let TRD_INITED = false;
-let TRD_FP_INI = null, TRD_FP_FIM = null;
-let TRD_DATE_INI = null, TRD_DATE_FIM = null;
-let TRD_TABLE = null;
-let TRD_RANGE_ROWS = null;          // rows do range (apos filtro de cancelados, anotadas)
-let TRD_RANGE_NDAYS = 0;            // # dias uteis no range (define bucket)
-const TRD_DAY_CACHE = new Map();   // date -> {columns, rows, ...}
+let TRD_TABLE = null;               // Tabela do MODO A (full).
+const TRD_DAY_CACHE = new Map();    // date -> {columns, rows, ...}
 const TRD_COLUMNS = [
   "instrument","issuer","ticker","setor","qtd","price","vol",
   "rate","origin","time","trade_code","isin","settlement_dt","situation",
@@ -3661,33 +3638,6 @@ const TRD_COLUMNS = [
 // antes de qualquer agregacao/render.
 function _trd_isCancelled(situation) {
   return typeof situation === "string" && /^Cancelado/i.test(situation);
-}
-
-function trd_setStatus(text, busy) {
-  const el = document.getElementById("trd-status");
-  if (!el) return;
-  el.innerHTML = busy ? '<span class="trd-spinner"></span>' + escapeHtml(text || "") : escapeHtml(text || "");
-}
-
-function trd_showEmpty(msg) {
-  document.getElementById("trd-content").classList.add("hide");
-  document.getElementById("trd-error").classList.add("hide");
-  const e = document.getElementById("trd-empty");
-  e.textContent = msg;
-  e.classList.remove("hide");
-}
-
-function trd_showError(msg) {
-  document.getElementById("trd-content").classList.add("hide");
-  document.getElementById("trd-empty").classList.add("hide");
-  document.getElementById("trd-error-msg").textContent = msg;
-  document.getElementById("trd-error").classList.remove("hide");
-}
-
-function trd_showContent() {
-  document.getElementById("trd-empty").classList.add("hide");
-  document.getElementById("trd-error").classList.add("hide");
-  document.getElementById("trd-content").classList.remove("hide");
 }
 
 function trd_fmtMoneyShort(v) {
@@ -3751,188 +3701,8 @@ function trd_numericFilter(term, value) {
   return String(value).includes(s);
 }
 
-async function renderTradesB3() {
-  if (!TRD_INITED) {
-    document.getElementById("trd-retry").addEventListener("click", () => trd_load());
-    TRD_INITED = true;
-  }
-
-  trd_setStatus("Carregando manifest…", true);
-  try {
-    TRD_MANIFEST = await loadJSON("data/b3_trades/manifest.json");
-  } catch (e) {
-    console.error("[trades-b3] manifest", e);
-    trd_setStatus("");
-    trd_showEmpty("Sem dados ainda. Rode backfill_b3_trades.py.");
-    return;
-  }
-  trd_setStatus("");
-
-  // Filtra entradas vazias do manifesto (B3 publica entry com rows=[] para o
-  // dia corrente antes do fim do prega~o; nao deve ser selecionavel). Mantem
-  // datepicker limitado a' ultima data com dados reais.
-  const dates = (TRD_MANIFEST.dates || [])
-    .filter(e => ((e.n_trades || e.n_rows || 0) > 0))
-    .map(e => e.date);
-  if (!dates.length) {
-    trd_showEmpty("Sem dados ainda. Rode backfill_b3_trades.py.");
-    return;
-  }
-
-  const latest = dates[dates.length - 1];
-  const earliest = dates[0];
-  // Default: Data Anterior VAZIA (mostra so' Data Atual); Data Atual = latest.
-  TRD_DATE_INI = null;
-  TRD_DATE_FIM = latest;
-
-  if (TRD_FP_INI) TRD_FP_INI.destroy();
-  if (TRD_FP_FIM) TRD_FP_FIM.destroy();
-  TRD_FP_INI = flatpickr("#trd-date-ini", {
-    dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
-    allowInput: true,
-    enable: dates.filter(d => d !== TRD_DATE_FIM),
-    defaultDate: TRD_DATE_INI || undefined,
-    minDate: earliest, maxDate: TRD_DATE_FIM || latest,
-    onChange: (_, d) => {
-      if (!d) {
-        TRD_DATE_INI = null;
-        trd_clearDateError();
-        trd_scheduleRecalc();
-        return;
-      }
-      if (d === TRD_DATE_FIM) {
-        trd_showDateError("Data Anterior não pode ser igual a Data Atual.");
-        if (TRD_FP_INI) TRD_FP_INI.clear(false);
-        TRD_DATE_INI = null;
-        trd_scheduleRecalc();
-        return;
-      }
-      trd_clearDateError();
-      TRD_DATE_INI = d;
-      if (TRD_DATE_FIM && TRD_DATE_INI > TRD_DATE_FIM) {
-        TRD_DATE_FIM = TRD_DATE_INI;
-        TRD_DATE_INI = null;
-        if (TRD_FP_FIM) TRD_FP_FIM.setDate(TRD_DATE_FIM, false);
-        if (TRD_FP_INI) TRD_FP_INI.clear(false);
-      }
-      trd_scheduleRecalc();
-    },
-  });
-  TRD_FP_FIM = flatpickr("#trd-date-fim", {
-    dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
-    enable: dates, defaultDate: TRD_DATE_FIM, minDate: earliest, maxDate: latest,
-    onChange: (_, d) => {
-      if (!d) return;
-      TRD_DATE_FIM = d;
-      if (TRD_DATE_INI && TRD_DATE_INI === TRD_DATE_FIM) {
-        TRD_DATE_INI = null;
-        if (TRD_FP_INI) TRD_FP_INI.clear(false);
-        trd_showDateError("Data Anterior não pode ser igual a Data Atual.");
-      } else if (TRD_DATE_INI && TRD_DATE_FIM < TRD_DATE_INI) {
-        TRD_DATE_INI = null;
-        if (TRD_FP_INI) TRD_FP_INI.clear(false);
-        trd_clearDateError();
-      } else {
-        trd_clearDateError();
-      }
-      if (TRD_FP_INI) TRD_FP_INI.set("enable", dates.filter(x => x !== TRD_DATE_FIM));
-      if (TRD_FP_INI) TRD_FP_INI.set("maxDate", TRD_DATE_FIM);
-      trd_scheduleRecalc();
-    },
-  });
-
-  await trd_load();
-}
-
-function trd_showDateError(msg) {
-  const el = document.getElementById("trd-date-error");
-  if (!el) return;
-  el.textContent = msg;
-  el.classList.remove("hide");
-}
-function trd_clearDateError() {
-  const el = document.getElementById("trd-date-error");
-  if (!el) return;
-  el.textContent = "";
-  el.classList.add("hide");
-}
-
-let TRD_RECALC_TIMER = null;
-function trd_scheduleRecalc() {
-  if (TRD_RECALC_TIMER) clearTimeout(TRD_RECALC_TIMER);
-  TRD_RECALC_TIMER = setTimeout(() => {
-    TRD_RECALC_TIMER = null;
-    if (!TRD_DATE_FIM) return;
-    if (TRD_DATE_INI && TRD_DATE_INI > TRD_DATE_FIM) {
-      const tmp = TRD_DATE_INI; TRD_DATE_INI = TRD_DATE_FIM; TRD_DATE_FIM = tmp;
-    }
-    trd_load();
-  }, 300);
-}
-
-function trd_datesInRange() {
-  // Data Anterior vazia -> apenas Data Atual.
-  // Data Anterior preenchida -> intervalo [Anterior, Atual] inclusive.
-  const out = [];
-  for (const e of (TRD_MANIFEST.dates || [])) {
-    if (TRD_DATE_INI == null) {
-      if (e.date === TRD_DATE_FIM) out.push(e);
-    } else {
-      if (e.date >= TRD_DATE_INI && e.date <= TRD_DATE_FIM) out.push(e);
-    }
-  }
-  return out;
-}
-
-async function trd_load() {
-  const dateEntries = trd_datesInRange();
-  if (!dateEntries.length) {
-    trd_showEmpty("0 trades neste período.");
-    return;
-  }
-  trd_setStatus(`Carregando ${dateEntries.length} dia(s)…`, true);
-  document.getElementById("trd-content").classList.add("hide");
-  document.getElementById("trd-empty").classList.add("hide");
-  document.getElementById("trd-error").classList.add("hide");
-
-  let payloads;
-  try {
-    payloads = await Promise.all(dateEntries.map(e => trd_fetchDay(e)));
-  } catch (err) {
-    console.error("[trades-b3] fetch", err);
-    trd_setStatus("");
-    trd_showError("Falha ao carregar dados: " + err.message);
-    return;
-  }
-  trd_setStatus("");
-
-  const allRows = [];
-  for (const p of payloads) {
-    for (const r of p.rows) {
-      const obj = trd_rowToObj(r, p.date);
-      if (_trd_isCancelled(obj.situation)) continue;
-      allRows.push(obj);
-    }
-  }
-
-  if (!allRows.length) {
-    trd_showEmpty("0 trades neste período.");
-    return;
-  }
-
-  TRD_RANGE_ROWS = allRows;
-  TRD_RANGE_NDAYS = dateEntries.length;
-
-  trd_showContent();
-  trd_refreshViews();
-}
-
-// Re-renderiza a tabela completa de trades. Chamado apos load.
-function trd_refreshViews() {
-  if (!TRD_RANGE_ROWS) return;
-  trd_renderTable(TRD_RANGE_ROWS);
-}
-
+// Fetch B3 trades por dia (trade-by-trade). Cache compartilhado entre as
+// visualizacoes (Visao Geral e MODO A/B da aba Pesquisa de Trades).
 async function trd_fetchDay(entry) {
   if (TRD_DAY_CACHE.has(entry.date)) return TRD_DAY_CACHE.get(entry.date);
   const path = "data/b3_trades/" + entry.filename;
@@ -4131,18 +3901,6 @@ function _trd_buildTradesTable(containerId, rows) {
   });
 }
 
-function trd_renderTable(rows) {
-  if (TRD_TABLE) { TRD_TABLE.destroy(); TRD_TABLE = null; }
-  TRD_TABLE = _trd_buildTradesTable("#trd-table", rows);
-  redrawTrdVolumeChart(rows);
-  // Recompute chart sempre que qualquer filtro (range, header, etc) muda a
-  // visibilidade das linhas. Plotly.react reusa o div renderizado.
-  TRD_TABLE.on("dataFiltered", (_filters, visibleRows) => {
-    const data = visibleRows.map(r => r.getData());
-    redrawTrdVolumeChart(data);
-  });
-}
-
 function _trd_volumeByDate(rows) {
   const byDate = new Map();
   for (const r of rows) {
@@ -4279,6 +4037,7 @@ function tr2_setStatus(text, busy) {
 function tr2_showEmpty(msg) {
   document.getElementById("tr2-content").classList.add("hide");
   document.getElementById("tr2-error").classList.add("hide");
+  tr2_hideModeA();
   const e = document.getElementById("tr2-empty");
   e.textContent = msg;
   e.classList.remove("hide");
@@ -4287,8 +4046,47 @@ function tr2_showEmpty(msg) {
 function tr2_showError(msg) {
   document.getElementById("tr2-content").classList.add("hide");
   document.getElementById("tr2-empty").classList.add("hide");
+  tr2_hideModeA();
   document.getElementById("tr2-error-msg").textContent = msg;
   document.getElementById("tr2-error").classList.remove("hide");
+}
+
+// MODO A = view "tabela completa + volume por dia" (substitui a antiga aba
+// "Todos Trades"). Ativado quando nenhum papel/emissor esta selecionado.
+function tr2_hideModeA() {
+  const el = document.getElementById("tr2-mode-a");
+  if (el) el.classList.add("hide");
+  if (TRD_TABLE) { TRD_TABLE.destroy(); TRD_TABLE = null; }
+}
+
+function tr2_renderModeA() {
+  document.getElementById("tr2-empty").classList.add("hide");
+  document.getElementById("tr2-error").classList.add("hide");
+  document.getElementById("tr2-content").classList.add("hide");
+  document.getElementById("tr2-notice").classList.add("hide");
+  const tablePanel = document.getElementById("tr2-table-panel");
+  if (tablePanel) tablePanel.classList.add("hide");
+  document.getElementById("tr2-mode-a").classList.remove("hide");
+
+  const rows = _tr2_filteredRows();
+
+  // Volume por dia funciona em ambas as fontes (rows trazem .date e .vol).
+  redrawTrdVolumeChart(rows);
+
+  // Tabela completa: schema canonico TRD_COLUMNS para trade-by-trade, schema
+  // ConsolidatedRecords (B3) para consolidated. Reusa os factories ja
+  // existentes que tambem servem ao MODO B.
+  if (TRD_TABLE) { TRD_TABLE.destroy(); TRD_TABLE = null; }
+  TRD_TABLE = (TR2_SOURCE === "consolidated")
+    ? _tr2_buildConsTable("#trd-table", rows)
+    : _trd_buildTradesTable("#trd-table", rows);
+
+  // Volume chart segue os headerFilters da tabela (idem antiga aba "Todos
+  // Trades").
+  TRD_TABLE.on("dataFiltered", (_filters, visibleRows) => {
+    const data = visibleRows.map(r => r.getData());
+    redrawTrdVolumeChart(data);
+  });
 }
 
 async function renderTrades() {
@@ -4533,6 +4331,7 @@ async function tr2_load() {
   document.getElementById("tr2-content").classList.add("hide");
   document.getElementById("tr2-empty").classList.add("hide");
   document.getElementById("tr2-error").classList.add("hide");
+  document.getElementById("tr2-mode-a").classList.add("hide");
 
   let payloads;
   try {
@@ -4980,17 +4779,15 @@ function tr2_renderAllCharts() {
   const chartsBox = document.getElementById("tr2-charts");
   const tablePanel = document.getElementById("tr2-table-panel");
   if (!TR2_SELECTED.size) {
-    document.getElementById("tr2-content").classList.add("hide");
-    document.getElementById("tr2-error").classList.add("hide");
-    document.getElementById("tr2-notice").classList.add("hide");
-    const e = document.getElementById("tr2-empty");
-    e.textContent = "Selecione um papel no campo Buscar para visualizar os gráficos.";
-    e.classList.remove("hide");
+    // MODO A: sem selecao -> tabela completa + volume por dia (substitui a
+    // antiga aba "Todos Trades"). Limpa as estruturas do MODO B.
     chartsBox.innerHTML = "";
     if (TR2_TABLE) { TR2_TABLE.destroy(); TR2_TABLE = null; }
-    if (tablePanel) tablePanel.classList.add("hide");
+    tr2_renderModeA();
     return;
   }
+  // MODO B: papel/emissor selecionado -> charts prazo x taxa + tabela filtrada.
+  tr2_hideModeA();
   document.getElementById("tr2-empty").classList.add("hide");
   document.getElementById("tr2-error").classList.add("hide");
   document.getElementById("tr2-notice").classList.add("hide");
