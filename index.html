@@ -377,13 +377,15 @@
   .vg-top-table td.num, .vg-top-table th.num {
     text-align:right; font-variant-numeric:tabular-nums;
   }
-  .vg-top-papeis th:nth-child(1), .vg-top-papeis td:nth-child(1) { width:18%; }
-  .vg-top-papeis th:nth-child(2), .vg-top-papeis td:nth-child(2) { width:48%; }
-  .vg-top-papeis th:nth-child(3), .vg-top-papeis td:nth-child(3) { width:20%; }
-  .vg-top-papeis th:nth-child(4), .vg-top-papeis td:nth-child(4) { width:14%; }
-  .vg-top-emissores th:nth-child(1), .vg-top-emissores td:nth-child(1) { width:60%; }
-  .vg-top-emissores th:nth-child(2), .vg-top-emissores td:nth-child(2) { width:25%; }
+  .vg-top-papeis th:nth-child(1), .vg-top-papeis td:nth-child(1) { width:14%; }
+  .vg-top-papeis th:nth-child(2), .vg-top-papeis td:nth-child(2) { width:38%; }
+  .vg-top-papeis th:nth-child(3), .vg-top-papeis td:nth-child(3) { width:18%; }
+  .vg-top-papeis th:nth-child(4), .vg-top-papeis td:nth-child(4) { width:15%; }
+  .vg-top-papeis th:nth-child(5), .vg-top-papeis td:nth-child(5) { width:15%; }
+  .vg-top-emissores th:nth-child(1), .vg-top-emissores td:nth-child(1) { width:55%; }
+  .vg-top-emissores th:nth-child(2), .vg-top-emissores td:nth-child(2) { width:18%; }
   .vg-top-emissores th:nth-child(3), .vg-top-emissores td:nth-child(3) { width:15%; }
+  .vg-top-emissores th:nth-child(4), .vg-top-emissores td:nth-child(4) { width:12%; }
   .tabulator .tabulator-row.trd-big { font-weight:600; color:#e6edf7; }
   /* Aba Pesquisa de Trades */
   .tr2-toolbar { row-gap:8px; margin-bottom:6px; }
@@ -825,7 +827,7 @@ const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
 // Substituído pelo build com hash dos JSONs em data/. Em dev (template puro)
 // fica vazio e o cache do browser dita a frescor. Em produção, ?v=<hash>
 // invalida o cache do GitHub Pages quando snapshots novos chegam.
-const BUILD_VERSION = "98484f10fca5";
+const BUILD_VERSION = "3aefec385475";
 
 const cache = new Map();
 async function loadJSON(path) {
@@ -1307,89 +1309,54 @@ function renderTopMovers(tm, displayLabel, containerId) {
     `<table class="mini">${head}<tbody>${tm.fechando.map(row).join("")}</tbody></table>`;
 }
 
-// ----- Visao Geral: secao B3 (somente DEB) -----
-// Carrega trades B3 no range [VIS_DATE_ANTERIOR, VIS_DATE_ATUAL] e renderiza
-// 2 KPIs (Volume total + Trades), chart de volume diario (bar simples) e
-// 2 Top 20 (emissores + papeis). Filtros aplicados pos-load: instrumento ===
-// "DEB" e exclusao de cancelados. Cache de dia compartilhado com a aba Trades
-// (TRD_DAY_CACHE).
-// KPIs usam intervalo exclusive na Data Anterior (somente trades com date >
-// VIS_DATE_ANTERIOR). Chart e Top 20 mantem inclusive nos 2 extremos para dar
-// contexto amplo da janela analisada.
-let VG_B3_TOKEN = 0;
-async function vg_renderB3Section(dateLo, dateHi) {
-  const token = ++VG_B3_TOKEN;
+// ----- Visao Geral: secao B3 (somente DEB, fonte CONSOLIDATED) -----
+// Le OVERVIEW.vg_b3_consolidated (pre-agregado em build_dashboard.py a partir
+// de data/b3_trades_consolidated/<date>.json). Renderiza:
+//   - 2 KPIs (Volume total + Numero de trades) referentes a VIS_DATE_ATUAL,
+//     com badge DoD vs VIS_DATE_ANTERIOR.
+//   - Chart de volume diario STACKED (Intra vs Extragrupo) no intervalo
+//     [VIS_DATE_ANTERIOR, VIS_DATE_ATUAL] (inclusive).
+//   - Top 20 emissores e Top 20 papeis na VIS_DATE_ATUAL, com coluna
+//     % Extragrupo.
+function vg_renderB3Section(dateLo, dateHi) {
   const kpiEl = document.getElementById("vg-kpi-row");
   const chartEl = document.getElementById("vg-chart-volume-deb");
   const topPapeisEl = document.getElementById("vg-top-papeis");
   const topEmissoresEl = document.getElementById("vg-top-emissores");
   kpiEl.innerHTML = "";
   Plotly.purge(chartEl);
-  chartEl.innerHTML = '<div class="empty">Carregando…</div>';
+  chartEl.innerHTML = "";
   topPapeisEl.innerHTML = "";
   topEmissoresEl.innerHTML = "";
 
-  let manifest;
-  try {
-    manifest = await loadJSON("data/b3_trades/manifest.json");
-  } catch (e) {
-    if (token !== VG_B3_TOKEN) return;
-    chartEl.innerHTML = '<div class="empty">Sem dados de Trades B3.</div>';
+  const cons = OVERVIEW && OVERVIEW.vg_b3_consolidated;
+  const byDate = (cons && cons.by_date) || {};
+  const consDates = (cons && cons.dates) || [];
+  if (!consDates.length) {
+    chartEl.innerHTML = '<div class="empty">Sem dados B3 consolidados.</div>';
     return;
   }
-  if (token !== VG_B3_TOKEN) return;
-
-  const entries = (manifest.dates || []).filter(e => e.date >= dateLo && e.date <= dateHi);
-  if (!entries.length) {
-    chartEl.innerHTML = '<div class="empty">Sem trades B3 no intervalo selecionado.</div>';
-    return;
-  }
-  let payloads;
-  try {
-    payloads = await Promise.all(entries.map(e => trd_fetchDay(e)));
-  } catch (e) {
-    if (token !== VG_B3_TOKEN) return;
-    chartEl.innerHTML = '<div class="empty">Falha ao carregar dados B3.</div>';
-    return;
-  }
-  if (token !== VG_B3_TOKEN) return;
-
-  const rows = [];
-  for (const p of payloads) {
-    for (const r of p.rows) {
-      const obj = trd_rowToObj(r, p.date);
-      if (obj.instrument !== "DEB") continue;
-      if (_trd_isCancelled(obj.situation)) continue;
-      rows.push(obj);
-    }
-  }
-  if (!rows.length) {
-    chartEl.innerHTML = '<div class="empty">Sem debêntures no intervalo selecionado.</div>';
-    return;
-  }
-  // Cards: intervalo exclusive na Data Anterior. Quando VIS_DATE_ANTERIOR esta
-  // vazio (sem range), nao filtra — equivale a comportamento anterior.
-  const kpiRows = VIS_DATE_ANTERIOR
-    ? rows.filter(r => r.date && r.date > VIS_DATE_ANTERIOR)
-    : rows;
-  vg_renderKpis(kpiRows, rows);
-  vg_renderVolumeChart(rows);
-  vg_renderTopPapeis(rows);
-  vg_renderTopEmissores(rows);
+  const atual = byDate[dateHi] || null;
+  const anterior = (VIS_DATE_ANTERIOR && byDate[VIS_DATE_ANTERIOR]) || null;
+  vg_renderKpis(atual, anterior);
+  vg_renderVolumeChart(byDate, dateLo, dateHi);
+  vg_renderTopPapeis(atual);
+  vg_renderTopEmissores(atual);
 }
 
-function vg_renderKpis(rows, rangeRows) {
-  let vol = 0;
-  for (const r of rows) if (typeof r.vol === "number") vol += r.vol;
-  // DoD: usa data util mais recente e mais antiga com dado em rangeRows
-  // (intervalo completo, antes do filtro exclusive dos cards). Se as duas
-  // datas efetivas coincidem, oculta o badge. Se a anterior for zero, "n/a".
-  const dod = _vg_computeDoD(rangeRows || rows);
-  const volDelta = dod ? _vg_pctDelta(dod.volAtual, dod.volAnterior) : null;
-  const nDelta   = dod ? _vg_pctDelta(dod.nAtual,   dod.nAnterior)   : null;
+function vg_renderKpis(atual, anterior) {
+  const vol = atual ? atual.volume_total_brl : 0;
+  const n = atual ? atual.n_trades : 0;
+  const volDelta = (atual && anterior)
+    ? _vg_pctDelta(atual.volume_total_brl, anterior.volume_total_brl) : null;
+  const nDelta = (atual && anterior)
+    ? _vg_pctDelta(atual.n_trades, anterior.n_trades) : null;
+  const tradesHint = "Soma de n_negocios da B3 (consolidated) — DEB no dia.";
   const cards = [
-    { label: "Volume total negociado", val: _vg_fmtMoneyShort0d(vol), hint: trd_fmtMoneyFull(vol), delta: volDelta },
-    { label: "Número de trades", val: trd_fmtIntBR(rows.length), delta: nDelta },
+    { label: "Volume total negociado", val: _vg_fmtMoneyShort0d(vol),
+      hint: trd_fmtMoneyFull(vol), delta: volDelta },
+    { label: "Número de trades", val: trd_fmtIntBR(n),
+      hint: tradesHint, delta: nDelta },
   ];
   document.getElementById("vg-kpi-row").innerHTML = cards.map(c => `
     <div class="kpi">
@@ -1400,32 +1367,6 @@ function vg_renderKpis(rows, rangeRows) {
       </div>
       ${c.hint ? `<div class="hint">${escapeHtml(c.hint)}</div>` : ""}
     </div>`).join("");
-}
-
-function _vg_computeDoD(rangeRows) {
-  if (!rangeRows || !rangeRows.length) return null;
-  // Badge so quando intervalo == 1 dia util B3 (D vs D-1 em OVERVIEW.dates).
-  // Sex vs Seg = 1 dia util, mostra. Sex vs Qua = 2 dias uteis, oculta.
-  if (!VIS_DATE_ATUAL || !VIS_DATE_ANTERIOR) return null;
-  const allDates = (OVERVIEW && OVERVIEW.dates) || [];
-  const iA = allDates.indexOf(VIS_DATE_ATUAL);
-  const iB = allDates.indexOf(VIS_DATE_ANTERIOR);
-  if (iA < 0 || iB < 0 || iA - iB !== 1) return null;
-  const byDate = new Map();   // date -> { vol, n }
-  for (const r of rangeRows) {
-    if (!r.date) continue;
-    let cur = byDate.get(r.date);
-    if (!cur) { cur = { vol: 0, n: 0 }; byDate.set(r.date, cur); }
-    if (typeof r.vol === "number") cur.vol += r.vol;
-    cur.n += 1;
-  }
-  const dates = [...byDate.keys()].sort();
-  if (dates.length < 2) return null;
-  const dAtual = dates[dates.length - 1];
-  const dAnt   = dates[0];
-  if (dAtual === dAnt) return null;
-  const a = byDate.get(dAtual), b = byDate.get(dAnt);
-  return { volAtual: a.vol, volAnterior: b.vol, nAtual: a.n, nAnterior: b.n };
 }
 
 function _vg_pctDelta(atual, anterior) {
@@ -1448,14 +1389,11 @@ function _vg_deltaHtml(d) {
   return `<span class="delta ${cls}">${sign}${escapeHtml(abs)}%</span>`;
 }
 
-function vg_renderVolumeChart(rows) {
+function vg_renderVolumeChart(byDate, dateLo, dateHi) {
   const div = "vg-chart-volume-deb";
-  const byDate = new Map();
-  for (const r of rows) {
-    if (!r.date || typeof r.vol !== "number") continue;
-    byDate.set(r.date, (byDate.get(r.date) || 0) + r.vol);
-  }
-  const dates = [...byDate.keys()].sort();
+  const dates = Object.keys(byDate)
+    .filter(d => d >= dateLo && d <= dateHi)
+    .sort();
   if (!dates.length) {
     Plotly.purge(div);
     document.getElementById(div).innerHTML =
@@ -1463,18 +1401,30 @@ function vg_renderVolumeChart(rows) {
     return;
   }
   const xs = dates.map(brDate);
-  const ys = dates.map(d => byDate.get(d));
-  const trace = {
-    type: "bar",
-    name: "Volume",
-    x: xs, y: ys,
-    marker: { color: cssVar("--accent") },
-    customdata: ys.map(v => trd_fmtMoneyFull(v)),
-    hovertemplate: "%{x}<br>%{customdata}<extra></extra>",
-  };
+  const ysIntra = dates.map(d => byDate[d].volume_intra_brl || 0);
+  const ysExtra = dates.map(d => byDate[d].volume_extra_brl || 0);
+  const ysTotal = dates.map((_, i) => ysIntra[i] + ysExtra[i]);
+  const colorIntra = cssVar("--accent");
+  const colorExtra = cssVar("--warn");
+  const traces = [
+    {
+      type: "bar", name: "Intragrupo",
+      x: xs, y: ysIntra,
+      marker: { color: colorIntra },
+      customdata: ysIntra.map(v => trd_fmtMoneyFull(v)),
+      hovertemplate: "%{x}<br>Intragrupo: %{customdata}<extra></extra>",
+    },
+    {
+      type: "bar", name: "Extragrupo",
+      x: xs, y: ysExtra,
+      marker: { color: colorExtra },
+      customdata: ysExtra.map(v => trd_fmtMoneyFull(v)),
+      hovertemplate: "%{x}<br>Extragrupo: %{customdata}<extra></extra>",
+    },
+  ];
   const annotations = xs.map((x, i) => ({
-    x, y: ys[i],
-    text: _vg_fmtMoneyShort0d(ys[i]),
+    x, y: ysTotal[i],
+    text: _vg_fmtMoneyShort0d(ysTotal[i]),
     showarrow: false,
     yshift: 12,
     font: { size: 11, color: cssVar("--fg") },
@@ -1482,7 +1432,9 @@ function vg_renderVolumeChart(rows) {
   const base = PLOTLY_LAYOUT();
   const layout = Object.assign({}, base, {
     margin: { t: 30, r: 20, b: 70, l: 60 },
-    showlegend: false,
+    barmode: "stack",
+    showlegend: true,
+    legend: { orientation: "h", x: 0, y: 1.12, font: { size: 11 } },
     annotations,
     xaxis: Object.assign({}, base.xaxis, {
       type: "category",
@@ -1495,15 +1447,7 @@ function vg_renderVolumeChart(rows) {
       tickformat: "~s", separatethousands: true,
     }),
   });
-  Plotly.newPlot(div, [trace], layout, PLOTLY_CONFIG);
-}
-
-// Tie-break compartilhado: Volume R$ desc, depois numero de trades desc,
-// depois ordem alfabetica do nome (ticker ou emissor).
-function _vg_topSort(a, b) {
-  if (b.vol !== a.vol) return b.vol - a.vol;
-  if (b.n !== a.n) return b.n - a.n;
-  return a._name.localeCompare(b._name);
+  Plotly.newPlot(div, traces, layout, PLOTLY_CONFIG);
 }
 
 // Formatter exclusivo da Visao Geral (Top 20, KPI Volume Total, label do
@@ -1521,58 +1465,49 @@ function _vg_fmtMoneyShort0d(v) {
   return Math.round(v).toLocaleString("pt-BR", opts0);
 }
 
-function vg_renderTopPapeis(rows) {
-  const agg = new Map();
-  for (const r of rows) {
-    if (!r.ticker) continue;
-    let cur = agg.get(r.ticker);
-    if (!cur) {
-      cur = { ticker: r.ticker, issuer: r.issuer || "", vol: 0, n: 0, _name: r.ticker };
-      agg.set(r.ticker, cur);
-    }
-    if (typeof r.vol === "number") cur.vol += r.vol;
-    cur.n += 1;
-  }
-  const top = [...agg.values()].sort(_vg_topSort).slice(0, 20);
+function _vg_fmtPctExtra(p) {
+  if (p == null || isNaN(p)) return "—";
+  return p.toLocaleString("pt-BR", {
+    minimumFractionDigits: 1, maximumFractionDigits: 1,
+  }) + "%";
+}
+
+function vg_renderTopPapeis(atual) {
+  const top = (atual && atual.top_papeis) || [];
   const head = `
     <thead><tr>
       <th>Ticker</th><th>Emissor</th>
-      <th class="num">Volume (R$)</th><th class="num">Trades</th>
+      <th class="num">Volume (R$)</th>
+      <th class="num">% Extragrupo</th>
+      <th class="num">Trades</th>
     </tr></thead>`;
   const body = top.map(r => `
     <tr>
       <td>${escapeHtml(r.ticker)}</td>
-      <td>${escapeHtml(r.issuer)}</td>
-      <td class="num">${escapeHtml(_vg_fmtMoneyShort0d(r.vol))}</td>
-      <td class="num">${escapeHtml(trd_fmtIntBR(r.n))}</td>
+      <td>${escapeHtml(r.emissor || "")}</td>
+      <td class="num">${escapeHtml(_vg_fmtMoneyShort0d(r.volume_total))}</td>
+      <td class="num">${escapeHtml(_vg_fmtPctExtra(r.pct_extra))}</td>
+      <td class="num">${escapeHtml(trd_fmtIntBR(r.n_trades))}</td>
     </tr>`).join("");
   document.getElementById("vg-top-papeis").innerHTML =
     `<table class="vg-top-table vg-top-papeis">${head}<tbody>${body}</tbody></table>`;
 }
 
-function vg_renderTopEmissores(rows) {
-  const agg = new Map();
-  for (const r of rows) {
-    const issuer = r.issuer || "(sem emissor)";
-    let cur = agg.get(issuer);
-    if (!cur) {
-      cur = { issuer, vol: 0, n: 0, _name: issuer };
-      agg.set(issuer, cur);
-    }
-    if (typeof r.vol === "number") cur.vol += r.vol;
-    cur.n += 1;
-  }
-  const top = [...agg.values()].sort(_vg_topSort).slice(0, 20);
+function vg_renderTopEmissores(atual) {
+  const top = (atual && atual.top_emissores) || [];
   const head = `
     <thead><tr>
       <th>Emissor</th>
-      <th class="num">Volume (R$)</th><th class="num">Trades</th>
+      <th class="num">Volume (R$)</th>
+      <th class="num">% Extragrupo</th>
+      <th class="num">Trades</th>
     </tr></thead>`;
   const body = top.map(r => `
     <tr>
-      <td>${escapeHtml(r.issuer)}</td>
-      <td class="num">${escapeHtml(_vg_fmtMoneyShort0d(r.vol))}</td>
-      <td class="num">${escapeHtml(trd_fmtIntBR(r.n))}</td>
+      <td>${escapeHtml(r.emissor || "(sem emissor)")}</td>
+      <td class="num">${escapeHtml(_vg_fmtMoneyShort0d(r.volume_total))}</td>
+      <td class="num">${escapeHtml(_vg_fmtPctExtra(r.pct_extra))}</td>
+      <td class="num">${escapeHtml(trd_fmtIntBR(r.n_trades))}</td>
     </tr>`).join("");
   document.getElementById("vg-top-emissores").innerHTML =
     `<table class="vg-top-table vg-top-emissores">${head}<tbody>${body}</tbody></table>`;
