@@ -2,46 +2,49 @@ name: ANBIMA + B3 Probe & Import
 
 # Workflow UNICO que substitui o cron de daily_update.yml e b3_trades.yml.
 #
-# Roda 1 slot por dia util B3, as 03h BRT da madrugada seguinte. Cada
-# execucao processa o dia util ANTERIOR (target_date = ONTEM BRT,
-# calculado pelo step "Determine target date"). Republicacoes da B3
-# dentro do mesmo dia util sao consideradas via fetch full do canonico
-# (sem cache check), ate o horario do slot.
+# Roda 3 slots noturnos por dia util B3 (21h, 00h, 03h BRT). Cada
+# execucao processa o dia util corrente (determinado pelo step
+# "Determine target date" com regra hora>=19 -> HOJE, senao ONTEM).
 #
 # A cada execucao:
 #   1. Determina o dia alvo (HOJE BRT se hora>=19, senao ONTEM BRT).
-#      Como o slot dispara as 03h BRT (hora=3 < 19), alvo = ONTEM.
+#      Slot 21h BRT -> HOJE; slots 00h/03h BRT -> ONTEM.
 #   2. Guard B3: se nao for dia util B3, sai 0 sem fazer nada.
 #   3. Probe: verifica disponibilidade dos 5 arquivos (ANBIMA Debentures,
 #      ANBIMA ETTJ, ANBIMA TPF, B3 Trade, B3 ConsolidatedRecords).
 #   4. Se TODOS os 5 estao publicados: importa ANBIMA (gap-fill 5 du B3),
-#      importa B3 (overwrite janela 5 du B3 — SEMPRE fetch full), rebuild
-#      dashboard, commit & push.
+#      importa B3 com CACHE CHECK ROBUSTO (3 indicadores: lastUpdateDate
+#      + totalRecords + firstPageBytes), refetch full SOMENTE dos dias
+#      que mudaram, rebuild dashboard, commit & push.
 #   5. Se ALGUM faltando: loga e termina verde sem commitar. O proximo
-#      slot (manha do proximo dia util) recupera via gap-fill ANBIMA +
-#      overwrite janela B3.
+#      slot tenta de novo.
 #
-# Idempotencia B3: nao aplicavel (sempre re-fetch dos 5 du). ANBIMA: gap-fill
-# natural (pula data se history/<D>.json ja existe).
+# Sem marker de idempotencia diaria (removido em PR anterior). Multiplos
+# slots noturnos servem para pegar republicacoes da B3 dentro do mesmo
+# dia util — o cache check garante que slots subsequentes processem em
+# ~30s-1min quando nada mudou.
 
 on:
   schedule:
-    # 03h BRT (06h UTC) de terca-sabado UTC = madrugada apos cada dia util BRT.
-    # Roda 1x por dia util com target_date = dia util anterior (calculado pelo
-    # step "Determine target date").
+    # 3 slots noturnos: 21h, 00h, 03h BRT (= 00h, 03h, 06h UTC) ter-sab UTC.
+    # Cada slot verifica metadata da B3 e refetch SO os dias que mudaram.
+    # Sem marker de idempotencia diaria (removido em PR anterior).
     #
     # Validacao de bordas (BRT = UTC-3):
-    #  Ter 03h BRT = 06h UTC ter (dia 2) -> dispara, ref = seg (ONTEM, hour=3 < 19)
-    #  Qua 03h BRT = 06h UTC qua (dia 3) -> dispara, ref = ter (ONTEM)
-    #  Qui 03h BRT = 06h UTC qui (dia 4) -> dispara, ref = qua (ONTEM)
-    #  Sex 03h BRT = 06h UTC sex (dia 5) -> dispara, ref = qui (ONTEM)
-    #  Sab 03h BRT = 06h UTC sab (dia 6) -> dispara, ref = sex (ONTEM)
-    #  Dom 03h BRT = 06h UTC dom (dia 0) -> BLOQUEIA (0 nao esta em 2-6)
-    #  Seg 03h BRT = 06h UTC seg (dia 1) -> BLOQUEIA (1 nao esta em 2-6)
+    #  21h BRT seg = 00h UTC ter (dia 2) -> dispara, ref = HOJE (seg, hour=21 >= 19)
+    #  00h BRT ter = 03h UTC ter (dia 2) -> dispara, ref = ONTEM (seg, hour=0  < 19)
+    #  03h BRT ter = 06h UTC ter (dia 2) -> dispara, ref = ONTEM (seg)
+    #  21h BRT ter = 00h UTC qua (dia 3) -> dispara, ref = HOJE  (ter)
+    #  00h BRT qua = 03h UTC qua (dia 3) -> dispara, ref = ONTEM (ter)
+    #  ... (mesmo padrao ate sex 21h BRT = 00h UTC sab)
+    #  03h BRT sab = 06h UTC sab (dia 6) -> dispara, ref = ONTEM (sex)
+    #  21h BRT sab = 00h UTC dom (dia 0) -> BLOQUEIA (0 nao esta em 2-6)
+    #  21h BRT dom = 00h UTC seg (dia 1) -> BLOQUEIA (1 nao esta em 2-6)
     #
-    # Feriados B3 moveis (Carnaval, Corpus Christi, 25-jan-SP, etc.) nao sao
-    # cobertos por cron syntax: o guard B3 corta em ~30s em feriado.
-    - cron: '0 6 * * 2-6'   # 03:00 BRT ter-sab -> ref = ONTEM (ultimo dia util)
+    # day-of-week 2-6 cobre 21h BRT seg-sex (=00h UTC ter-sab) e
+    # 00h/03h BRT ter-sab (=03h/06h UTC ter-sab). Bloqueia 21h BRT
+    # sab/dom (que mapeariam ref=fds). Guard B3 corta feriados moveis.
+    - cron: '0 0,3,6 * * 2-6'   # 21h/00h/03h BRT -> ref segue regra hora>=19
   workflow_dispatch:
     inputs:
       target_date:
@@ -216,21 +219,42 @@ jobs:
           echo "new_count=$OK_COUNT" >> "$GITHUB_OUTPUT"
           echo "new_dates=$NEW_DATES" >> "$GITHUB_OUTPUT"
 
-      - name: Import B3 Trade (overwrite janela 5 du B3)
+      - name: Import B3 Trade (cache check 3 indicadores na janela 5 du B3)
+        id: import_trade
         if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
+        env:
+          B3_TRADES_CACHE_SUMMARY: /tmp/b3_trades_cache_summary.txt
         run: |
-          echo "Rodando fetch_b3_trades.py (5 dias uteis B3, sempre fetch full)"
+          echo "Rodando fetch_b3_trades.py (5 dias uteis B3, refetch full so em cache-miss)"
           python fetch_b3_trades.py
+          if [ -f "$B3_TRADES_CACHE_SUMMARY" ]; then
+            echo "--- cache summary (trade) ---"
+            cat "$B3_TRADES_CACHE_SUMMARY"
+            while IFS='=' read -r key value; do
+              [ -z "$key" ] && continue
+              echo "${key}=${value}" >> "$GITHUB_OUTPUT"
+            done < "$B3_TRADES_CACHE_SUMMARY"
+          fi
 
-      - name: Import B3 ConsolidatedRecords (overwrite janela 5 du B3)
+      - name: Import B3 ConsolidatedRecords (cache check 3 indicadores na janela 5 du B3)
         id: import_consolidated
         # continue-on-error: se exit 1 (parcial), steps downstream (commit & push)
         # ainda rodam para salvar o que foi conseguido.
         continue-on-error: true
         if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
+        env:
+          B3_CONSOLIDATED_CACHE_SUMMARY: /tmp/b3_consolidated_cache_summary.txt
         run: |
-          echo "Rodando fetch_b3_trades_consolidated.py (5 dias uteis B3, sempre fetch full)"
+          echo "Rodando fetch_b3_trades_consolidated.py (5 dias uteis B3, refetch full so em cache-miss)"
           python fetch_b3_trades_consolidated.py
+          if [ -f "$B3_CONSOLIDATED_CACHE_SUMMARY" ]; then
+            echo "--- cache summary (consolidated) ---"
+            cat "$B3_CONSOLIDATED_CACHE_SUMMARY"
+            while IFS='=' read -r key value; do
+              [ -z "$key" ] && continue
+              echo "${key}=${value}" >> "$GITHUB_OUTPUT"
+            done < "$B3_CONSOLIDATED_CACHE_SUMMARY"
+          fi
 
       - name: Podar historico B3 (retencao 60 du)
         if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
@@ -312,6 +336,12 @@ jobs:
           PROBE_MISSING: ${{ steps.probe.outputs.missing }}
           ANBIMA_NEW: ${{ steps.import_anbima.outputs.new_count }}
           ANBIMA_DATES: ${{ steps.import_anbima.outputs.new_dates }}
+          TRADE_HITS: ${{ steps.import_trade.outputs.cache_hits }}
+          TRADE_MISSES: ${{ steps.import_trade.outputs.cache_misses }}
+          TRADE_REASONS: ${{ steps.import_trade.outputs.miss_reasons }}
+          CONS_HITS: ${{ steps.import_consolidated.outputs.cache_hits }}
+          CONS_MISSES: ${{ steps.import_consolidated.outputs.cache_misses }}
+          CONS_REASONS: ${{ steps.import_consolidated.outputs.miss_reasons }}
           HAS_CHANGES: ${{ steps.changes.outputs.has_changes }}
           COMMITTED: ${{ steps.commit.outputs.committed }}
           COMMIT_SHA: ${{ steps.commit.outputs.commit_sha }}
@@ -322,7 +352,7 @@ jobs:
             echo "**Dia alvo:** \`${TARGET_DATE}\`"
             echo "**Dia util B3:** ${IS_DU:-n/a}"
             echo ""
-            echo "_Idempotencia B3: nao aplicavel (sempre re-fetch). ANBIMA: gap-fill natural._"
+            echo "_Cache check B3: 3 indicadores (lastUpdateDate + totalRecords + firstPageBytes). ANBIMA: gap-fill natural._"
             echo ""
             echo "### Probe"
             if [ -n "${PROBE_TOTAL:-}" ]; then
@@ -340,7 +370,26 @@ jobs:
             if [ -n "${ANBIMA_DATES:-}" ]; then
               echo "- Datas ANBIMA novas: ${ANBIMA_DATES}"
             fi
-            echo "- B3 Trade + ConsolidatedRecords: overwrite janela 5 du (se import rodou)"
+            echo ""
+            echo "#### B3 Trade (cache check)"
+            if [ -n "${TRADE_HITS:-}${TRADE_MISSES:-}" ]; then
+              echo "- ${TRADE_HITS:-0} cache-hit, ${TRADE_MISSES:-0} cache-miss"
+              if [ -n "${TRADE_REASONS:-}" ]; then
+                echo "- Motivos: ${TRADE_REASONS}"
+              fi
+            else
+              echo "- nao executado"
+            fi
+            echo ""
+            echo "#### B3 Consolidated (cache check)"
+            if [ -n "${CONS_HITS:-}${CONS_MISSES:-}" ]; then
+              echo "- ${CONS_HITS:-0} cache-hit, ${CONS_MISSES:-0} cache-miss"
+              if [ -n "${CONS_REASONS:-}" ]; then
+                echo "- Motivos: ${CONS_REASONS}"
+              fi
+            else
+              echo "- nao executado"
+            fi
             echo ""
             echo "### Commit"
             echo "- Mudancas detectadas: ${HAS_CHANGES:-false}"
