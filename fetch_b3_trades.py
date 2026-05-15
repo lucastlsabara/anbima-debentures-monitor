@@ -6,7 +6,8 @@ Headers: Content-Type: application/json
 Body: {}
 
 Modo padrao (sem args): forca versao fresca dos 5 dias uteis B3 mais recentes
-(HOJE se dia util + D-1..D-4). Para cada dia:
+(HOJE se dia util + D-1..D-4) INCONDICIONALMENTE — sem cache check, sem skip.
+Para cada dia:
   1. Busca trades via API B3 (com retry).
   2. Em caso de sucesso: DELETA o arquivo data/b3_trades/<data>.json se existir
      e ESCREVE a nova versao (atomico via .tmp + rename).
@@ -40,13 +41,10 @@ from pathlib import Path
 import sectors
 from b3_api import (
     B3UnavailableError,
-    SandboxBlockedError,
     extract_total_records,
-    fetch_metadata,
     post_page,
     refresh_recent_days as _refresh_recent_days,
 )
-from b3_calendar import today_brt
 
 
 TABLE_NAME = "Trade"
@@ -89,58 +87,13 @@ def _row_from_array(arr: list) -> list:
     ]
 
 
-def _cache_check(date_iso: str, out_path: Path) -> tuple[bool, str]:
-    """Decide se podemos pular o fetch completo de date_iso.
-
-    Retorna (cache_hit, motivo). Em qualquer cenario adverso (arquivo
-    ausente, campos faltando, falha de ping, divergencia), retorna
-    cache_hit=False com motivo explicativo. Cache hit somente quando
-    last_b3_update + total_b3_records locais batem com o ping leve da B3.
-    """
-    if not out_path.exists():
-        return False, "arquivo local ausente"
-    try:
-        local = json.loads(out_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return False, f"erro lendo arquivo local: {exc}"
-    local_last_update = local.get("last_b3_update")
-    local_total = local.get("total_b3_records")
-    if local_last_update is None:
-        return False, "campo last_b3_update nao persistido"
-    if local_total is None:
-        return False, "campo total_b3_records nao persistido (deploy novo)"
-
-    try:
-        meta = fetch_metadata(TABLE_NAME, date_iso)
-    except SandboxBlockedError:
-        raise
-    except Exception as exc:
-        return False, f"falha no ping ({exc})"
-
-    remote_last_update = meta["last_update"]
-    remote_total = meta["total_records"]
-    if remote_last_update is None:
-        return False, "campo lastUpdateDate ausente no envelope"
-    if remote_total is None:
-        return False, "campo totalRecords ausente no envelope"
-    if remote_last_update != local_last_update:
-        return False, (
-            f"last_update remoto={remote_last_update} local={local_last_update}"
-        )
-    if remote_total != local_total:
-        return False, (
-            f"total_records remoto={remote_total} local={local_total}"
-        )
-    return True, f"last_update={remote_last_update} total_records={remote_total}"
-
-
 def fetch_day(date_iso: str) -> dict:
     """Busca trades de UM dia e escreve delete+write atomico.
 
-    Retorna dict com `status` em {'updated', 'cached', 'unavailable'}.
+    Sempre faz fetch completo (paginado): nao ha cache check nem skip por
+    arquivo local existente. Retorna dict com `status` em
+    {'updated', 'unavailable'}.
     'updated': arquivo escrito (delete + write feitos com sucesso).
-    'cached': D-1..D-4 com last_update+total_records inalterados na B3 —
-              arquivo local preservado, sem re-download.
     'unavailable': B3 retornou 403/404 (FDS/feriado/dia nao publicado) —
                    arquivo existente preservado.
 
@@ -150,16 +103,6 @@ def fetch_day(date_iso: str) -> dict:
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     out_path = DATA_DIR / f"{date_iso}.json"
-
-    # D-0 (hoje BRT) sempre faz fetch completo: dataset esta em construcao
-    # ao longo do dia, lastUpdateDate muda toda hora.
-    d0_iso = today_brt().isoformat()
-    if date_iso != d0_iso:
-        cache_hit, motivo = _cache_check(date_iso, out_path)
-        if cache_hit:
-            print(f"[cache-hit] Dia {date_iso}: {motivo} (skip)", file=sys.stderr)
-            return {"date": date_iso, "status": "cached"}
-        print(f"[cache-miss] Dia {date_iso}: {motivo} -> fetch completo", file=sys.stderr)
 
     try:
         first = post_page(TABLE_NAME, date_iso, 1, PAGE_SIZE)

@@ -4,35 +4,33 @@ name: ANBIMA + B3 Probe & Import
 #
 # Roda em 3 horarios fixos por dia util B3: 21h BRT (mesmo dia ref) +
 # 00h BRT, 03h BRT (madrugada apos, ref = dia util anterior).
-# Idempotencia diaria garante 1 execucao real; retries automaticos se algum falhar.
+# CADA slot executa o pipeline COMPLETO incondicionalmente (sem marker
+# de idempotencia, sem cache check B3). Trade-off explicito: gasta ~3x
+# mais Actions minutes/dia util em troca de garantir que correcoes
+# retroativas publicadas pela B3 dentro do mesmo ciclo sao pegas no
+# proximo slot.
+#
 # A cada execucao:
 #   1. Determina o dia alvo (HOJE BRT se hora>=19, senao ONTEM BRT).
 #   2. Guard B3: se nao for dia util B3, sai 0 sem fazer nada.
-#   3. Idempotencia diaria: le data/.probe_state.json; se
-#      last_successful_date == dia alvo, encerra verde sem rodar o resto.
-#      Garante 1 execucao bem-sucedida por dia_alvo, evitando rerodar probe
-#      + B3 overwrite nas horas seguintes do mesmo ciclo. Quando o dia_alvo
-#      muda (ex: passa de 03h pra 19h BRT), o marker nao bloqueia.
-#   4. Probe: verifica disponibilidade dos 5 arquivos (ANBIMA Debentures,
+#   3. Probe: verifica disponibilidade dos 5 arquivos (ANBIMA Debentures,
 #      ANBIMA ETTJ, ANBIMA TPF, B3 Trade, B3 ConsolidatedRecords).
-#   5. Se TODOS os 5 estao publicados: importa ANBIMA (gap-fill 5 du B3),
-#      importa B3 (overwrite janela 5 du B3), rebuild dashboard, atualiza
-#      marker data/.probe_state.json, commit & push.
-#   6. Se ALGUM faltando: loga e termina verde sem commitar. Proxima tentativa
-#      eh na proxima hora pelo cron. Dias antigos pendentes sao recuperados
-#      automaticamente pelo gap-fill ANBIMA + overwrite janela B3.
+#   4. Se TODOS os 5 estao publicados: importa ANBIMA (gap-fill 5 du B3),
+#      importa B3 (overwrite janela 5 du B3 — SEMPRE fetch full), rebuild
+#      dashboard, commit & push.
+#   5. Se ALGUM faltando: loga e termina verde sem commitar. Proximo slot
+#      tenta de novo. Dias antigos pendentes sao recuperados automaticamente
+#      pelo gap-fill ANBIMA + overwrite janela B3.
 #
-# Input `force` (workflow_dispatch) ignora o marker e re-executa o pipeline
-# mesmo que ja tenha rodado com sucesso pro dia_alvo (uso: reprocessar dia
-# atipico manualmente).
+# Idempotencia B3: nao aplicavel (sempre re-fetch dos 5 du). ANBIMA: gap-fill
+# natural (pula data se history/<D>.json ja existe).
 
 on:
   schedule:
     # 3 disparos por dia util B3:
     # 21h BRT (HOJE) | 00h BRT do dia seguinte (ONTEM) | 03h BRT do dia seguinte (ONTEM)
     # BRT = UTC-3. Cron em UTC.
-    # Slot 21h tenta primeiro; 00h e 03h sao retry automatico se 21h falhou.
-    # Marker de idempotencia em data/.probe_state.json garante 1 execucao bem-sucedida por target_date.
+    # Cada slot executa o pipeline completo (sem skip por marker).
     - cron: '0 0 * * 2-6'   # 21:00 BRT seg-sex -> ref = HOJE BRT
     - cron: '0 3 * * 2-6'   # 00:00 BRT ter-sab -> ref = ONTEM (ultimo dia util)
     - cron: '0 6 * * 2-6'   # 03:00 BRT ter-sab -> ref = ONTEM (ultimo dia util)
@@ -55,11 +53,6 @@ on:
         description: 'Data alvo YYYY-MM-DD (vazio = derivar de HOJE BRT conforme horario)'
         required: false
         default: ''
-      force:
-        description: 'Forcar execucao mesmo se ja rodou com sucesso hoje (ignora marker de idempotencia)'
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: write
@@ -143,59 +136,9 @@ jobs:
             echo "[guard] $TARGET_DATE NAO eh dia util B3 (fds ou feriado) -- encerrando verde"
           fi
 
-      - name: Check already-completed (idempotencia diaria)
-        id: idempotencia
-        if: steps.guard.outputs.is_business_day == 'true'
-        env:
-          TARGET_DATE: ${{ steps.target.outputs.target_date }}
-          FORCE: ${{ inputs.force }}
-        run: |
-          set -eu
-          if [ "${FORCE:-false}" = "true" ]; then
-            echo "[idempotencia] flag force=true -- ignorando marker e prosseguindo"
-            echo "already_done=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          MARKER='data/.probe_state.json'
-          if [ ! -f "$MARKER" ]; then
-            echo "[idempotencia] marker inexistente -- prosseguindo (estado inicial)"
-            echo "already_done=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          OUT=$(python3 - <<'PY'
-          import json, os, sys
-          marker_path = 'data/.probe_state.json'
-          target = os.environ['TARGET_DATE']
-          try:
-              with open(marker_path, 'r', encoding='utf-8') as f:
-                  data = json.load(f)
-          except (OSError, ValueError):
-              # JSON invalido ou ilegivel: trata como estado inicial
-              print('already_done=false')
-              print('last_success_ts=')
-              sys.exit(0)
-          last_date = (data or {}).get('last_successful_date')
-          last_ts = (data or {}).get('last_success_ts', '')
-          if last_date == target:
-              print('already_done=true')
-              print(f'last_success_ts={last_ts}')
-          else:
-              print('already_done=false')
-              print(f'last_success_ts={last_ts}')
-          PY
-          )
-          echo "$OUT" >> "$GITHUB_OUTPUT"
-          ALREADY=$(echo "$OUT" | sed -n 's/^already_done=//p')
-          LAST_TS=$(echo "$OUT" | sed -n 's/^last_success_ts=//p')
-          if [ "$ALREADY" = "true" ]; then
-            echo "[idempotencia] ja rodou com sucesso pra ${TARGET_DATE} em ${LAST_TS}. Pulando pipeline."
-          else
-            echo "[idempotencia] marker nao bate com ${TARGET_DATE} (ultima: ${LAST_TS:-n/a}) -- prosseguindo"
-          fi
-
       - name: Probe - verifica disponibilidade dos 5 arquivos
         id: probe
-        if: steps.guard.outputs.is_business_day == 'true' && steps.idempotencia.outputs.already_done != 'true'
+        if: steps.guard.outputs.is_business_day == 'true'
         env:
           TARGET_DATE: ${{ steps.target.outputs.target_date }}
         run: |
@@ -214,7 +157,7 @@ jobs:
 
       - name: Resolve datas alvo ANBIMA (5 du B3)
         id: dates
-        if: steps.guard.outputs.is_business_day == 'true' && steps.idempotencia.outputs.already_done != 'true' && steps.probe.outputs.all_available == 'true'
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
         env:
           TARGET_DATE: ${{ steps.target.outputs.target_date }}
         run: |
@@ -230,7 +173,7 @@ jobs:
 
       - name: Import ANBIMA (gap-fill 5 du B3)
         id: import_anbima
-        if: steps.guard.outputs.is_business_day == 'true' && steps.idempotencia.outputs.already_done != 'true' && steps.probe.outputs.all_available == 'true'
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
         run: |
           set -u
           mkdir -p raw
@@ -279,58 +222,30 @@ jobs:
           echo "new_dates=$NEW_DATES" >> "$GITHUB_OUTPUT"
 
       - name: Import B3 Trade (overwrite janela 5 du B3)
-        if: steps.guard.outputs.is_business_day == 'true' && steps.idempotencia.outputs.already_done != 'true' && steps.probe.outputs.all_available == 'true'
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
         run: |
-          echo "Rodando fetch_b3_trades.py (5 dias uteis B3)"
+          echo "Rodando fetch_b3_trades.py (5 dias uteis B3, sempre fetch full)"
           python fetch_b3_trades.py
 
       - name: Import B3 ConsolidatedRecords (overwrite janela 5 du B3)
         id: import_consolidated
         # continue-on-error: se exit 1 (parcial), steps downstream (commit & push)
-        # ainda rodam para salvar o que foi conseguido. O step "Atualiza marker"
-        # checa outcome != 'failure' das etapas de import, entao parcial NAO
-        # atualiza marker (proxima retry reprocessa).
+        # ainda rodam para salvar o que foi conseguido.
         continue-on-error: true
-        if: steps.guard.outputs.is_business_day == 'true' && steps.idempotencia.outputs.already_done != 'true' && steps.probe.outputs.all_available == 'true'
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
         run: |
-          echo "Rodando fetch_b3_trades_consolidated.py (5 dias uteis B3)"
+          echo "Rodando fetch_b3_trades_consolidated.py (5 dias uteis B3, sempre fetch full)"
           python fetch_b3_trades_consolidated.py
 
       - name: Podar historico B3 (retencao 60 du)
-        if: steps.guard.outputs.is_business_day == 'true' && steps.idempotencia.outputs.already_done != 'true' && steps.probe.outputs.all_available == 'true'
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
         run: |
           echo "Aplicando politica de retencao 60 du B3 em data/b3_trades*/"
           python scripts/podar_historico.py
 
-      - name: Atualiza marker de idempotencia (data/.probe_state.json)
-        # Inclui check do outcome do import_consolidated: se for 'failure'
-        # (parcial -- continue-on-error mantem o workflow rodando), o marker
-        # NAO eh atualizado, garantindo que a proxima retry reprocesse.
-        if: steps.guard.outputs.is_business_day == 'true' && steps.idempotencia.outputs.already_done != 'true' && steps.probe.outputs.all_available == 'true' && steps.import_consolidated.outcome == 'success'
-        env:
-          TARGET_DATE: ${{ steps.target.outputs.target_date }}
-        run: |
-          set -eu
-          mkdir -p data
-          python3 - <<'PY'
-          import json, os
-          from datetime import datetime
-          from zoneinfo import ZoneInfo
-          target = os.environ['TARGET_DATE']
-          now = datetime.now(ZoneInfo('America/Sao_Paulo')).replace(microsecond=0).isoformat()
-          marker = {
-              'last_successful_date': target,
-              'last_success_ts': now,
-          }
-          with open('data/.probe_state.json', 'w', encoding='utf-8') as f:
-              json.dump(marker, f, ensure_ascii=False, indent=2, sort_keys=True)
-              f.write('\n')
-          print(f"[marker] data/.probe_state.json atualizado: {marker}")
-          PY
-
       - name: Detecta mudancas em data/ e history/
         id: changes
-        if: steps.guard.outputs.is_business_day == 'true' && steps.idempotencia.outputs.already_done != 'true' && steps.probe.outputs.all_available == 'true'
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
         run: |
           set -eu
           if git status --porcelain data/ history/ data.json 2>/dev/null | grep -q .; then
@@ -342,14 +257,14 @@ jobs:
           fi
 
       - name: Rebuild dashboard
-        if: steps.guard.outputs.is_business_day == 'true' && steps.idempotencia.outputs.already_done != 'true' && steps.probe.outputs.all_available == 'true' && steps.changes.outputs.has_changes == 'true'
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true' && steps.changes.outputs.has_changes == 'true'
         run: |
           echo "Regenerando data/*.json + index.html"
           python build_dashboard.py
 
       - name: Commit & push
         id: commit
-        if: steps.guard.outputs.is_business_day == 'true' && steps.idempotencia.outputs.already_done != 'true' && steps.probe.outputs.all_available == 'true' && steps.changes.outputs.has_changes == 'true'
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true' && steps.changes.outputs.has_changes == 'true'
         env:
           TARGET_DATE: ${{ steps.target.outputs.target_date }}
         run: |
@@ -396,8 +311,6 @@ jobs:
         env:
           TARGET_DATE: ${{ steps.target.outputs.target_date }}
           IS_DU: ${{ steps.guard.outputs.is_business_day }}
-          IDEMP_SKIPPED: ${{ steps.idempotencia.outputs.already_done }}
-          IDEMP_LAST_TS: ${{ steps.idempotencia.outputs.last_success_ts }}
           PROBE_ALL: ${{ steps.probe.outputs.all_available }}
           PROBE_AVAIL: ${{ steps.probe.outputs.available_count }}
           PROBE_TOTAL: ${{ steps.probe.outputs.total_count }}
@@ -408,23 +321,13 @@ jobs:
           COMMITTED: ${{ steps.commit.outputs.committed }}
           COMMIT_SHA: ${{ steps.commit.outputs.commit_sha }}
         run: |
-          if [ "${IDEMP_SKIPPED:-false}" = "true" ]; then
-            {
-              echo "## ANBIMA + B3 Probe & Import - PULADO (idempotencia)"
-              echo ""
-              echo "**Dia alvo:** \`${TARGET_DATE}\`"
-              echo "**Motivo:** ja rodou com sucesso em ${IDEMP_LAST_TS:-?}"
-              echo ""
-              echo "Para forcar reexecucao, dispare manualmente com input \`force=true\`."
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
           {
             echo "## ANBIMA + B3 Probe & Import"
             echo ""
             echo "**Dia alvo:** \`${TARGET_DATE}\`"
             echo "**Dia util B3:** ${IS_DU:-n/a}"
-            echo "**Idempotencia skipped:** false"
+            echo ""
+            echo "_Idempotencia B3: nao aplicavel (sempre re-fetch). ANBIMA: gap-fill natural._"
             echo ""
             echo "### Probe"
             if [ -n "${PROBE_TOTAL:-}" ]; then

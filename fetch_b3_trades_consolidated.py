@@ -18,9 +18,10 @@ PR #105 introduziu probing automatico sobre 14 candidatos — todos retornaram
 
 Comportamento (analogo a fetch_b3_trades.py):
   - Janela: 5 dias uteis B3 mais recentes (HOJE se dia util + D-1..D-4).
-  - Para cada dia: paginacao interna ate n_rows<pageSize OU teto de 2000
-    paginas. Sucesso -> DELETA arquivo existente + ESCREVE nova versao
-    (atomico via .tmp + rename).
+  - Para cada dia, SEMPRE fetch full (sem cache check / skip): paginacao
+    interna ate n_rows<pageSize OU teto de 2000 paginas. Sucesso ->
+    DELETA arquivo existente + ESCREVE nova versao (atomico via .tmp +
+    rename).
   - Falha de rede/timeout/5xx apos retry: preserva arquivo existente.
   - 403/404: pula (FDS/feriado/nao publicado), preserva arquivo.
   - Exit != 0 se qualquer dia falhar.
@@ -47,13 +48,10 @@ from pathlib import Path
 
 from b3_api import (
     B3UnavailableError,
-    SandboxBlockedError,
     extract_total_records,
-    fetch_metadata,
     last_n_business_days,
     post_page,
 )
-from b3_calendar import today_brt
 
 
 TABLE_NAME = "ConsolidatedRecords"
@@ -89,70 +87,16 @@ DATA_DIR = Path(__file__).parent / "data" / "b3_trades_consolidated"
 MANIFEST_PATH = DATA_DIR / "manifest.json"
 
 
-def _cache_check(date_iso: str, out_path: Path) -> tuple[bool, str]:
-    """Decide se podemos pular o fetch completo de date_iso (consolidated).
-
-    Mesma logica de fetch_b3_trades._cache_check: cache hit somente quando
-    last_b3_update + total_b3_records locais batem com o ping leve da B3.
-    Qualquer adversidade -> cache miss com motivo explicativo.
-    """
-    if not out_path.exists():
-        return False, "arquivo local ausente"
-    try:
-        local = json.loads(out_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return False, f"erro lendo arquivo local: {exc}"
-    local_last_update = local.get("last_b3_update")
-    local_total = local.get("total_b3_records")
-    if local_last_update is None:
-        return False, "campo last_b3_update nao persistido"
-    if local_total is None:
-        return False, "campo total_b3_records nao persistido (deploy novo)"
-
-    try:
-        meta = fetch_metadata(TABLE_NAME, date_iso)
-    except SandboxBlockedError:
-        raise
-    except Exception as exc:
-        return False, f"falha no ping ({exc})"
-
-    remote_last_update = meta["last_update"]
-    remote_total = meta["total_records"]
-    if remote_last_update is None:
-        return False, "campo lastUpdateDate ausente no envelope"
-    if remote_total is None:
-        return False, "campo totalRecords ausente no envelope"
-    if remote_last_update != local_last_update:
-        return False, (
-            f"last_update remoto={remote_last_update} local={local_last_update}"
-        )
-    if remote_total != local_total:
-        return False, (
-            f"total_records remoto={remote_total} local={local_total}"
-        )
-    return True, f"last_update={remote_last_update} total_records={remote_total}"
-
-
 def fetch_day(date_iso: str) -> dict:
     """Busca consolidated de UM dia (delete+write atomico).
 
-    Retorna dict com `status` em {'updated', 'cached', 'unavailable'}.
-    'cached': D-1..D-4 inalterado na B3, arquivo local preservado.
-    Levanta RuntimeError em falha de rede pos-retries — chamador trata
-    sem alterar arquivo (delete so ocorre apos sucesso confirmado).
+    Sempre faz fetch completo (sem cache check / skip por arquivo local).
+    Retorna dict com `status` em {'updated', 'unavailable'}. Levanta
+    RuntimeError em falha de rede pos-retries — chamador trata sem
+    alterar arquivo (delete so ocorre apos sucesso confirmado).
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     out_path = DATA_DIR / f"{date_iso}.json"
-
-    # D-0 (hoje BRT) sempre faz fetch completo: dataset esta em construcao
-    # ao longo do dia, lastUpdateDate muda toda hora.
-    d0_iso = today_brt().isoformat()
-    if date_iso != d0_iso:
-        cache_hit, motivo = _cache_check(date_iso, out_path)
-        if cache_hit:
-            print(f"[cache-hit] Dia {date_iso}: {motivo} (skip)", file=sys.stderr)
-            return {"date": date_iso, "status": "cached"}
-        print(f"[cache-miss] Dia {date_iso}: {motivo} -> fetch completo", file=sys.stderr)
 
     try:
         first = post_page(TABLE_NAME, date_iso, 1, PAGE_SIZE)
@@ -265,7 +209,7 @@ def _update_manifest(date_iso: str, n_rows: int, filename: str) -> None:
 
 
 def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS) -> int:
-    """Refresh dos N du B3 mais recentes com wall-clock budget.
+    """Refresh consolidated dos N du B3 mais recentes (sempre fetch full).
 
     Wall-clock budget (env `B3_CONSOLIDATED_BUDGET_SECONDS`, default 9000s)
     complementa o HTTP timeout: cobre LENTIDAO genuina e bugs de paginacao
@@ -275,9 +219,7 @@ def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS) -> int:
     Exit code:
       - 0: TODOS os N dias completados (status 'updated' OU 'unavailable'
         legitimo da B3 — FDS/feriado/dia ainda nao publicado).
-      - 1: qualquer dia pulado por wall-clock OU falha apos retries. O
-        workflow usa esse contraste para nao marcar o marker de
-        idempotencia em parcial (proxima retry reprocessa).
+      - 1: qualquer dia pulado por wall-clock OU falha apos retries.
     """
     budget_seconds = int(os.environ.get("B3_CONSOLIDATED_BUDGET_SECONDS", "9000"))
     start_time = time.monotonic()
@@ -290,7 +232,6 @@ def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS) -> int:
     print("HTTP timeout: (15, 120)s, max 3 tentativas")
 
     completed_days: list[str] = []
-    cached_days: list[str] = []
     skipped_days: list[tuple[str, str]] = []
 
     for i, d in enumerate(days):
@@ -325,10 +266,6 @@ def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS) -> int:
                 f"[ok] Dia {date_iso} ({result['n_pages']} paginas, "
                 f"{result['size_mb']:.2f}MB)"
             )
-        elif status == "cached":
-            completed_days.append(date_iso)
-            cached_days.append(date_iso)
-            print(f"[ok] Dia {date_iso} (cache hit -- arquivo local preservado)")
         else:
             # 'unavailable' (B3UnavailableError 403/404): FDS/feriado/nao
             # publicado. Conta como completed: nao temos o que fazer aqui,
@@ -341,9 +278,8 @@ def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS) -> int:
 
     elapsed_total = time.monotonic() - start_time
     print(
-        f"[summary] Completados: {len(completed_days)}/{len(days)} "
-        f"(cached: {len(cached_days)}) | Pulados: {len(skipped_days)} | "
-        f"Tempo: {elapsed_total:.0f}s"
+        f"[summary] Completados: {len(completed_days)}/{len(days)} | "
+        f"Pulados: {len(skipped_days)} | Tempo: {elapsed_total:.0f}s"
     )
 
     return 0 if len(completed_days) == len(days) else 1

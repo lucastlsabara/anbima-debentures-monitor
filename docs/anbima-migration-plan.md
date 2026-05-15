@@ -220,7 +220,10 @@ Reuso de codigo: zero alteracao em `fetch_anbima.py`, `fetch_b3_trades.py`,
 Novidades: `scripts/probe_files.py` (HEAD + GET range para ANBIMA, POST
 page=1 size=1 para B3) e o workflow `anbima_b3_probe.yml`.
 
-### Fase 4.1 -- Idempotencia diaria por marker (PR atual)
+### Fase 4.1 -- Idempotencia diaria por marker (SUPERSEDIDO pela 4.3)
+
+> Mantido como historico. O marker `data/.probe_state.json` foi removido
+> em 4.3; cada slot agora roda o pipeline completo incondicionalmente.
 
 Problema motivador: apos um run bem-sucedido as 19h BRT, os runs das 20h,
 21h, ..., 05h continuavam executando todo o pipeline (probe HTTP + B3
@@ -300,6 +303,7 @@ Garantias preservadas:
   + overwrite janela 5 du B3 (comportamento inalterado).
 - Marker `data/.probe_state.json` continua barrando re-execucoes do
   mesmo dia_alvo (sucesso as 21h -> 23h e 05h encerram em ~37s).
+  **NOTA: superseded pela Fase 4.3 -- marker removido.**
 - Guard B3 continua ativo: feriados B3 em dia util seg-sex passam pelo
   cron (que so olha day-of-week, nao calendario B3) e sao cortados em
   runtime com exit 0.
@@ -307,6 +311,56 @@ Garantias preservadas:
 - Zero alteracao em scripts Python (probe_files.py, fetch_anbima.py,
   fetch_b3_*.py, compute_spreads.py, build_dashboard.py,
   list_target_dates.py, b3_calendar.py).
+
+### Fase 4.3 -- Remocao da idempotencia/cache B3 (PR atual)
+
+Problema motivador (oposto da 4.1): com o marker `data/.probe_state.json`
++ cache check da B3 (PR #145) ativos, os slots 2 e 3 da noite (00h e
+03h BRT) eram no-ops quando o slot das 21h ja tinha completado o dia.
+Isso era o desejado para Actions minutes, mas tinha um custo: a B3
+republica trade-by-trade e consolidated dentro do mesmo dia (correcoes
+retroativas de PU, cancelamentos, snapshot final pos-pregao). Como os
+slots 2/3 nao re-baixavam, a versao final ficava ate o ciclo do dia
+seguinte. Pior, o marker barrava ate o probe — entao a unica forma de
+forcar recaptura era `workflow_dispatch` com `force=true`, manual.
+
+Solucao: remover TODOS os checks de skip B3 do canonico:
+1. Remover step `Check already-completed (idempotencia diaria)` do
+   workflow `anbima_b3_probe.yml` + os `if:` referenciando
+   `steps.idempotencia.outputs.already_done` em todos os steps.
+2. Remover step `Atualiza marker de idempotencia` + remover input
+   `force` do `workflow_dispatch` (sem marker, nao ha o que ignorar).
+3. Remover `data/.probe_state.json` do repo.
+4. Remover cache check dos fetchers B3 (PR #145):
+   - `fetch_b3_trades.py`: remover `_cache_check`, branch de skip por
+     `lastUpdate + pageCount`, ping POST size=1 antes do fetch full.
+   - `fetch_b3_trades_consolidated.py`: idem.
+   - `b3_api.py`: remover `fetch_metadata` (so usado pelo cache check),
+     remover branch `status == 'cached'` do `refresh_recent_days`.
+
+Comportamento resultante:
+- Cada um dos 3 slots de cron (21h, 00h, 03h BRT) executa o pipeline
+  completo incondicionalmente.
+- Os 5 du B3 (D-0..D-4) sao SEMPRE re-baixados via fetch full
+  (paginacao completa) e o JSON local eh sobrescrito.
+- ANBIMA mantem gap-fill natural (pula se `history/<D>.json` existe) —
+  snapshots ANBIMA sao definitivos uma vez publicados.
+- Probe HTTP de disponibilidade dos 5 arquivos eh mantido: NAO eh
+  cache check, eh pre-flight de publicacao na origem.
+
+Trade-off explicito:
+| Antes (4.1+4.2)            | Depois (4.3)                       |
+|----------------------------|-------------------------------------|
+| Slot 1 (21h): ~3-5min      | Slot 1 (21h): ~3-5min               |
+| Slot 2 (00h): ~30s (skip)  | Slot 2 (00h): ~3-5min (fetch full)  |
+| Slot 3 (03h): ~30s (skip)  | Slot 3 (03h): ~3-5min (fetch full)  |
+| Total/dia util: ~4-6min    | Total/dia util: ~9-15min            |
+
+- Actions minutes: ~3x. Storage: identico (mesmo arquivo sobrescrito).
+- B3 endpoints: ~3x requests/noite. Sem custo monetario.
+- Beneficio: republicacao B3 dentro do mesmo dia eh pega no proximo
+  slot; ultimo slot sempre tem a versao final; codigo mais simples
+  (menos branches, menos estado, sem marker para manter).
 
 ### Fase 5 -- Refresh intraday Trade-by-Trade (PR atual)
 
@@ -349,7 +403,6 @@ arquivo no fim do pregao) e adiciona ConsolidatedRecords + ANBIMA +
 ETTJ + TPF.
 
 Restricoes invioladas:
-- NAO toca `data/.probe_state.json` (marker pertence ao canonico).
 - NAO baixa ANBIMA, ETTJ, TPF nem ConsolidatedRecords.
 - NAO poda historico (`data/b3_trades/` antigos, `data/dispersion/`,
   `history/`) — funcao do canonico via `scripts/podar_historico.py`.
