@@ -1290,8 +1290,10 @@ function renderTopMovers(tm, displayLabel, containerId) {
       : (m.delta_spread_bps > 0 ? "neg"
         : m.delta_spread_bps < 0 ? "pos" : "");
     const emissor = m.emissor || '';
+    const dur = m.duration_anos;
+    const durStr = dur == null ? "—" : dur.toFixed(1) + "a";
     return `<tr><td>${m.codigo}</td><td title="${escapeAttr(emissor)}">${escapeHtml(emissor)}</td>` +
-      `<td class="num">${fmtAnos(m.duration_anos)}</td>` +
+      `<td class="num">${durStr}</td>` +
       `<td class="num">${fmtPp(m.spread_pp)}</td>` +
       `<td class="num ${dCls}">${fmtBps(m.delta_spread_bps)}</td></tr>`;
   };
@@ -1386,7 +1388,7 @@ function vg_renderKpis(rows, rangeRows) {
   const volDelta = dod ? _vg_pctDelta(dod.volAtual, dod.volAnterior) : null;
   const nDelta   = dod ? _vg_pctDelta(dod.nAtual,   dod.nAnterior)   : null;
   const cards = [
-    { label: "Volume total negociado", val: trd_fmtMoneyShort(vol), hint: trd_fmtMoneyFull(vol), delta: volDelta },
+    { label: "Volume total negociado", val: _vg_fmtMoneyShort0d(vol), hint: trd_fmtMoneyFull(vol), delta: volDelta },
     { label: "Número de trades", val: trd_fmtIntBR(rows.length), delta: nDelta },
   ];
   document.getElementById("vg-kpi-row").innerHTML = cards.map(c => `
@@ -1472,7 +1474,7 @@ function vg_renderVolumeChart(rows) {
   };
   const annotations = xs.map((x, i) => ({
     x, y: ys[i],
-    text: trd_fmtMoneyShort(ys[i]),
+    text: _vg_fmtMoneyShort0d(ys[i]),
     showarrow: false,
     yshift: 12,
     font: { size: 11, color: cssVar("--fg") },
@@ -1504,17 +1506,19 @@ function _vg_topSort(a, b) {
   return a._name.localeCompare(b._name);
 }
 
-// Formatter exclusivo das tabelas Top 20: sem casas decimais em qualquer
-// unidade (Mil/MM/Bi/Tri). Cards, chart e demais tabelas mantem trd_fmtMoneyShort.
+// Formatter exclusivo da Visao Geral (Top 20, KPI Volume Total, label do
+// chart de volume): Bi/Tri com 1 casa decimal, MM/Mil sem casa decimal.
+// Demais abas mantem trd_fmtMoneyShort.
 function _vg_fmtMoneyShort0d(v) {
   if (v == null || isNaN(v)) return "—";
   const abs = Math.abs(v);
-  const opts = { minimumFractionDigits: 0, maximumFractionDigits: 0 };
-  if (abs >= 1e12) return Math.round(v / 1e12).toLocaleString("pt-BR", opts) + " Tri";
-  if (abs >= 1e9)  return Math.round(v / 1e9).toLocaleString("pt-BR", opts) + " Bi";
-  if (abs >= 1e6)  return Math.round(v / 1e6).toLocaleString("pt-BR", opts) + " MM";
-  if (abs >= 1e3)  return Math.round(v / 1e3).toLocaleString("pt-BR", opts) + " Mil";
-  return Math.round(v).toLocaleString("pt-BR", opts);
+  const opts0 = { minimumFractionDigits: 0, maximumFractionDigits: 0 };
+  const opts1 = { minimumFractionDigits: 1, maximumFractionDigits: 1 };
+  if (abs >= 1e12) return (v / 1e12).toLocaleString("pt-BR", opts1) + " Tri";
+  if (abs >= 1e9)  return (v / 1e9).toLocaleString("pt-BR", opts1) + " Bi";
+  if (abs >= 1e6)  return Math.round(v / 1e6).toLocaleString("pt-BR", opts0) + " MM";
+  if (abs >= 1e3)  return Math.round(v / 1e3).toLocaleString("pt-BR", opts0) + " Mil";
+  return Math.round(v).toLocaleString("pt-BR", opts0);
 }
 
 function vg_renderTopPapeis(rows) {
