@@ -3,23 +3,25 @@
 Dashboard diário do mercado secundário de debêntures (ANBIMA + B3),
 atualizado automaticamente via GitHub Actions. **Dois workflows
 complementares**: o **canônico** tenta importar em 3 horários fixos
-por dia útil B3 — 21h e 23h BRT da data referência + 05h BRT do dia
+por dia útil B3 — 21h BRT da data referência + 00h e 03h BRT do dia
 seguinte —, espera todos os 5 arquivos do dia ficarem disponíveis e
-importa ANBIMA + B3 num só commit; o **intraday** roda a cada 30min
-durante o pregão (10h-19h BRT seg-sex) e atualiza só o Trade-by-Trade
-da B3 do dia para que o site reflita os negócios em tempo quase real.
-O GitHub Pages re-deploya o site sozinho a cada push:
+importa ANBIMA + B3 num só commit (cada slot sempre re-baixa os 5 du B3
+para pegar republicações dentro do mesmo ciclo); o **intraday** roda a
+cada 30min durante o pregão (10h-19h BRT seg-sex) e atualiza só o
+Trade-by-Trade da B3 do dia para que o site reflita os negócios em
+tempo quase real. O GitHub Pages re-deploya o site sozinho a cada push:
 
 - [`.github/workflows/anbima_b3_probe.yml`](.github/workflows/anbima_b3_probe.yml)
-  — **canônico (Fase 4)**. Cron `0 0,2,8 * * 2-6` (00, 02 e 08 UTC
-  ter-sáb = 21h, 23h e 05h BRT da janela seg-sex BRT). A cada slot:
-  determina dia_alvo (HOJE BRT se hora ≥ 19, senão ONTEM BRT), guard
-  B3 (fds/feriado → exit 0), **check idempotência diária**
-  (`data/.probe_state.json` — se já rodou com sucesso pro dia_alvo,
-  encerra em ~37s), probe HTTP dos 5 arquivos (ANBIMA Debentures +
-  ETTJ + TPF + B3 Trade + B3 ConsolidatedRecords); se todos OK:
-  gap-fill ANBIMA + overwrite B3 + rebuild dashboard + atualiza marker
-  + commit & push.
+  — **canônico (Fase 4)**. Cron `0 0,3,6 * * 2-6` (00, 03 e 06 UTC
+  ter-sáb = 21h, 00h e 03h BRT). A cada slot determina dia_alvo
+  (HOJE BRT se hora ≥ 19, senão ONTEM BRT), guard B3 (fds/feriado →
+  exit 0), probe HTTP dos 5 arquivos (ANBIMA Debentures + ETTJ + TPF
+  + B3 Trade + B3 ConsolidatedRecords); se todos OK: gap-fill ANBIMA
+  + overwrite B3 (sempre fetch full dos 5 du) + rebuild dashboard +
+  commit & push. **Não há marker de idempotência diária nem cache
+  check B3** — cada slot roda o pipeline completo para que
+  republicações da B3 dentro do mesmo ciclo sejam pegas no slot
+  seguinte.
 - [`.github/workflows/b3_trades_intraday.yml`](.github/workflows/b3_trades_intraday.yml)
   — **refresh intraday do Trade-by-Trade da B3 (Fase 5)**.
   **Complementar** ao canônico, não substitui. Cron `0,30 13-21 * * 1-5`
@@ -29,8 +31,8 @@ O GitHub Pages re-deploya o site sozinho a cada push:
   cada slot: guard B3 (fds/feriado → exit 0), fetch SOMENTE
   Trade-by-Trade do dia (`fetch_b3_trades.py <HOJE>`), rebuild
   dashboard e commit & push com prefixo `chore: B3 intraday refresh ...`.
-  **Não toca** `data/.probe_state.json`, ANBIMA, ETTJ, TPF, nem
-  ConsolidatedRecords — esses ficam no canônico. Concurrency group
+  **Não toca** ANBIMA, ETTJ, TPF, nem ConsolidatedRecords — esses
+  ficam no canônico. Concurrency group
   `anbima-b3-pipeline` compartilhado com o canônico evita push
   simultâneo se janelas se sobreporem.
 - [`.github/workflows/daily_update.yml`](.github/workflows/daily_update.yml)
@@ -148,47 +150,47 @@ Brava, Origem.
 
 Workflow: [`.github/workflows/anbima_b3_probe.yml`](.github/workflows/anbima_b3_probe.yml).
 
-- **Cron**: `0 0,2,8 * * 2-6` (UTC) = **3 horários fixos por dia útil
-  B3**: 21h BRT e 23h BRT da data referência + 05h BRT do dia seguinte
-  (00h, 02h e 08h UTC ter-sáb). Day-of-week 2-6 elimina triggers de
+- **Cron**: `0 0,3,6 * * 2-6` (UTC) = **3 horários fixos por dia útil
+  B3**: 21h BRT da data referência + 00h e 03h BRT do dia seguinte
+  (00h, 03h e 06h UTC ter-sáb). Day-of-week 2-6 elimina triggers de
   dom/seg UTC, que mapeariam ref dates de fim de semana. Guard B3
   filtra feriados B3 em runtime.
 - **Determinação do `target_date`**: HOJE BRT se hora ≥ 19, senão ONTEM
-  BRT. O slot das 05h BRT cai em ONTEM e captura a mesma data
-  referência dos slots das 21h/23h da véspera (recuperação dentro do
-  mesmo ciclo).
-- **Idempotência diária**: marker `data/.probe_state.json` versionado
-  em git com schema:
-  ```json
-  {
-    "last_successful_date": "YYYY-MM-DD",
-    "last_success_ts": "YYYY-MM-DDTHH:MM:SS-03:00"
-  }
-  ```
-  Antes do probe, o workflow lê o marker; se `last_successful_date ==
-  target_date`, encerra verde em ~37s (não faz HTTP, não chama B3, não
-  rebuilda). Após uma execução bem-sucedida (ex: 21h), os slots
-  seguintes do mesmo ciclo (23h e 05h) são no-ops. Quando o dia_alvo
-  muda, o marker não bloqueia.
+  BRT. Os slots das 00h e 03h BRT caem em ONTEM e capturam a mesma
+  data referência do slot das 21h BRT da véspera (recuperação dentro
+  do mesmo ciclo).
+- **Idempotência B3: não aplicável.** Cada slot executa o pipeline
+  completo incondicionalmente. Não há marker `data/.probe_state.json`,
+  não há cache check (lastUpdate / pageCount) nos fetchers B3, não há
+  verificação de "arquivo local já existe". Os 5 dias úteis B3 da
+  janela são sempre re-baixados via `fetch_b3_trades.py` +
+  `fetch_b3_trades_consolidated.py`. **Trade-off**: ~3x mais Actions
+  minutes/dia útil em troca de garantir que republicações da B3 dentro
+  do mesmo ciclo (correções retroativas de PU, cancelamentos) sejam
+  pegas no slot seguinte e que o último slot da noite sempre tenha a
+  versão final dos arquivos.
+- **Idempotência ANBIMA: natural.** `history/<D>.json` é definitivo
+  uma vez gravado, então o import ANBIMA pula a data se o arquivo já
+  existe (gap-fill).
 - **Probe HTTP**: [`scripts/probe_files.py`](scripts/probe_files.py)
   verifica disponibilidade dos 5 arquivos do dia (ANBIMA Debentures +
   ETTJ + TPF + B3 Trade + B3 ConsolidatedRecords). Se todos OK → import.
   Se algum faltando → exit 0 sem commitar (próximo slot tenta de novo).
+  **Não é cache check**: é pre-flight de publicação no lado remoto.
 - **Import** (só se probe all OK):
   - **ANBIMA** (gap-fill 5 dias úteis B3): para cada data, pula se
     `history/<D>.json` já existe; senão `fetch_anbima.py` + `compute_spreads.py`.
   - **B3** (overwrite janela 5 dias úteis B3): `fetch_b3_trades.py` +
     `fetch_b3_trades_consolidated.py` apagam e reescrevem os 5 arquivos
-    mais recentes, capturando correções retroativas.
+    mais recentes incondicionalmente, capturando correções retroativas.
   - **Retenção 60 du B3** em `data/b3_trades*/` via `scripts/podar_historico.py`.
   - `build_dashboard.py` regenera `data/*.json` + `index.html`.
-  - Atualiza marker `data/.probe_state.json` com o dia_alvo + ts BRT.
   - `git pull --rebase --autostash origin main` + commit + push.
-- **Recuperação retroativa**: se os 3 slots do dia D (21h, 23h, 05h+1)
-  todos falham, o dia D é descartado e recuperado automaticamente no
-  ciclo do próximo dia útil B3 via gap-fill ANBIMA
-  (`scripts/list_target_dates.py` retorna `[D+1, D, D-1, D-2, D-3]`) e
-  a janela 5du do B3 sobrescreve. Zero ação manual.
+- **Recuperação retroativa**: se os 3 slots do dia D todos falham, o
+  dia D é descartado e recuperado automaticamente no ciclo do próximo
+  dia útil B3 via gap-fill ANBIMA (`scripts/list_target_dates.py`
+  retorna `[D+1, D, D-1, D-2, D-3]`) e a janela 5du do B3 sobrescreve.
+  Zero ação manual.
 
 Tratamento de erro por data:
 
@@ -204,20 +206,19 @@ Tratamento de erro por data:
 
 1. Abrir [Actions › ANBIMA + B3 Probe & Import](https://github.com/lucastlsabara/anbima-debentures-monitor/actions/workflows/anbima_b3_probe.yml).
 2. Clicar em **Run workflow**.
-3. Inputs opcionais:
+3. Input opcional:
    - `target_date` (formato `YYYY-MM-DD`): vazio = derivar conforme
-     horário BRT atual. Preenchido = força aquele dia (usar com `force=true`
-     se quiser reprocessar um dia que já tem marker).
-   - `force` (boolean, default `false`): ignora o marker de idempotência.
-     Útil para reprocessar manualmente um dia atípico ou após correção
-     retroativa na ANBIMA/B3.
+     horário BRT atual. Preenchido = força aquele dia. Como cada slot
+     já executa o pipeline completo (sem marker de idempotência),
+     reprocessar um dia atípico só requer disparar `workflow_dispatch`
+     com o `target_date` desejado.
 
 ## Automação intraday Trade-by-Trade (`b3_trades_intraday.yml`)
 
 Workflow: [`.github/workflows/b3_trades_intraday.yml`](.github/workflows/b3_trades_intraday.yml).
 
 **Complementar** ao canônico — não substitui. Resolve a lacuna em que o
-canônico das 21h/23h/05h fica preso esperando os 5 arquivos (em
+canônico das 21h/00h/03h fica preso esperando os 5 arquivos (em
 particular ConsolidatedRecords, que só sai ao fim do dia) antes de
 importar qualquer coisa, deixando o site sem trades intraday até a
 madrugada.
@@ -241,8 +242,6 @@ madrugada.
   `chore: B3 intraday refresh <YYYY-MM-DD> <HH:MM BRT>`.
 - **Restrições invioladas**:
   - Não baixa ANBIMA (`db.txt`/ETTJ/`ms.txt`) nem ConsolidatedRecords.
-  - Não toca `data/.probe_state.json` (marker pertence exclusivamente ao
-    canônico — pipelines são complementares e independentes nesse aspecto).
   - Não poda histórico (`data/b3_trades/` antigos, `data/dispersion/`,
     `history/`) — função do canônico via `scripts/podar_historico.py`.
   - Não gera dados sintéticos. Falha de rede / 5xx → `fetch_b3_trades.py`
@@ -253,8 +252,8 @@ madrugada.
   O mesmo grupo está em `anbima_b3_probe.yml` como safety net — se algum
   dia janelas se sobreporem, evita dois push concorrentes em main.
 - **Convivência com canônico**: janelas não se sobrepõem (gap de 2h entre
-  19:00 BRT intraday e 21:00 BRT canônico). Em D+1, o canônico das 21h
-  sobrescreve o trade-by-trade do dia com a versão final (igual ou
+  19:00 BRT intraday e 21:00 BRT canônico). Em D+1, cada slot do canônico
+  sobrescreve o trade-by-trade do dia com a versão atual da B3 (igual ou
   marginalmente maior) e adiciona ConsolidatedRecords + ANBIMA + ETTJ + TPF.
 - **Limitação explícita**: o intraday SÓ atualiza
   `data/b3_trades/<HOJE>.json` + rebuild do dashboard. Setor × Prazo,
@@ -304,7 +303,7 @@ python3 -m http.server 8000
 Tanto `fetch_anbima.py` quanto `compute_spreads.py` aceitam `--date YYYY-MM-DD`
 (opcional). Quando omitido, usam **hoje (BRT)**. A pipeline canônica
 (`anbima_b3_probe.yml`) tenta importar em 3 horários fixos por dia útil
-B3 (21h, 23h e 05h BRT) e só importa quando o probe confirma que todos
+B3 (21h, 00h e 03h BRT) e só importa quando o probe confirma que todos
 os 5 arquivos do dia foram publicados.
 Em sábado, domingo ou feriado, hoje continua sendo o próprio dia: a ANBIMA
 retorna 404 e o script termina com exit code 2 (comportamento esperado).

@@ -10,10 +10,6 @@ Convencao de erros: 403/404 viram B3UnavailableError (FDS/feriado/dia
 ainda nao publicado — caller pula). 403 com header `x-deny-reason` vira
 SandboxBlockedError (bloqueio de allowlist do ambiente, nao da B3 —
 caller deve propagar).
-
-post_page com page=1, page_size=1 funciona como "ping" leve para extrair
-metadados (lastUpdateDate + table.pageCount) sem baixar o dataset inteiro;
-ver fetch_metadata().
 """
 
 from __future__ import annotations
@@ -103,12 +99,7 @@ def extract_total_records(envelope: dict) -> int | None:
 
     A B3 nao expoe 'totalRecords' nem 'totalRows' no top-level do envelope.
     Em vez disso retorna 'table.pageCount' que e o numero de PAGINAS dado o
-    page_size da requisicao. Como fetch_metadata sempre chama com
-    page_size=1, pageCount equivale exatamente ao numero de linhas (records).
-
-    Validado empiricamente em 14/05/2026 batendo o endpoint
-    POST https://arquivos.b3.com.br/bdi/table/Trade/{D}/{D}/1/1 com varias
-    datas e comparando com os JSONs locais salvos.
+    page_size da requisicao.
     """
     if not isinstance(envelope, dict):
         return None
@@ -119,27 +110,6 @@ def extract_total_records(envelope: dict) -> int | None:
     if isinstance(page_count, int):
         return page_count
     return None
-
-
-def fetch_metadata(table: str, date_iso: str) -> dict:
-    """Fetch leve so para metadados (page=1, page_size=1).
-
-    Retorna dict com:
-      - last_update: str ISO timestamp da B3 (ou None se ausente)
-      - total_records: int (ou None se ausente)
-      - raw_envelope: dict bruto do envelope (debugging)
-
-    Reusa post_page e propaga B3UnavailableError / SandboxBlockedError /
-    requests.HTTPError nas mesmas condicoes.
-    """
-    response = post_page(table, date_iso, page=1, page_size=1)
-    last_update = response.get("lastUpdateDate") if isinstance(response, dict) else None
-    total_records = extract_total_records(response if isinstance(response, dict) else {})
-    return {
-        "last_update": last_update,
-        "total_records": total_records,
-        "raw_envelope": response,
-    }
 
 
 def last_n_business_days(n: int, today: date | None = None) -> list[date]:
@@ -171,15 +141,14 @@ def refresh_recent_days(
     Tenta todos os dias antes de retornar. Exit code != 0 se QUALQUER dia
     falhar (falha de rede apos retry; 403/404 nao conta como falha).
     `fetch_day_fn(date_iso)` deve devolver dict com chave `status` em
-    {'updated', 'cached', 'unavailable'}; pode levantar exceptions para
-    sinalizar falha real (caller registra e segue).
+    {'updated', 'unavailable'}; pode levantar exceptions para sinalizar
+    falha real (caller registra e segue).
     """
     days = last_n_business_days(n)
     header = f"Refresh{(' ' + label) if label else ''} dos ultimos {len(days)} dias uteis B3"
     print(f"{header}: {days[0]} a {days[-1]}")
 
     updated = 0
-    cached = 0
     unavailable = 0
     failed = 0
 
@@ -190,8 +159,6 @@ def refresh_recent_days(
             status = result["status"]
             if status == "updated":
                 updated += 1
-            elif status == "cached":
-                cached += 1
             else:
                 unavailable += 1
         except Exception as exc:
@@ -205,7 +172,7 @@ def refresh_recent_days(
 
     print()
     print(
-        f"Resumo: {updated} atualizado(s), {cached} cached, "
+        f"Resumo: {updated} atualizado(s), "
         f"{unavailable} indisponivel(eis) (FDS/feriado/nao publicado), "
         f"{failed} falha(s)"
     )
