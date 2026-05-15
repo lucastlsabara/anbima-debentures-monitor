@@ -2,51 +2,46 @@ name: ANBIMA + B3 Probe & Import
 
 # Workflow UNICO que substitui o cron de daily_update.yml e b3_trades.yml.
 #
-# Roda em 3 horarios fixos por dia util B3: 21h BRT (mesmo dia ref) +
-# 00h BRT, 03h BRT (madrugada apos, ref = dia util anterior).
-# CADA slot executa o pipeline COMPLETO incondicionalmente (sem marker
-# de idempotencia, sem cache check B3). Trade-off explicito: gasta ~3x
-# mais Actions minutes/dia util em troca de garantir que correcoes
-# retroativas publicadas pela B3 dentro do mesmo ciclo sao pegas no
-# proximo slot.
+# Roda 1 slot por dia util B3, as 03h BRT da madrugada seguinte. Cada
+# execucao processa o dia util ANTERIOR (target_date = ONTEM BRT,
+# calculado pelo step "Determine target date"). Republicacoes da B3
+# dentro do mesmo dia util sao consideradas via fetch full do canonico
+# (sem cache check), ate o horario do slot.
 #
 # A cada execucao:
 #   1. Determina o dia alvo (HOJE BRT se hora>=19, senao ONTEM BRT).
+#      Como o slot dispara as 03h BRT (hora=3 < 19), alvo = ONTEM.
 #   2. Guard B3: se nao for dia util B3, sai 0 sem fazer nada.
 #   3. Probe: verifica disponibilidade dos 5 arquivos (ANBIMA Debentures,
 #      ANBIMA ETTJ, ANBIMA TPF, B3 Trade, B3 ConsolidatedRecords).
 #   4. Se TODOS os 5 estao publicados: importa ANBIMA (gap-fill 5 du B3),
 #      importa B3 (overwrite janela 5 du B3 — SEMPRE fetch full), rebuild
 #      dashboard, commit & push.
-#   5. Se ALGUM faltando: loga e termina verde sem commitar. Proximo slot
-#      tenta de novo. Dias antigos pendentes sao recuperados automaticamente
-#      pelo gap-fill ANBIMA + overwrite janela B3.
+#   5. Se ALGUM faltando: loga e termina verde sem commitar. O proximo
+#      slot (manha do proximo dia util) recupera via gap-fill ANBIMA +
+#      overwrite janela B3.
 #
 # Idempotencia B3: nao aplicavel (sempre re-fetch dos 5 du). ANBIMA: gap-fill
 # natural (pula data se history/<D>.json ja existe).
 
 on:
   schedule:
-    # 3 disparos por dia util B3:
-    # 21h BRT (HOJE) | 00h BRT do dia seguinte (ONTEM) | 03h BRT do dia seguinte (ONTEM)
-    # BRT = UTC-3. Cron em UTC.
-    # Cada slot executa o pipeline completo (sem skip por marker).
-    - cron: '0 0 * * 2-6'   # 21:00 BRT seg-sex -> ref = HOJE BRT
-    - cron: '0 3 * * 2-6'   # 00:00 BRT ter-sab -> ref = ONTEM (ultimo dia util)
-    - cron: '0 6 * * 2-6'   # 03:00 BRT ter-sab -> ref = ONTEM (ultimo dia util)
+    # 03h BRT (06h UTC) de terca-sabado UTC = madrugada apos cada dia util BRT.
+    # Roda 1x por dia util com target_date = dia util anterior (calculado pelo
+    # step "Determine target date").
     #
-    # Validacao de bordas:
-    #  Seg 21h BRT = 00h UTC ter (dia 2) -> dispara, ref = seg (HOJE, hour=21 >= 19)
-    #  Ter 00h BRT = 03h UTC ter (dia 2) -> dispara, ref = seg (ONTEM, hour=0 < 19)
+    # Validacao de bordas (BRT = UTC-3):
     #  Ter 03h BRT = 06h UTC ter (dia 2) -> dispara, ref = seg (ONTEM, hour=3 < 19)
-    #  Sex 21h BRT = 00h UTC sab (dia 6) -> dispara, ref = sex (HOJE)
-    #  Sab 00h BRT = 03h UTC sab (dia 6) -> dispara, ref = sex (ONTEM)
+    #  Qua 03h BRT = 06h UTC qua (dia 3) -> dispara, ref = ter (ONTEM)
+    #  Qui 03h BRT = 06h UTC qui (dia 4) -> dispara, ref = qua (ONTEM)
+    #  Sex 03h BRT = 06h UTC sex (dia 5) -> dispara, ref = qui (ONTEM)
     #  Sab 03h BRT = 06h UTC sab (dia 6) -> dispara, ref = sex (ONTEM)
     #  Dom 03h BRT = 06h UTC dom (dia 0) -> BLOQUEIA (0 nao esta em 2-6)
     #  Seg 03h BRT = 06h UTC seg (dia 1) -> BLOQUEIA (1 nao esta em 2-6)
     #
     # Feriados B3 moveis (Carnaval, Corpus Christi, 25-jan-SP, etc.) nao sao
     # cobertos por cron syntax: o guard B3 corta em ~30s em feriado.
+    - cron: '0 6 * * 2-6'   # 03:00 BRT ter-sab -> ref = ONTEM (ultimo dia util)
   workflow_dispatch:
     inputs:
       target_date:
