@@ -458,6 +458,7 @@
   <a href="#/dispersao" data-tab="dispersao">Debêntures: Gráfico</a>
   <a href="#/trades" data-tab="trades">Pesquisa de Trades</a>
   <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
+  <a href="#/indices-anbima" data-tab="indices-anbima">Índices ANBIMA</a>
 </nav>
 
 <main>
@@ -761,6 +762,38 @@
   </div>
 </section>
 
+<!-- ===================== Tab: Índices ANBIMA ===================== -->
+<!-- Esboço minimo: select IDA/IMA + select Data + tabela de dados crus.
+     Fonte: portal publico ANBIMA (5 dias uteis maximo). -->
+<section id="tab-indices-anbima" class="tab hide">
+  <div class="panel">
+    <h2>Índices ANBIMA</h2>
+    <div style="color:var(--muted);font-size:12px;margin-top:-4px;margin-bottom:10px;">
+      Fonte: ANBIMA portal público (últimos 5 dias úteis disponíveis).
+    </div>
+    <div class="controls filter-row">
+      <label>Índice:
+        <select id="ia-indice">
+          <option value="ida" selected>IDA</option>
+          <option value="ima">IMA</option>
+        </select>
+      </label>
+      <label>Data:
+        <select id="ia-date"></select>
+      </label>
+    </div>
+  </div>
+  <div class="panel">
+    <div id="ia-status" style="color:var(--muted);font-size:12px;margin-bottom:8px;"></div>
+    <div id="ia-table-wrap" style="overflow-x:auto;">
+      <table id="ia-table" class="mini" style="table-layout:auto;width:100%;"></table>
+    </div>
+    <div style="color:var(--muted);font-size:11.5px;margin-top:10px;">
+      Histórico maior disponível via ANBIMA Feed (credenciais não incluídas).
+    </div>
+  </div>
+</section>
+
 </main>
 
 <footer>
@@ -920,7 +953,7 @@ function adaptiveTextColor(bgHex) {
 /* ============================================================
  *  hash routing
  * ============================================================ */
-const TABS = ["visao","dispersao","movimentacoes","heatmap","titulos-publicos","trades"];
+const TABS = ["visao","dispersao","movimentacoes","heatmap","titulos-publicos","trades","indices-anbima"];
 const loaded = new Set();
 
 // Rotas antigas redirecionadas para evitar bookmarks quebrados:
@@ -1014,6 +1047,7 @@ async function renderTab(name) {
   if (name === "heatmap") return renderHeatmap();
   if (name === "titulos-publicos") return renderTitulosPublicos();
   if (name === "trades") return renderTrades();
+  if (name === "indices-anbima") return renderIndicesAnbima();
 }
 
 /* ============================================================
@@ -5174,6 +5208,160 @@ function tr2_renderScatterRateChart(divId, rowsOverride) {
     hoverlabel: { namelength: -1 },
   });
   Plotly.newPlot(divId, traces, layout, PLOTLY_CONFIG);
+}
+
+/* ============================================================
+ *  Tab — Índices ANBIMA (esboço minimo IDA/IMA)
+ *
+ *  Esboço inicial sem analise: 2 selects (Índice IDA/IMA + Data) e uma
+ *  tabela com os dados crus do dia. Source: data/anbima_indices/_index.json
+ *  (gerado pelo build_dashboard a partir de data/anbima_indices/<date>.json).
+ *  Site publico ANBIMA so disponibiliza ate ~5 du B3 -- vamos acumular
+ *  historico daqui em diante via cron.
+ * ============================================================ */
+
+const IA_HEADERS = {
+  ida: {
+    subindice: "Subíndice",
+    data: "Data",
+    numero_indice: "Número Índice",
+    variacao_diaria_pct: "Var. Diária (%)",
+    variacao_mensal_pct: "Var. Mês (%)",
+    variacao_anual_pct: "Var. Ano (%)",
+    variacao_12m_pct: "Var. 12m (%)",
+    variacao_24m_pct: "Var. 24m (%)",
+    duration_du: "Duration (d.u.)",
+    peso_pct: "Peso (%)",
+    valor_mercado_milhoes: "Valor Mercado (R$ mi)",
+  },
+  ima: {
+    data: "Data",
+    subindice: "Subíndice",
+    numero_indice: "Número Índice",
+    variacao_diaria_pct: "Var. Diária (%)",
+    variacao_mensal_pct: "Var. Mês (%)",
+    variacao_anual_pct: "Var. Ano (%)",
+    variacao_12m_pct: "Var. 12m (%)",
+    variacao_24m_pct: "Var. 24m (%)",
+    duration_du: "Duration (d.u.)",
+    peso_geral_pct: "Peso Geral (%)",
+    carteira_mercado_milhares: "Carteira a Mercado (R$ mil)",
+    numero_operacoes: "Nº Operações",
+    quant_negociada_milhares: "Qtd. Negoc. (mil tit.)",
+    valor_negociado_milhares: "Vol. Negoc. (R$ mil)",
+    pmr: "PMR",
+    convexidade: "Convexidade",
+    yield: "Yield",
+    redemption_yield: "Redemption Yield",
+  },
+};
+
+const IA_PCT_FIELDS = new Set([
+  "variacao_diaria_pct","variacao_mensal_pct","variacao_anual_pct",
+  "variacao_12m_pct","variacao_24m_pct","peso_pct","peso_geral_pct",
+]);
+
+let IA_DATA = null;
+
+function iaFmtNumber(v, opts) {
+  if (v == null || v === "") return "—";
+  if (typeof v === "string") return v;
+  const n = Number(v);
+  if (!isFinite(n)) return "—";
+  const isPct = opts && opts.pct;
+  const intLike = opts && opts.intLike;
+  const decimals = isPct ? 4 : (intLike && Number.isInteger(n) ? 0 : 4);
+  const out = n.toLocaleString("pt-BR", {
+    minimumFractionDigits: isPct ? 4 : 0,
+    maximumFractionDigits: decimals,
+  });
+  return isPct ? out + "%" : out;
+}
+
+function iaIsIntLike(field) {
+  return field === "duration_du" || field === "numero_operacoes";
+}
+
+async function renderIndicesAnbima() {
+  const status = document.getElementById("ia-status");
+  const tableEl = document.getElementById("ia-table");
+  try {
+    IA_DATA = await loadJSON("data/anbima_indices/_index.json");
+  } catch (e) {
+    status.textContent = "Sem dados em data/anbima_indices/. Rode fetch_anbima_indices.py.";
+    tableEl.innerHTML = "";
+    return;
+  }
+  const dates = (IA_DATA && IA_DATA.dates) || [];
+  const dateSel = document.getElementById("ia-date");
+  const indSel = document.getElementById("ia-indice");
+  dateSel.innerHTML = "";
+  if (!dates.length) {
+    status.textContent = "Nenhuma data coletada ainda. Aguarde a próxima execução do fetcher.";
+    tableEl.innerHTML = "";
+    return;
+  }
+  for (const d of dates) {
+    const opt = document.createElement("option");
+    opt.value = d;
+    opt.textContent = brDate(d);
+    dateSel.appendChild(opt);
+  }
+  dateSel.value = dates[0];
+  const repaint = () => iaRenderTable(indSel.value, dateSel.value);
+  indSel.onchange = repaint;
+  dateSel.onchange = repaint;
+  repaint();
+}
+
+function iaRenderTable(indice, date) {
+  const status = document.getElementById("ia-status");
+  const tableEl = document.getElementById("ia-table");
+  const day = IA_DATA && IA_DATA.by_date && IA_DATA.by_date[date];
+  if (!day) {
+    status.textContent = "Sem dados para a data " + brDate(date) + ".";
+    tableEl.innerHTML = "";
+    return;
+  }
+  const block = day[indice] || {};
+  const headers = IA_HEADERS[indice];
+  if (block.status !== "ok") {
+    const reason = block.reason ? " (" + block.reason + ")" : "";
+    status.textContent =
+      "Dados indisponíveis para esta data" + reason + ".";
+    tableEl.innerHTML = "";
+    return;
+  }
+  const cols = block.columns || Object.keys(headers);
+  const rows = block.rows || [];
+  if (!rows.length) {
+    status.textContent = "Tabela vazia.";
+    tableEl.innerHTML = "";
+    return;
+  }
+  status.textContent = rows.length + " linha(s) | fonte: "
+    + (block.source || (indice === "ida" ? "IDA_result.asp" : "ima_completo.txt"));
+  // Render simple HTML table.
+  const thead = "<thead><tr>"
+    + cols.map(c => {
+        const label = headers[c] || c;
+        return `<th>${escapeHtml(label)}</th>`;
+      }).join("")
+    + "</tr></thead>";
+  const tbody = "<tbody>"
+    + rows.map(r => "<tr>"
+        + cols.map((c, i) => {
+            const v = r[i];
+            const isStr = typeof v === "string";
+            const cls = isStr ? "" : "num";
+            const txt = isStr
+              ? escapeHtml(v)
+              : iaFmtNumber(v, { pct: IA_PCT_FIELDS.has(c), intLike: iaIsIntLike(c) });
+            return `<td class="${cls}">${txt}</td>`;
+          }).join("")
+        + "</tr>").join("")
+    + "</tbody>";
+  tableEl.innerHTML = thead + tbody;
 }
 
 // DOMContentLoaded garante que os scripts <head defer> (Tabulator, Plotly,

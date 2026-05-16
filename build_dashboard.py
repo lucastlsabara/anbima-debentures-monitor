@@ -44,6 +44,7 @@ ROOT = Path(__file__).parent
 HIST_DIR = ROOT / "history"
 DATA_DIR = ROOT / "data"
 B3_CONS_DIR = DATA_DIR / "b3_trades_consolidated"
+ANBIMA_IDX_DIR = DATA_DIR / "anbima_indices"
 
 # Indexadores efetivamente exibidos no dashboard. Para reincluir % do DI ou
 # IGP-M+ no futuro, basta acrescentá-los aqui — os snapshots em history/
@@ -733,6 +734,38 @@ def build_titpub_history(snaps: list[dict]) -> dict:
 # HTML
 # ----------------------------------------------------------------------------
 
+def build_anbima_indices() -> dict:
+    """Agrega data/anbima_indices/<date>.json em um indice unico.
+
+    Schema:
+      { "dates": ["2026-05-14", ...],  # ordem decrescente
+        "by_date": { "<date>": { "ida": {...}, "ima": {...}, "fetched_at": ... } } }
+
+    Cada dia preserva ida/ima como gravados pelo fetcher (status, columns,
+    rows). Datas sem JSON ainda nao foram coletadas; o frontend trata como
+    'sem dados'.
+    """
+    if not ANBIMA_IDX_DIR.exists():
+        return {"dates": [], "by_date": {}}
+    by_date: dict[str, dict] = {}
+    for path in sorted(ANBIMA_IDX_DIR.glob("*.json")):
+        if path.name.startswith("_"):
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            print(f"[warn ] {path} invalido, pulando", file=sys.stderr)
+            continue
+        date = payload.get("date") or path.stem
+        by_date[date] = {
+            "fetched_at": payload.get("fetched_at"),
+            "ida": payload.get("ida") or {},
+            "ima": payload.get("ima") or {},
+        }
+    dates = sorted(by_date.keys(), reverse=True)
+    return {"dates": dates, "by_date": by_date}
+
+
 def _build_version(data_dir: Path) -> str:
     """Hash curto do conteúdo dos JSONs gerados em data/.
 
@@ -808,6 +841,12 @@ def main() -> int:
     for date in disp_index["dates"]:
         path = disp_dir / f"{date}.json"
         sizes.append((f"dispersion/{date}.json", path.stat().st_size))
+
+    # Indices ANBIMA (IDA + IMA), 5 du B3 mais recentes. Diretorio pode nao
+    # existir ainda em deploys novos -- build_anbima_indices retorna {} vazio.
+    ANBIMA_IDX_DIR.mkdir(parents=True, exist_ok=True)
+    sizes.append(("anbima_indices/_index.json",
+        _write_json(ANBIMA_IDX_DIR / "_index.json", build_anbima_indices())))
 
     build_version = _build_version(DATA_DIR)
     html_size = write_html(Path(args.out_html), build_version)
