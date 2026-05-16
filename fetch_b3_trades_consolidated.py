@@ -1,57 +1,59 @@
 """Fetch de NEGOCIOS CONSOLIDADOS de renda fixa da B3.
 
 Diferenca de fonte:
-  - fetch_b3_trades.py        -> negocio a negocio (trade-by-trade), endpoint
-                                 /bdi/table/Trade. 1 linha = 1 operacao.
+  - fetch_b3_trades.py        -> negocio a negocio (trade-by-trade).
   - fetch_b3_trades_consolidated.py (este) -> negocios consolidados por
                                  instrumento/dia (volume total, pmp, etc).
 
-Endpoint:
-  POST https://arquivos.b3.com.br/bdi/table/ConsolidatedRecords/{ini}/{fim}/{page}/{page_size}
-  Headers: Content-Type: application/json
-  Body: {}
+Fonte de dados (fetch full): endpoint OFICIAL de export CSV
+  POST https://arquivos.b3.com.br/bdi/table/export/csv?lang=pt-BR
+  Body: {"Name":"ConsolidatedRecords","Date":<dia>,"FinalDate":<dia>,
+         "ClientId":"","Filters":{}}
+  Response: text/csv (utf-8 com BOM, separator ';', 5-7 linhas de
+  glossario/preambulo antes do header tabular). 1 unico request, sem
+  paginacao -> dados completos e consistentes.
 
-Nome da tabela fixo: `ConsolidatedRecords` (renda fixa). Confirmado via
-inspecao manual da pagina B3 (boletim-diario-do-mercado) com network tracking.
-PR #105 introduziu probing automatico sobre 14 candidatos — todos retornaram
-200 com 0 rows porque o metodo era GET (deveria ser POST). Limpo aqui.
+Migracao do endpoint paginado (PR atual): o paginado
+/bdi/table/ConsolidatedRecords/{ini}/{fim}/{page}/{page_size} degrada
+sob carga — em 2026-05-15 com ~413 paginas ate ~28% delas retornaram
+conteudo CACHED de paginas anteriores em vez do conteudo real (11.430
+linhas duplicadas espurias + 11.4k linhas REAIS perdidas, sum ~9.6 Bi
+vs 12.5 Bi). O endpoint export resolve esse problema na raiz. O ping@1
+paginado continua usado APENAS pro cache check leve (1 row, sem
+exposicao ao bug de overlap).
 
-Comportamento (analogo a fetch_b3_trades.py):
+Comportamento:
   - Janela: 5 dias uteis B3 mais recentes (HOJE se dia util + D-1..D-4).
-  - Para cada dia: cache check (ping leve page_size=1, compara 3
-    indicadores com `meta` local — lastUpdateDate + totalRecords +
-    firstPageBytes). Cache-hit -> pula fetch full. Cache-miss
-    (qualquer divergencia, metadata ausente, JSON corrompido, ping
-    falho) -> fetch full paginado (n_rows<pageSize OU teto 2000).
+  - Para cada dia: cache check (ping leve POST .../1/1) com 3
+    indicadores (lastUpdateDate + totalRecords + firstPageBytes).
+    Cache-hit -> pula fetch full. Cache-miss / --force -> fetch full
+    via export CSV.
   - Sucesso -> grava data/b3_trades_consolidated/<date>.json (atomico
-    via .tmp + rename) com `meta` populado a partir do ping.
+    via .tmp + rename) com `meta` populado a partir do ping@1.
   - Falha de rede/timeout/5xx apos retry: preserva arquivo existente.
   - 403/404: pula (FDS/feriado/nao publicado), preserva arquivo.
   - Exit != 0 se qualquer dia falhar (cache-hit + indisponivel nao
     contam como falha).
   - NUNCA gera dados sinteticos/fallback.
 
-Esquema do JSON local: ver mesma justificativa em fetch_b3_trades.py
-— adicionamos chave top-level `meta` ao schema existente sem mover
-`rows` para sub-chave. `build_dashboard.py` (PR #151) continua lendo
-`payload['rows']` sem alteracao.
+Esquema do JSON local: inalterado (compat com build_dashboard).
+17 colunas na ordem fixa abaixo. `meta` continua existindo no top-level
+com a mesma estrutura (schemaVersion=2).
 
 Modo self-test (CLI: `--self-test`): roda 6 cenarios de cache check
-sem rede + smoke test do dedup defensivo (7 cenarios totais).
+sem rede + teste de parse CSV (7 cenarios totais).
 
 Modo `--force` (CLI: `--force [YYYY-MM-DD]`): ignora cache check e
-refetch full. Util para recuperar de arquivos com duplicacao legacy
-do bug de paginacao B3 (paginas sobrepostas) corrigido nesta versao.
+refetch full via export CSV.
 
-Persistencia: data/b3_trades_consolidated/{YYYY-MM-DD}.json +
-manifest.json.
+Persistencia: data/b3_trades_consolidated/{YYYY-MM-DD}.json + manifest.
 
-Schema das 17 colunas (ordem fixa retornada pela B3):
+Schema das 17 colunas (ordem fixa):
   1 data_negocio    2 data_referencia 3 codigo_if    4 instrumento
   5 isin            6 emissor         7 data_liquidacao
   8 quantidade      9 pmp            10 preco       11 volume_unit
  12 min            13 max            14 n_negocios  15 volume_total
- 16 grupo (INTRAGRUPO / "-")          17 extra
+ 16 grupo (INTRAGRUPO / EXTRAGRUPO / "-")            17 extra
 """
 
 from __future__ import annotations
@@ -68,32 +70,22 @@ from b3_api import (
     build_meta_from_ping,
     check_cache,
     extract_total_records,
+    fetch_export_csv,
+    get_col,
     last_n_business_days,
+    parse_br_date_iso,
+    parse_br_float,
+    parse_br_int_optional,
+    parse_export_csv,
     ping_first_page,
-    post_page,
 )
 
 
 TABLE_NAME = "ConsolidatedRecords"
-# PAGE_SIZE = 100. Tentativa anterior (PR #158) subiu para 1000 para reduzir
-# chamadas paginadas, mas observou-se que o endpoint paginado da B3
-# (/bdi/table/ConsolidatedRecords) NAO entrega bem paginas de 1000 itens:
-# em 2026-05-15 retornou apenas 27.143 das 41.202 linhas esperadas (perda
-# de 34% / R$ 6.6 Bi, incluindo LF002600ENT). Mantemos 100 (valor original)
-# e dependemos do dedup defensivo por tupla completa para mitigar o bug de
-# paginas SOBREPOSTAS observado pela B3 (2026-05-15: 32 de 413 paginas com
-# 100% conteudo duplicado, total 11598 linhas duplicadas em 41202).
-PAGE_SIZE = 100
-MAX_PAGES = 2000
-SLEEP_BETWEEN_PAGES = 0.1
 REFRESH_WINDOW_DAYS = 5
-# Threshold de coverage abaixo do qual logamos AVISO. total_b3_records vem
-# do ping@1 (==pageCount@page_size=1). Se apos dedup tivermos muito menos
-# linhas unicas que isso, a paginacao B3 perdeu dados — caller deve
-# investigar / retry com `--force` na proxima oportunidade.
-COVERAGE_WARN_THRESHOLD = 0.95
 
-# Schema fixo (ordem que a B3 retorna em ConsolidatedRecords).
+# Schema fixo (ordem que o JSON local persiste). Mantido inalterado pra
+# compat com build_dashboard.py (que indexa por posicao em _CONS_COL_*).
 COLUMNS = [
     "data_negocio",
     "data_referencia",
@@ -128,106 +120,62 @@ def _write_payload_atomic(out_path: Path, payload: dict) -> None:
     os.replace(tmp_path, out_path)
 
 
-def _dedup_rows(rows: list) -> tuple[list, int]:
-    """Dedup defensivo de linhas por tupla completa (todas as 17 colunas).
+def _map_consolidated_row(raw: list, col_index: dict[str, int]) -> list:
+    """Mapeia uma linha do CSV B3 (16 cols pt-BR) pro schema local
+    (17 cols snake_case). `data_negocio` eh duplicado em `data_referencia`
+    (mesmo valor) — historico mantido pelo build_dashboard.
 
-    Endpoint paginado da B3 (/bdi/table/ConsolidatedRecords) foi observado
-    retornando paginas com conteudo SOBREPOSTO (dia 2026-05-15: 32 paginas
-    com 100% das linhas duplicadas + 152 paginas com overlap parcial,
-    totalizando 11598 linhas duplicadas em 41202). pageCount da B3 reporta
-    o numero esperado mas a entrega de dados nao eh consistente — pages
-    diferentes retornam o mesmo conteudo.
-
-    Esta funcao garante que o JSON gravado NUNCA tem linhas duplicadas,
-    preservando a primeira ocorrencia. Retorna (linhas_unicas,
-    duplicadas_removidas).
+    `isin` em '-'/'' fica '-' (string), como no schema atual. `grupo`
+    em '' fica '-' (compat com rows sem classificacao). `n_negocios`
+    em '-' fica None (visto no JSON atual; build_dashboard ignora None).
+    `extra` (Oscilacao) eh armazenado como string raw — no schema atual
+    a coluna 16 tem strings tanto pra valor numerico quanto '-'.
     """
-    seen: set = set()
-    deduped: list = []
-    for row in rows:
-        key = tuple(row)
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(row)
-    return deduped, len(rows) - len(deduped)
+    g = lambda *names: get_col(raw, col_index, *names)
+    data_neg = parse_br_date_iso(g("Data negocio", "Data negócio"))
+    return [
+        data_neg,
+        data_neg,
+        g("Codigo IF", "Código IF").strip(),
+        g("Instrumento financeiro").strip(),
+        g("Codigo ISIN", "Código ISIN").strip() or "-",
+        g("Emissor").strip(),
+        parse_br_date_iso(g("Data liquidacao", "Data liquidação")),
+        parse_br_float(g("Quantidade negociada")),
+        parse_br_float(g("Preco medio", "Preço médio")),
+        parse_br_float(g("Ultimo preco", "Último preço")),
+        parse_br_float(g("Preco de referencia", "Preço de referência")),
+        parse_br_float(g("Preco minimo", "Preço mínimo")),
+        parse_br_float(g("Preco maximo", "Preço máximo")),
+        parse_br_int_optional(g("Numero de negocios", "Número de negócios")),
+        parse_br_float(g("Volume financeiro (R$)", "Volume financeiro")),
+        g("Classificacao do negocio", "Classificação do negócio").strip() or "-",
+        g("Oscilacao", "Oscilação").strip() or "-",
+    ]
 
 
 def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
-    """Fetch full paginado + escrita atomica para um dia.
+    """Fetch full via export CSV + escrita atomica pra um dia.
 
-    `ping_envelope` (do cache check) eh reaproveitado para popular o
-    `meta`. Se None (ping falhou), tenta re-pingar ao final; se isso
-    tambem falhar, grava sem `meta` (proximo run dara cache-miss com
+    `ping_envelope` (do cache check ou do --force) eh reaproveitado pra
+    popular o `meta` (e last_b3_update/total_b3_records). Se None
+    (ping falhou), tenta re-pingar ao final; se isso tambem falhar,
+    grava sem `meta` (proximo run dara cache-miss com
     motivo=metadata_ausente).
 
-    Apos completar a paginacao: aplica dedup defensivo por tupla
-    completa para eliminar linhas duplicadas (B3 retorna paginas
-    sobrepostas — ver _dedup_rows). NUNCA acumula sobre arquivo
-    existente: a escrita atomica via .tmp + rename SUBSTITUI o JSON
-    do dia completamente.
+    Sem paginacao, sem dedup defensivo: o export CSV ja entrega o dump
+    completo num unico request. A escrita atomica via .tmp + rename
+    SUBSTITUI o JSON do dia completamente — nunca acumula.
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     out_path = DATA_DIR / f"{date_iso}.json"
 
-    first = post_page(TABLE_NAME, date_iso, 1, PAGE_SIZE)
-    tbl = first.get("table") or {}
-    last_b3_update = first.get("lastUpdateDate")
-    total_b3_records_envelope = extract_total_records(first)
-    raw_rows: list = list(tbl.get("values") or [])
-    pages_fetched = 1
-    last_page_size = len(raw_rows)
+    csv_text = fetch_export_csv(TABLE_NAME, date_iso)
+    col_index, raw_rows = parse_export_csv(csv_text)
+    rows = [_map_consolidated_row(r, col_index) for r in raw_rows]
 
-    # Paginacao: condicao de parada = n_rows<PAGE_SIZE OU teto MAX_PAGES.
-    # pageCount da B3 nem sempre confiavel; usa tamanho da pagina como sinal.
-    while last_page_size >= PAGE_SIZE and pages_fetched < MAX_PAGES:
-        time.sleep(SLEEP_BETWEEN_PAGES)
-        next_page = pages_fetched + 1
-        resp = post_page(TABLE_NAME, date_iso, next_page, PAGE_SIZE)
-        values = ((resp.get("table") or {}).get("values")) or []
-        raw_rows.extend(values)
-        pages_fetched += 1
-        last_page_size = len(values)
-        if last_page_size == 0:
-            break
-
-    if pages_fetched >= MAX_PAGES and last_page_size >= PAGE_SIZE:
-        print(
-            f"[{date_iso}] AVISO: teto de {MAX_PAGES} paginas atingido com pagina cheia; "
-            f"possivel truncamento. Verificar PAGE_SIZE/MAX_PAGES."
-        )
-
-    rows_received = len(raw_rows)
-    rows, duplicates_removed = _dedup_rows(raw_rows)
-
-    total_b3_records = (
-        total_b3_records_envelope
-        if total_b3_records_envelope is not None
-        else len(rows)
-    )
-
-    # AVISO se coverage caiu abaixo do threshold. Sinaliza que a B3
-    # devolveu paginas com conteudo sobreposto sem entregar dados que
-    # ela diz ter (pageCount@page_size=1 == totalRecords). Nao bloqueia
-    # a gravacao: dedup ja garante consistencia interna do JSON.
-    # Numero esperado de linhas para PAGE_SIZE atual: pageCount@PAGE_SIZE.
-    # Mas total_b3_records aqui vem do ping@1 (==pageCount@page_size=1),
-    # que eh a contagem de REGISTROS. Comparacao direta funciona.
-    expected_records = None
-    if ping_envelope is not None:
-        # ping_envelope.pageCount eh pageCount@page_size=1 == total records.
-        ping_total = ((ping_envelope.get("table") or {}).get("pageCount"))
-        if isinstance(ping_total, int) and ping_total > 0:
-            expected_records = ping_total
-    if expected_records is not None and len(rows) < expected_records * COVERAGE_WARN_THRESHOLD:
-        print(
-            f"[{date_iso}] AVISO: coverage baixo apos dedup — "
-            f"{len(rows)} unicas vs {expected_records} esperadas pela B3 "
-            f"(ratio {len(rows)/expected_records:.1%}). Possivel paginacao B3 "
-            f"com pages sobrepostas; rodar com --force na proxima oportunidade."
-        )
-
-    meta = None
+    last_b3_update = None
+    total_b3_records: int | None = None
     if ping_envelope is None:
         try:
             ping_envelope = ping_first_page(TABLE_NAME, date_iso)
@@ -237,6 +185,13 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
                 f"meta nao sera gravado neste run (proximo run refetcha)"
             )
             ping_envelope = None
+    if ping_envelope is not None:
+        last_b3_update = ping_envelope.get("lastUpdateDate")
+        total_b3_records = extract_total_records(ping_envelope)
+    if total_b3_records is None:
+        total_b3_records = len(rows)
+
+    meta = None
     if ping_envelope is not None:
         meta = build_meta_from_ping(
             ping_envelope, datetime.now(timezone.utc).isoformat()
@@ -253,9 +208,7 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
         "rows": rows,
         "stats": {
             "n_rows": len(rows),
-            "n_rows_received": rows_received,
-            "n_duplicates_removed": duplicates_removed,
-            "n_pages_fetched": pages_fetched,
+            "csv_bytes": len(csv_text),
         },
     }
     if meta is not None:
@@ -264,15 +217,11 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
     _write_payload_atomic(out_path, payload)
     size_mb = out_path.stat().st_size / (1024 * 1024)
 
-    # Numero formatado: separador de milhar PT-BR (ponto) via replace.
-    rec_fmt = f"{rows_received:,}".replace(",", ".")
-    dup_fmt = f"{duplicates_removed:,}".replace(",", ".")
     uniq_fmt = f"{len(rows):,}".replace(",", ".")
+    csv_kb = len(csv_text) / 1024
     print(
-        f"[{date_iso}] OK: {rec_fmt} recebida(s) | "
-        f"{dup_fmt} duplicada(s) removida(s) | "
-        f"{uniq_fmt} unica(s) | {pages_fetched} pagina(s) | "
-        f"{size_mb:.2f} MB"
+        f"[{date_iso}] OK: {uniq_fmt} linha(s) | "
+        f"CSV {csv_kb:.0f}KB | {size_mb:.2f} MB (export)"
     )
 
     _update_manifest(date_iso, len(rows), out_path.name)
@@ -280,9 +229,6 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
         "date": date_iso,
         "status": "updated",
         "n_rows": len(rows),
-        "n_rows_received": rows_received,
-        "n_duplicates_removed": duplicates_removed,
-        "n_pages": pages_fetched,
         "size_mb": size_mb,
     }
 
@@ -290,9 +236,7 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
 def fetch_day(date_iso: str, *, force: bool = False) -> dict:
     """Busca consolidated de UM dia com cache check + fetch on miss.
 
-    `force=True` ignora cache check e refaz o fetch full (util para
-    recuperar de cenarios onde o arquivo existente tem duplicacao
-    legacy do bug de paginacao B3 pre-correcao).
+    `force=True` ignora cache check e refaz o fetch full via export CSV.
 
     Retorna dict com `status` em {'cache_hit', 'updated', 'unavailable'}
     e `cache_motivo` (cache_hit | metadata_ausente | json_corrompido |
@@ -305,9 +249,6 @@ def fetch_day(date_iso: str, *, force: bool = False) -> dict:
     out_path = DATA_DIR / f"{date_iso}.json"
 
     if force:
-        # Bypass do cache check: pinga so para popular o meta, mas
-        # sempre refetch full. Falha do ping vira ping_envelope=None;
-        # _fetch_full_day repinga depois ou grava sem meta.
         motivo = "forced"
         try:
             ping_envelope = ping_first_page(TABLE_NAME, date_iso)
@@ -384,12 +325,9 @@ def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS, *, force: bool = False) ->
     """Refresh consolidated dos N du B3 mais recentes (com cache check).
 
     Wall-clock budget (env `B3_CONSOLIDATED_BUDGET_SECONDS`, default 9000s)
-    complementa o HTTP timeout: cobre LENTIDAO genuina e bugs de paginacao
-    onde requests individuais respondem mas o conjunto extrapola. Quando
-    estoura, dias restantes sao pulados; arquivos existentes preservados.
-    Cache-hits consomem ~poucos segundos (so o ping), entao o budget
-    raramente eh atingido em slots noturnos onde a maioria dos dias bate
-    cache.
+    cobre LENTIDAO genuina do export CSV (1 request mas pode ser grande).
+    Quando estoura, dias restantes sao pulados; arquivos existentes
+    preservados. Cache-hits consomem ~poucos segundos (so o ping@1).
 
     Exit code:
       - 0: TODOS os N dias completados ('cache_hit', 'updated' ou
@@ -397,7 +335,7 @@ def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS, *, force: bool = False) ->
       - 1: qualquer dia pulado por wall-clock OU falha apos retries.
 
     Se env `B3_CONSOLIDATED_CACHE_SUMMARY` estiver setado, grava
-    summary (hits/misses/motivos) no path indicado para consumo pelo
+    summary (hits/misses/motivos) no path indicado pra consumo pelo
     workflow YAML.
     """
     budget_seconds = int(os.environ.get("B3_CONSOLIDATED_BUDGET_SECONDS", "9000"))
@@ -454,13 +392,10 @@ def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS, *, force: bool = False) ->
                 miss_reasons.append(motivo)
             completed_days.append(date_iso)
             print(
-                f"[ok] Dia {date_iso} ({result['n_pages']} paginas, "
+                f"[ok] Dia {date_iso} ({result['n_rows']} rows, "
                 f"{result['size_mb']:.2f}MB)"
             )
         else:
-            # 'unavailable' (B3UnavailableError 403/404): FDS/feriado/nao
-            # publicado. Conta como completed: nao temos o que fazer aqui,
-            # gap-fill em proxima execucao se a B3 publicar.
             completed_days.append(date_iso)
             print(f"[ok] Dia {date_iso} (indisponivel na B3 -- FDS/feriado/nao publicado)")
 
@@ -495,8 +430,26 @@ def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS, *, force: bool = False) ->
 
 
 # ----------------------------------------------------------------------------
-# Self-test (offline): valida os 6 cenarios de cache check sem rede.
+# Self-test (offline): 6 cenarios de cache check + 1 cenario de parse CSV.
 # ----------------------------------------------------------------------------
+_SAMPLE_CSV_CONSOLIDATED = (
+    "ANBIMA Servicos\n"
+    "Negocios Consolidados Renda Fixa\n"
+    "Data Referencia: 15/05/2026\n"
+    "\n"
+    "Glossario...\n"
+    "Data negocio;Codigo IF;Instrumento financeiro;Codigo ISIN;Emissor;"
+    "Data liquidacao;Quantidade negociada;Preco minimo;Preco medio;"
+    "Preco maximo;Ultimo preco;Preco de referencia;Numero de negocios;"
+    "Volume financeiro (R$);Classificacao do negocio;Oscilacao\n"
+    "15/05/2026;AALM12;DEB;BRAALMDBS017;EMISSOR1;16/05/2026;"
+    "47.318;1.036,99;1.036,99;1.037,18;1.036,99;1.037,01;"
+    "9;49.068.083,00;EXTRAGRUPO;0,10\n"
+    "15/05/2026;LCA1234;LCA;-;EMISSOR2;16/05/2026;"
+    "0;0,00;1.000,00;0,00;0,00;1.000,00;-;1.000,00;-;-\n"
+)
+
+
 def _run_self_test() -> int:
     import tempfile
     import b3_api
@@ -517,8 +470,6 @@ def _run_self_test() -> int:
         **ping_envelope_base,
         "table": {
             "pageCount": ping_envelope_base["table"]["pageCount"],
-            # codigo_if 'DEB1_ALT' troca o comprimento do payload sem mexer
-            # em lastUpdate nem pageCount -> isola firstPageBytes_changed.
             "values": [["2026-05-14", "2026-05-14", "DEB1_ALT_EXTRA", "DEB"] + [""] * 13],
         },
     }
@@ -581,34 +532,36 @@ def _run_self_test() -> int:
     finally:
         b3_api.post_page = original_post_page
 
-    # 7o cenario: dedup defensivo (sem rede). Garante que _dedup_rows
-    # elimina linhas duplicadas por tupla completa preservando ordem da
-    # primeira ocorrencia. Cobre o bug das paginas sobrepostas da B3.
-    sample = [
-        ["2026-05-15", "2026-05-15", "DEB1", "DEB", "ISIN1", "EMI", "2026-05-16",
-         100, 1000.0, 1000.0, 100000.0, 1000.0, 1000.0, 5, 500000.0, "INTRA", ""],
-        ["2026-05-15", "2026-05-15", "DEB2", "DEB", "ISIN2", "EMI", "2026-05-16",
-         200, 1100.0, 1100.0, 220000.0, 1100.0, 1100.0, 3, 660000.0, "-", ""],
-        # duplicata exata da primeira linha
-        ["2026-05-15", "2026-05-15", "DEB1", "DEB", "ISIN1", "EMI", "2026-05-16",
-         100, 1000.0, 1000.0, 100000.0, 1000.0, 1000.0, 5, 500000.0, "INTRA", ""],
-        ["2026-05-15", "2026-05-15", "DEB3", "DEB", "ISIN3", "EMI", "2026-05-16",
-         50, 990.0, 990.0, 49500.0, 990.0, 990.0, 1, 49500.0, "INTRA", ""],
-        # duplicata exata da segunda linha
-        ["2026-05-15", "2026-05-15", "DEB2", "DEB", "ISIN2", "EMI", "2026-05-16",
-         200, 1100.0, 1100.0, 220000.0, 1100.0, 1100.0, 3, 660000.0, "-", ""],
-    ]
-    deduped, removed = _dedup_rows(sample)
-    dedup_ok = (len(deduped) == 3 and removed == 2 and
-                deduped[0][2] == "DEB1" and deduped[1][2] == "DEB2" and
-                deduped[2][2] == "DEB3")
-    status = "OK" if dedup_ok else "FAIL"
-    print(
-        f"  [{status}] dedup defensivo: kept={len(deduped)} removed={removed} "
-        f"(esperado kept=3 removed=2)"
+    # Cenario adicional: parse CSV (substitui o teste de dedup defensivo
+    # que era necessario contra o bug de paginas sobrepostas — agora o
+    # export CSV resolve isso na raiz). Valida que parse_export_csv +
+    # _map_consolidated_row produzem rows compativeis com o schema.
+    col_index, raw_rows = b3_api.parse_export_csv(_SAMPLE_CSV_CONSOLIDATED)
+    parsed = [_map_consolidated_row(r, col_index) for r in raw_rows]
+    csv_ok = (
+        len(parsed) == 2
+        and parsed[0][2] == "AALM12"     # codigo_if
+        and parsed[0][3] == "DEB"         # instrumento
+        and parsed[0][4] == "BRAALMDBS017"  # isin
+        and parsed[0][7] == 47318.0       # quantidade
+        and parsed[0][8] == 1036.99       # pmp
+        and parsed[0][13] == 9            # n_negocios
+        and abs(parsed[0][14] - 49068083.0) < 1e-6  # volume_total
+        and parsed[0][15] == "EXTRAGRUPO"  # grupo
+        and parsed[1][4] == "-"           # isin '-' preservado
+        and parsed[1][13] is None         # n_negocios '-' -> None
+        and parsed[1][15] == "-"          # grupo '-' preservado
+        and parsed[0][0] == "2026-05-15T00:00:00"  # data_negocio convertida
+        and parsed[0][1] == parsed[0][0]  # data_referencia == data_negocio
     )
-    if not dedup_ok:
-        failures.append("dedup defensivo")
+    status = "OK" if csv_ok else "FAIL"
+    print(
+        f"  [{status}] parse CSV: rows={len(parsed)} "
+        f"codigo_if={parsed[0][2] if parsed else None} "
+        f"quantidade={parsed[0][7] if parsed else None}"
+    )
+    if not csv_ok:
+        failures.append("parse CSV")
 
     print()
     if failures:
