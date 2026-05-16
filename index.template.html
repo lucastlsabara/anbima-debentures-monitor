@@ -3636,19 +3636,6 @@ function trd_numericFilter(term, value) {
   return String(value).includes(s);
 }
 
-// Fetch B3 trades por dia (trade-by-trade). Cache compartilhado entre as
-// visualizacoes (Visao Geral e MODO A/B da aba Pesquisa de Trades).
-async function trd_fetchDay(entry) {
-  if (TRD_DAY_CACHE.has(entry.date)) return TRD_DAY_CACHE.get(entry.date);
-  const path = "data/b3_trades/" + entry.filename;
-  const url = BUILD_VERSION ? path + "?v=" + BUILD_VERSION : path;
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(entry.date + " HTTP " + r.status);
-  const j = await r.json();
-  TRD_DAY_CACHE.set(entry.date, j);
-  return j;
-}
-
 function trd_rowToObj(arr, date) {
   const obj = { date };
   for (let i = 0; i < TRD_COLUMNS.length; i++) obj[TRD_COLUMNS[i]] = arr[i];

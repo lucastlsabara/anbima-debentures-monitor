@@ -61,7 +61,6 @@ from pathlib import Path
 
 from b3_api import (
     B3UnavailableError,
-    CACHE_SCHEMA_VERSION,
     build_meta_from_ping,
     check_cache,
     extract_total_records,
