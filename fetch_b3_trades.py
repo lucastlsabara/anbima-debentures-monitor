@@ -61,10 +61,8 @@ from pathlib import Path
 import sectors
 from b3_api import (
     B3UnavailableError,
-    CACHE_SCHEMA_VERSION,
     build_meta_from_ping,
     check_cache,
-    extract_ping_indicators,
     extract_total_records,
     ping_first_page,
     post_page,
