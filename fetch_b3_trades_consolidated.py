@@ -75,13 +75,15 @@ from b3_api import (
 
 
 TABLE_NAME = "ConsolidatedRecords"
-# PAGE_SIZE = 1000 (era 100). Bumped em fix-fetcher para reduzir chamadas
-# paginadas — o endpoint paginado da B3 (/bdi/table/ConsolidatedRecords)
-# foi observado retornando paginas SOBREPOSTAS em alguns dias (2026-05-15:
-# 32 de 413 paginas com 100% conteudo duplicado, total 11598 linhas
-# duplicadas em 41202; e 11709 chaves da B3 ausentes pelo mesmo motivo).
-# Menos paginas = menor janela para o bug de paginacao da B3 se manifestar.
-PAGE_SIZE = 1000
+# PAGE_SIZE = 100. Tentativa anterior (PR #158) subiu para 1000 para reduzir
+# chamadas paginadas, mas observou-se que o endpoint paginado da B3
+# (/bdi/table/ConsolidatedRecords) NAO entrega bem paginas de 1000 itens:
+# em 2026-05-15 retornou apenas 27.143 das 41.202 linhas esperadas (perda
+# de 34% / R$ 6.6 Bi, incluindo LF002600ENT). Mantemos 100 (valor original)
+# e dependemos do dedup defensivo por tupla completa para mitigar o bug de
+# paginas SOBREPOSTAS observado pela B3 (2026-05-15: 32 de 413 paginas com
+# 100% conteudo duplicado, total 11598 linhas duplicadas em 41202).
+PAGE_SIZE = 100
 MAX_PAGES = 2000
 SLEEP_BETWEEN_PAGES = 0.1
 REFRESH_WINDOW_DAYS = 5
