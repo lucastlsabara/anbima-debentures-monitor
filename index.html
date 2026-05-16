@@ -719,6 +719,7 @@
           <option value="all" selected>Todos</option>
           <option value="intra">Intragrupo</option>
           <option value="extra">Extragrupo</option>
+          <option value="unclassified">Sem Classificação</option>
         </select>
       </label>
       <span id="tr2-status" class="trd-status"></span>
@@ -4358,20 +4359,37 @@ function _tr2_toNumber(v) {
 }
 
 // Classificacao intra/extragrupo: coluna nativa `grupo` da B3.
-// "INTRAGRUPO" (case-insensitive) = intra; qualquer outro valor = extra.
-function _tr2_consIsIntra(r) {
-  if (!r) return false;
+// Retorna "INTRAGRUPO", "EXTRAGRUPO" ou "" (sem classificacao — valores
+// "-", null, vazio ou desconhecidos). B3 publica grupo apenas para
+// DEB/CDB/LF/CRA/CRI/LFSC/LFSN; demais instrumentos vem com grupo='-'.
+function _tr2_consGroup(r) {
+  if (!r) return "";
   const v = r.grupo;
-  if (v == null) return false;
-  return String(v).trim().toUpperCase() === "INTRAGRUPO";
+  if (v == null) return "";
+  const s = String(v).trim().toUpperCase();
+  if (s === "INTRAGRUPO") return "INTRAGRUPO";
+  if (s === "EXTRAGRUPO") return "EXTRAGRUPO";
+  return "";
+}
+
+function _tr2_consIsIntra(r) {
+  return _tr2_consGroup(r) === "INTRAGRUPO";
 }
 
 // Aplica TR2_GROUP em TR2_RANGE_ROWS quando fonte = consolidated.
 function _tr2_filteredRows() {
   if (!TR2_RANGE_ROWS) return [];
   if (TR2_SOURCE !== "consolidated" || TR2_GROUP === "all") return TR2_RANGE_ROWS;
-  const want = TR2_GROUP === "intra";
-  return TR2_RANGE_ROWS.filter(r => _tr2_consIsIntra(r) === want);
+  switch (TR2_GROUP) {
+    case "intra":
+      return TR2_RANGE_ROWS.filter(r => _tr2_consGroup(r) === "INTRAGRUPO");
+    case "extra":
+      return TR2_RANGE_ROWS.filter(r => _tr2_consGroup(r) === "EXTRAGRUPO");
+    case "unclassified":
+      return TR2_RANGE_ROWS.filter(r => _tr2_consGroup(r) === "");
+    default:
+      return TR2_RANGE_ROWS;
+  }
 }
 
 // Coluna `grupo` e' nativa do schema ConsolidatedRecords — selectbox
@@ -4381,12 +4399,12 @@ function tr2_updateGroupSelectAvailability() {
   if (!sel) return;
   const enabled = TR2_SOURCE === "consolidated";
   for (const opt of sel.options) {
-    if (opt.value === "intra" || opt.value === "extra") {
+    if (opt.value === "intra" || opt.value === "extra" || opt.value === "unclassified") {
       opt.disabled = !enabled;
       opt.title = "";
     }
   }
-  if (!enabled && (TR2_GROUP === "intra" || TR2_GROUP === "extra")) {
+  if (!enabled && TR2_GROUP !== "all") {
     TR2_GROUP = "all";
     sel.value = "all";
   }
@@ -4817,8 +4835,11 @@ function _tr2_buildConsTable(containerId, rows) {
   };
   const fmtGrupo = c => {
     const v = c.getValue();
-    if (v == null || v === "" || v === "-") return "Extragrupo";
-    return String(v).trim().toUpperCase() === "INTRAGRUPO" ? "Intragrupo" : "Extragrupo";
+    if (v == null || v === "" || v === "-") return "Sem Classificação";
+    const s = String(v).trim().toUpperCase();
+    if (s === "INTRAGRUPO") return "Intragrupo";
+    if (s === "EXTRAGRUPO") return "Extragrupo";
+    return "Sem Classificação";
   };
 
   const _set = (key) => {
