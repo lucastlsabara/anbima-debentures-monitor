@@ -9,7 +9,10 @@ com 3 indicadores — `lastUpdateDate` + `totalRecords` + `firstPageBytes`
 — refetch full SOMENTE dos dias que mudaram); o **intraday** roda a
 cada 30min durante o pregão (10h-19h BRT seg-sex) e atualiza só o
 Trade-by-Trade da B3 do dia para que o site reflita os negócios em
-tempo quase real. O GitHub Pages re-deploya o site sozinho a cada push:
+tempo quase real. O GitHub Pages re-deploya o site sozinho a cada push.
+Não há mais workflows de backup/fallback manuais — toda recuperação é
+feita pelo próprio canônico (que reprocessa via `workflow_dispatch` com
+`target_date`) e pelos cache checks + gap-fill ANBIMA:
 
 - [`.github/workflows/anbima_b3_probe.yml`](.github/workflows/anbima_b3_probe.yml)
   — **canônico (Fase 4)**. Cron `0 0,3,6 * * 2-6` (00h, 03h, 06h UTC
@@ -36,11 +39,6 @@ tempo quase real. O GitHub Pages re-deploya o site sozinho a cada push:
   ficam no canônico. Concurrency group
   `anbima-b3-pipeline` compartilhado com o canônico evita push
   simultâneo se janelas se sobreporem.
-- [`.github/workflows/daily_update.yml`](.github/workflows/daily_update.yml)
-  e [`.github/workflows/b3_trades.yml`](.github/workflows/b3_trades.yml)
-  — **backup manual** (apenas `workflow_dispatch`, sem cron). Use só
-  para reprocessar um dia específico se o probe canônico falhar.
-
 Acompanhar execuções em
 [Actions](https://github.com/lucastlsabara/anbima-debentures-monitor/actions).
 
@@ -283,14 +281,6 @@ importar qualquer coisa, deixando o site sem trades intraday até a noite.
 - Commits do intraday usam prefixo `chore: B3 intraday refresh ...` para
   diferenciar do canônico (`feat: ANBIMA + B3 snapshot ...`) no `git log`.
 
-### Workflows backup manuais
-
-[`daily_update.yml`](.github/workflows/daily_update.yml) e
-[`b3_trades.yml`](.github/workflows/b3_trades.yml) continuam disponíveis
-mas **sem cron** (apenas `workflow_dispatch`). Use só para fallback se o
-probe estiver com problema ou para reprocessar dia/range específico fora
-da janela do probe.
-
 ## Como rodar manualmente
 
 ```bash
@@ -352,26 +342,18 @@ na aba **Trades** do dashboard:
 | Negócios consolidados | `fetch_b3_trades_consolidated.py` | `/bdi/table/{TableName}/...` | 1 linha = 1 instrumento × dia (vol total, preço médio, min/max) |
 
 ```bash
-# 1. backfill inicial (dias úteis entre 2026-04-24 e hoje, idempotente)
-python3 backfill_b3_trades.py
-python3 backfill_b3_trades_consolidated.py
-
-# 1a. range customizado
-python3 backfill_b3_trades.py              2026-04-24 2026-05-01
-python3 backfill_b3_trades_consolidated.py 2026-04-24 2026-05-01
-
-# 2. refresh forçado dos 5 dias úteis B3 mais recentes (delete + write).
+# 1. refresh forçado dos 5 dias úteis B3 mais recentes (delete + write).
 #    Cada execução zera e regrava esses 5 dias para capturar correções
 #    retroativas (cancelamento de trades, ajuste de PU no Boletim Diário).
 #    Histórico antigo (>5 dias úteis) NUNCA é tocado.
 python3 fetch_b3_trades.py
 python3 fetch_b3_trades_consolidated.py
 
-# 2a. modo unitário (mesmo padrão delete+write, 1 dia)
+# 1a. modo unitário (mesmo padrão delete+write, 1 dia)
 python3 fetch_b3_trades.py              2026-05-08
 python3 fetch_b3_trades_consolidated.py 2026-05-08
 
-# 3. se ajustar a lógica em sectors.py, reaplica a classificação
+# 2. se ajustar a lógica em sectors.py, reaplica a classificação
 #    em todos os snapshots já gravados (idempotente, sem rede)
 python3 recompute_sectors.py
 ```

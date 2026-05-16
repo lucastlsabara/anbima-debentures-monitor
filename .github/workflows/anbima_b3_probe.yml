@@ -1,6 +1,6 @@
 name: ANBIMA + B3 Probe & Import
 
-# Workflow UNICO que substitui o cron de daily_update.yml e b3_trades.yml.
+# Workflow UNICO da pipeline ANBIMA + B3 (canonico).
 #
 # Roda 3 slots noturnos por dia util B3 (21h, 00h, 03h BRT). Cada
 # execucao processa o dia util corrente (determinado pelo step

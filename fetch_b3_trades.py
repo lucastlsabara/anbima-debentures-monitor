@@ -41,7 +41,6 @@ falha. 403/404 (FDS/feriado/dia ainda nao publicado): pula sem alterar
 arquivo.
 
 Historico antigo (>5 dias uteis) NUNCA eh tocado por este script.
-Para backfill manual, use backfill_b3_trades.py.
 
 Persiste data/b3_trades/{YYYY-MM-DD}.json em formato colunar minificado
 + `meta` e atualiza data/b3_trades/manifest.json incrementalmente
