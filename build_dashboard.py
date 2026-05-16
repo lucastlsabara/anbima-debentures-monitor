@@ -390,12 +390,17 @@ def _top_n_aggregate(rows: list, key_idx: int, *, top_n: int = 20,
                      extra_field: str | None = None) -> list[dict]:
     """Agrega `rows` (já filtrado por DEB) por chave e retorna top N por volume.
 
-    Cada agregado expõe volume_total, volume_extra, pct_extra e n_trades. O
+    Considera apenas linhas com `grupo == "EXTRAGRUPO"`; INTRAGRUPO e sem
+    classificação ("-" / vazio) são descartados antes da agregação. O
     parâmetro `extra_field` controla se inclui o `emissor` no dict (top
     papéis), que não faz sentido para top emissores (a chave já é o emissor).
     """
+    extra_rows = [
+        r for r in rows
+        if str(r[_CONS_COL_GRUPO] or "").strip().upper() == "EXTRAGRUPO"
+    ]
     agg: dict[str, dict] = {}
-    for r in rows:
+    for r in extra_rows:
         key = r[key_idx]
         if not key:
             continue
@@ -405,26 +410,18 @@ def _top_n_aggregate(rows: list, key_idx: int, *, top_n: int = 20,
                 "_key": key,
                 "_emissor": r[_CONS_COL_EMISSOR],
                 "volume_total": 0.0,
-                "volume_extra": 0.0,
                 "n_trades": 0,
             }
             agg[key] = cur
-        vol = r[_CONS_COL_VOLUME] or 0.0
-        cur["volume_total"] += vol
-        if not _is_intragrupo(r[_CONS_COL_GRUPO]):
-            cur["volume_extra"] += vol
+        cur["volume_total"] += r[_CONS_COL_VOLUME] or 0.0
         n = r[_CONS_COL_N_NEG]
         if isinstance(n, (int, float)):
             cur["n_trades"] += int(n)
     items = sorted(agg.values(), key=lambda d: d["volume_total"], reverse=True)
     out: list[dict] = []
     for d in items[:top_n]:
-        vt = d["volume_total"]
-        pct = round(d["volume_extra"] / vt * 100.0, 1) if vt > 0 else 0.0
         row = {
-            "volume_total": round(vt, 2),
-            "volume_extra": round(d["volume_extra"], 2),
-            "pct_extra": pct,
+            "volume_total": round(d["volume_total"], 2),
             "n_trades": d["n_trades"],
         }
         if extra_field == "papel":

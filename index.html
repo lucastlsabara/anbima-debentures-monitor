@@ -513,11 +513,11 @@
   </div>
   <div class="grid-2x2">
     <div class="panel">
-      <h2>Top 20 emissores negociados</h2>
+      <h2>Top 20 emissores negociados <small style="font-weight:normal;opacity:0.7">(somente Extragrupo)</small></h2>
       <div id="vg-top-emissores"></div>
     </div>
     <div class="panel">
-      <h2>Top 20 papéis negociados</h2>
+      <h2>Top 20 papéis negociados <small style="font-weight:normal;opacity:0.7">(somente Extragrupo)</small></h2>
       <div id="vg-top-papeis"></div>
     </div>
   </div>
@@ -806,7 +806,7 @@ const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
 // Substituído pelo build com hash dos JSONs em data/. Em dev (template puro)
 // fica vazio e o cache do browser dita a frescor. Em produção, ?v=<hash>
 // invalida o cache do GitHub Pages quando snapshots novos chegam.
-const BUILD_VERSION = "4fa7a1fcd403";
+const BUILD_VERSION = "f29ee63067a6";
 
 const cache = new Map();
 async function loadJSON(path) {
@@ -1445,20 +1445,12 @@ function _vg_fmtMoneyShort0d(v) {
   return Math.round(v).toLocaleString("pt-BR", opts0);
 }
 
-function _vg_fmtPctExtra(p) {
-  if (p == null || isNaN(p)) return "—";
-  return p.toLocaleString("pt-BR", {
-    minimumFractionDigits: 1, maximumFractionDigits: 1,
-  }) + "%";
-}
-
 function vg_renderTopPapeis(atual) {
   const top = (atual && atual.top_papeis) || [];
   const head = `
     <thead><tr>
       <th>Ticker</th><th>Emissor</th>
       <th class="num">Volume (R$)</th>
-      <th class="num">% Extragrupo</th>
       <th class="num">Trades</th>
     </tr></thead>`;
   const body = top.map(r => `
@@ -1466,7 +1458,6 @@ function vg_renderTopPapeis(atual) {
       <td>${escapeHtml(r.ticker)}</td>
       <td>${escapeHtml(r.emissor || "")}</td>
       <td class="num">${escapeHtml(_vg_fmtMoneyShort0d(r.volume_total))}</td>
-      <td class="num">${escapeHtml(_vg_fmtPctExtra(r.pct_extra))}</td>
       <td class="num">${escapeHtml(trd_fmtIntBR(r.n_trades))}</td>
     </tr>`).join("");
   document.getElementById("vg-top-papeis").innerHTML =
@@ -1479,14 +1470,12 @@ function vg_renderTopEmissores(atual) {
     <thead><tr>
       <th>Emissor</th>
       <th class="num">Volume (R$)</th>
-      <th class="num">% Extragrupo</th>
       <th class="num">Trades</th>
     </tr></thead>`;
   const body = top.map(r => `
     <tr>
       <td>${escapeHtml(r.emissor || "(sem emissor)")}</td>
       <td class="num">${escapeHtml(_vg_fmtMoneyShort0d(r.volume_total))}</td>
-      <td class="num">${escapeHtml(_vg_fmtPctExtra(r.pct_extra))}</td>
       <td class="num">${escapeHtml(trd_fmtIntBR(r.n_trades))}</td>
     </tr>`).join("");
   document.getElementById("vg-top-emissores").innerHTML =
