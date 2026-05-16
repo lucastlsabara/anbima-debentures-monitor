@@ -37,7 +37,11 @@ Esquema do JSON local: ver mesma justificativa em fetch_b3_trades.py
 `payload['rows']` sem alteracao.
 
 Modo self-test (CLI: `--self-test`): roda 6 cenarios de cache check
-sem rede.
+sem rede + smoke test do dedup defensivo (7 cenarios totais).
+
+Modo `--force` (CLI: `--force [YYYY-MM-DD]`): ignora cache check e
+refetch full. Util para recuperar de arquivos com duplicacao legacy
+do bug de paginacao B3 (paginas sobrepostas) corrigido nesta versao.
 
 Persistencia: data/b3_trades_consolidated/{YYYY-MM-DD}.json +
 manifest.json.
@@ -71,10 +75,21 @@ from b3_api import (
 
 
 TABLE_NAME = "ConsolidatedRecords"
-PAGE_SIZE = 100
+# PAGE_SIZE = 1000 (era 100). Bumped em fix-fetcher para reduzir chamadas
+# paginadas — o endpoint paginado da B3 (/bdi/table/ConsolidatedRecords)
+# foi observado retornando paginas SOBREPOSTAS em alguns dias (2026-05-15:
+# 32 de 413 paginas com 100% conteudo duplicado, total 11598 linhas
+# duplicadas em 41202; e 11709 chaves da B3 ausentes pelo mesmo motivo).
+# Menos paginas = menor janela para o bug de paginacao da B3 se manifestar.
+PAGE_SIZE = 1000
 MAX_PAGES = 2000
 SLEEP_BETWEEN_PAGES = 0.1
 REFRESH_WINDOW_DAYS = 5
+# Threshold de coverage abaixo do qual logamos AVISO. total_b3_records vem
+# do ping@1 (==pageCount@page_size=1). Se apos dedup tivermos muito menos
+# linhas unicas que isso, a paginacao B3 perdeu dados — caller deve
+# investigar / retry com `--force` na proxima oportunidade.
+COVERAGE_WARN_THRESHOLD = 0.95
 
 # Schema fixo (ordem que a B3 retorna em ConsolidatedRecords).
 COLUMNS = [
@@ -111,6 +126,31 @@ def _write_payload_atomic(out_path: Path, payload: dict) -> None:
     os.replace(tmp_path, out_path)
 
 
+def _dedup_rows(rows: list) -> tuple[list, int]:
+    """Dedup defensivo de linhas por tupla completa (todas as 17 colunas).
+
+    Endpoint paginado da B3 (/bdi/table/ConsolidatedRecords) foi observado
+    retornando paginas com conteudo SOBREPOSTO (dia 2026-05-15: 32 paginas
+    com 100% das linhas duplicadas + 152 paginas com overlap parcial,
+    totalizando 11598 linhas duplicadas em 41202). pageCount da B3 reporta
+    o numero esperado mas a entrega de dados nao eh consistente — pages
+    diferentes retornam o mesmo conteudo.
+
+    Esta funcao garante que o JSON gravado NUNCA tem linhas duplicadas,
+    preservando a primeira ocorrencia. Retorna (linhas_unicas,
+    duplicadas_removidas).
+    """
+    seen: set = set()
+    deduped: list = []
+    for row in rows:
+        key = tuple(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped, len(rows) - len(deduped)
+
+
 def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
     """Fetch full paginado + escrita atomica para um dia.
 
@@ -118,6 +158,12 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
     `meta`. Se None (ping falhou), tenta re-pingar ao final; se isso
     tambem falhar, grava sem `meta` (proximo run dara cache-miss com
     motivo=metadata_ausente).
+
+    Apos completar a paginacao: aplica dedup defensivo por tupla
+    completa para eliminar linhas duplicadas (B3 retorna paginas
+    sobrepostas — ver _dedup_rows). NUNCA acumula sobre arquivo
+    existente: a escrita atomica via .tmp + rename SUBSTITUI o JSON
+    do dia completamente.
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     out_path = DATA_DIR / f"{date_iso}.json"
@@ -126,9 +172,9 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
     tbl = first.get("table") or {}
     last_b3_update = first.get("lastUpdateDate")
     total_b3_records_envelope = extract_total_records(first)
-    rows: list = list(tbl.get("values") or [])
+    raw_rows: list = list(tbl.get("values") or [])
     pages_fetched = 1
-    last_page_size = len(rows)
+    last_page_size = len(raw_rows)
 
     # Paginacao: condicao de parada = n_rows<PAGE_SIZE OU teto MAX_PAGES.
     # pageCount da B3 nem sempre confiavel; usa tamanho da pagina como sinal.
@@ -137,7 +183,7 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
         next_page = pages_fetched + 1
         resp = post_page(TABLE_NAME, date_iso, next_page, PAGE_SIZE)
         values = ((resp.get("table") or {}).get("values")) or []
-        rows.extend(values)
+        raw_rows.extend(values)
         pages_fetched += 1
         last_page_size = len(values)
         if last_page_size == 0:
@@ -149,11 +195,35 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
             f"possivel truncamento. Verificar PAGE_SIZE/MAX_PAGES."
         )
 
+    rows_received = len(raw_rows)
+    rows, duplicates_removed = _dedup_rows(raw_rows)
+
     total_b3_records = (
         total_b3_records_envelope
         if total_b3_records_envelope is not None
         else len(rows)
     )
+
+    # AVISO se coverage caiu abaixo do threshold. Sinaliza que a B3
+    # devolveu paginas com conteudo sobreposto sem entregar dados que
+    # ela diz ter (pageCount@page_size=1 == totalRecords). Nao bloqueia
+    # a gravacao: dedup ja garante consistencia interna do JSON.
+    # Numero esperado de linhas para PAGE_SIZE atual: pageCount@PAGE_SIZE.
+    # Mas total_b3_records aqui vem do ping@1 (==pageCount@page_size=1),
+    # que eh a contagem de REGISTROS. Comparacao direta funciona.
+    expected_records = None
+    if ping_envelope is not None:
+        # ping_envelope.pageCount eh pageCount@page_size=1 == total records.
+        ping_total = ((ping_envelope.get("table") or {}).get("pageCount"))
+        if isinstance(ping_total, int) and ping_total > 0:
+            expected_records = ping_total
+    if expected_records is not None and len(rows) < expected_records * COVERAGE_WARN_THRESHOLD:
+        print(
+            f"[{date_iso}] AVISO: coverage baixo apos dedup — "
+            f"{len(rows)} unicas vs {expected_records} esperadas pela B3 "
+            f"(ratio {len(rows)/expected_records:.1%}). Possivel paginacao B3 "
+            f"com pages sobrepostas; rodar com --force na proxima oportunidade."
+        )
 
     meta = None
     if ping_envelope is None:
@@ -181,6 +251,8 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
         "rows": rows,
         "stats": {
             "n_rows": len(rows),
+            "n_rows_received": rows_received,
+            "n_duplicates_removed": duplicates_removed,
             "n_pages_fetched": pages_fetched,
         },
     }
@@ -190,9 +262,15 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
     _write_payload_atomic(out_path, payload)
     size_mb = out_path.stat().st_size / (1024 * 1024)
 
+    # Numero formatado: separador de milhar PT-BR (ponto) via replace.
+    rec_fmt = f"{rows_received:,}".replace(",", ".")
+    dup_fmt = f"{duplicates_removed:,}".replace(",", ".")
+    uniq_fmt = f"{len(rows):,}".replace(",", ".")
     print(
-        f"[{date_iso}] OK: {len(rows):,} linha(s), {pages_fetched} pagina(s), "
-        f"{size_mb:.2f} MB".replace(",", ".")
+        f"[{date_iso}] OK: {rec_fmt} recebida(s) | "
+        f"{dup_fmt} duplicada(s) removida(s) | "
+        f"{uniq_fmt} unica(s) | {pages_fetched} pagina(s) | "
+        f"{size_mb:.2f} MB"
     )
 
     _update_manifest(date_iso, len(rows), out_path.name)
@@ -200,36 +278,61 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
         "date": date_iso,
         "status": "updated",
         "n_rows": len(rows),
+        "n_rows_received": rows_received,
+        "n_duplicates_removed": duplicates_removed,
         "n_pages": pages_fetched,
         "size_mb": size_mb,
     }
 
 
-def fetch_day(date_iso: str) -> dict:
+def fetch_day(date_iso: str, *, force: bool = False) -> dict:
     """Busca consolidated de UM dia com cache check + fetch on miss.
+
+    `force=True` ignora cache check e refaz o fetch full (util para
+    recuperar de cenarios onde o arquivo existente tem duplicacao
+    legacy do bug de paginacao B3 pre-correcao).
 
     Retorna dict com `status` em {'cache_hit', 'updated', 'unavailable'}
     e `cache_motivo` (cache_hit | metadata_ausente | json_corrompido |
     ping_falhou | lastUpdate_changed | totalRecords_changed |
-    firstPageBytes_changed | unavailable).
+    firstPageBytes_changed | unavailable | forced).
     Levanta RuntimeError em falha de rede pos-retries durante fetch
     full — chamador trata sem alterar arquivo.
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     out_path = DATA_DIR / f"{date_iso}.json"
 
-    try:
-        cache_hit, motivo, ping_envelope = check_cache(
-            TABLE_NAME, date_iso, out_path
-        )
-    except B3UnavailableError as exc:
-        print(
-            f"[{date_iso}] {exc} - esperado em FDS/feriado/dia ainda nao publicado, pulando"
-        )
-        return {"date": date_iso, "status": "unavailable", "cache_motivo": "unavailable"}
+    if force:
+        # Bypass do cache check: pinga so para popular o meta, mas
+        # sempre refetch full. Falha do ping vira ping_envelope=None;
+        # _fetch_full_day repinga depois ou grava sem meta.
+        motivo = "forced"
+        try:
+            ping_envelope = ping_first_page(TABLE_NAME, date_iso)
+        except B3UnavailableError as exc:
+            print(
+                f"[{date_iso}] {exc} - esperado em FDS/feriado/dia ainda nao publicado, pulando"
+            )
+            return {"date": date_iso, "status": "unavailable", "cache_motivo": "unavailable"}
+        except Exception as exc:
+            print(
+                f"[{date_iso}] AVISO: ping@1 falhou em modo --force ({exc}); "
+                f"prosseguindo sem meta inicial"
+            )
+            ping_envelope = None
+    else:
+        try:
+            cache_hit, motivo, ping_envelope = check_cache(
+                TABLE_NAME, date_iso, out_path
+            )
+        except B3UnavailableError as exc:
+            print(
+                f"[{date_iso}] {exc} - esperado em FDS/feriado/dia ainda nao publicado, pulando"
+            )
+            return {"date": date_iso, "status": "unavailable", "cache_motivo": "unavailable"}
 
-    if cache_hit:
-        return {"date": date_iso, "status": "cache_hit", "cache_motivo": motivo}
+        if cache_hit:
+            return {"date": date_iso, "status": "cache_hit", "cache_motivo": motivo}
 
     try:
         result = _fetch_full_day(date_iso, ping_envelope)
@@ -275,7 +378,7 @@ def _update_manifest(date_iso: str, n_rows: int, filename: str) -> None:
     )
 
 
-def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS) -> int:
+def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS, *, force: bool = False) -> int:
     """Refresh consolidated dos N du B3 mais recentes (com cache check).
 
     Wall-clock budget (env `B3_CONSOLIDATED_BUDGET_SECONDS`, default 9000s)
@@ -328,7 +431,7 @@ def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS) -> int:
             break
 
         try:
-            result = fetch_day(date_iso)
+            result = fetch_day(date_iso, force=force)
         except Exception as exc:
             skipped_days.append((date_iso, f"falha apos retries: {exc}"))
             print(
@@ -476,27 +579,61 @@ def _run_self_test() -> int:
     finally:
         b3_api.post_page = original_post_page
 
+    # 7o cenario: dedup defensivo (sem rede). Garante que _dedup_rows
+    # elimina linhas duplicadas por tupla completa preservando ordem da
+    # primeira ocorrencia. Cobre o bug das paginas sobrepostas da B3.
+    sample = [
+        ["2026-05-15", "2026-05-15", "DEB1", "DEB", "ISIN1", "EMI", "2026-05-16",
+         100, 1000.0, 1000.0, 100000.0, 1000.0, 1000.0, 5, 500000.0, "INTRA", ""],
+        ["2026-05-15", "2026-05-15", "DEB2", "DEB", "ISIN2", "EMI", "2026-05-16",
+         200, 1100.0, 1100.0, 220000.0, 1100.0, 1100.0, 3, 660000.0, "-", ""],
+        # duplicata exata da primeira linha
+        ["2026-05-15", "2026-05-15", "DEB1", "DEB", "ISIN1", "EMI", "2026-05-16",
+         100, 1000.0, 1000.0, 100000.0, 1000.0, 1000.0, 5, 500000.0, "INTRA", ""],
+        ["2026-05-15", "2026-05-15", "DEB3", "DEB", "ISIN3", "EMI", "2026-05-16",
+         50, 990.0, 990.0, 49500.0, 990.0, 990.0, 1, 49500.0, "INTRA", ""],
+        # duplicata exata da segunda linha
+        ["2026-05-15", "2026-05-15", "DEB2", "DEB", "ISIN2", "EMI", "2026-05-16",
+         200, 1100.0, 1100.0, 220000.0, 1100.0, 1100.0, 3, 660000.0, "-", ""],
+    ]
+    deduped, removed = _dedup_rows(sample)
+    dedup_ok = (len(deduped) == 3 and removed == 2 and
+                deduped[0][2] == "DEB1" and deduped[1][2] == "DEB2" and
+                deduped[2][2] == "DEB3")
+    status = "OK" if dedup_ok else "FAIL"
+    print(
+        f"  [{status}] dedup defensivo: kept={len(deduped)} removed={removed} "
+        f"(esperado kept=3 removed=2)"
+    )
+    if not dedup_ok:
+        failures.append("dedup defensivo")
+
     print()
     if failures:
         print(f"SELF-TEST FALHOU em {len(failures)} cenario(s): {failures}")
         return 1
-    print("SELF-TEST OK (6/6 cenarios)")
+    print("SELF-TEST OK (7/7 cenarios)")
     return 0
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) >= 2 and argv[1] == "--self-test":
+    args = list(argv[1:])
+    force = False
+    if "--force" in args:
+        force = True
+        args = [a for a in args if a != "--force"]
+    if args and args[0] == "--self-test":
         return _run_self_test()
-    if len(argv) >= 2:
-        date_iso = argv[1]
+    if args:
+        date_iso = args[0]
         date.fromisoformat(date_iso)
         try:
-            fetch_day(date_iso)
+            fetch_day(date_iso, force=force)
         except Exception as exc:
             print(f"FALHA: {exc}")
             return 1
         return 0
-    return refresh_recent_days()
+    return refresh_recent_days(force=force)
 
 
 if __name__ == "__main__":
