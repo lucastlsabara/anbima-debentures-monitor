@@ -52,7 +52,7 @@ on:
         required: false
         default: ''
       force_refetch:
-        description: 'Forcar refetch ignorando cache (B3 Consolidated)'
+        description: 'Forcar refetch ignorando cache (B3 Consolidated + Trades + ANBIMA)'
         required: false
         type: boolean
         default: false
@@ -177,6 +177,8 @@ jobs:
       - name: Import ANBIMA (gap-fill 5 du B3)
         id: import_anbima
         if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
+        env:
+          FORCE_REFETCH: ${{ inputs.force_refetch && 'true' || '' }}
         run: |
           set -u
           mkdir -p raw
@@ -188,11 +190,14 @@ jobs:
           while IFS= read -r d; do
             [ -z "$d" ] && continue
             echo "::group::ANBIMA $d"
-            if [ -f "history/${d}.json" ]; then
+            if [ -f "history/${d}.json" ] && [ -z "$FORCE_REFETCH" ]; then
               echo "[skip] history/${d}.json ja existe; pulando."
               SKIP_EXISTING_COUNT=$((SKIP_EXISTING_COUNT+1))
               echo "::endgroup::"
               continue
+            fi
+            if [ -n "$FORCE_REFETCH" ] && [ -f "history/${d}.json" ]; then
+              echo "[force] history/${d}.json existe mas force_refetch=true; refetchando."
             fi
             python3 fetch_anbima.py --date "$d" --out parsed.json && RC=0 || RC=$?
             if [ "$RC" -eq 2 ]; then
@@ -229,9 +234,14 @@ jobs:
         if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
         env:
           B3_TRADES_CACHE_SUMMARY: /tmp/b3_trades_cache_summary.txt
+          FORCE_FLAG: ${{ inputs.force_refetch && '--force' || '' }}
         run: |
-          echo "Rodando fetch_b3_trades.py (5 dias uteis B3, refetch full so em cache-miss)"
-          python fetch_b3_trades.py
+          if [ -n "$FORCE_FLAG" ]; then
+            echo "Rodando fetch_b3_trades.py $FORCE_FLAG (bypass cache, refetch full via export CSV)"
+          else
+            echo "Rodando fetch_b3_trades.py (5 dias uteis B3, refetch full so em cache-miss)"
+          fi
+          python fetch_b3_trades.py $FORCE_FLAG
           if [ -f "$B3_TRADES_CACHE_SUMMARY" ]; then
             echo "--- cache summary (trade) ---"
             cat "$B3_TRADES_CACHE_SUMMARY"

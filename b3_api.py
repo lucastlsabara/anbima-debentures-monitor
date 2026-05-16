@@ -14,8 +14,11 @@ caller deve propagar).
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import time
+import unicodedata
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable
@@ -34,6 +37,7 @@ CACHE_SCHEMA_VERSION = 2
 
 
 HTTP_BASE_URL = "https://arquivos.b3.com.br/bdi/table"
+EXPORT_URL = "https://arquivos.b3.com.br/bdi/table/export/csv"
 
 B3_HEADERS = {
     "Content-Type": "application/json",
@@ -293,6 +297,188 @@ def build_meta_from_ping(envelope: dict, fetched_at_iso: str) -> dict:
         "fetchedAt": fetched_at_iso,
         "schemaVersion": CACHE_SCHEMA_VERSION,
     }
+
+
+# ----------------------------------------------------------------------------
+# Export CSV endpoint da B3 (POST /bdi/table/export/csv).
+# ----------------------------------------------------------------------------
+# Fonte oficial pra dump completo de uma tabela (botao "Exportar CSV" na
+# pagina arquivos.b3.com.br). 1 unico request, sem paginacao. Substitui o
+# endpoint paginado /bdi/table/{Tabela}/{ini}/{fim}/{page}/{page_size} pro
+# fetch full porque o paginado degrada sob carga: em volumes grandes
+# (~413 paginas no ConsolidatedRecords) ate ~28% das paginas devolvem
+# conteudo CACHED de paginas anteriores em vez do conteudo real (validado
+# em 2026-05-15). O ping@1 paginado continua usado APENAS pro cache check
+# leve (1 row, sem o problema de overlap).
+#
+# Body: {"Name": <TableName>, "Date": <YYYY-MM-DD>,
+#        "FinalDate": <YYYY-MM-DD>, "ClientId": "", "Filters": {}}
+# Response: text/csv (utf-8 com BOM, separator ';', numeros em formato
+# BR — ponto como milhar, virgula como decimal — e 5-7 linhas iniciais de
+# glossario/preambulo antes do header tabular).
+
+
+def _strip_accents(s: str) -> str:
+    """Remove diacriticos via NFKD. 'Código' -> 'Codigo'."""
+    nfkd = unicodedata.normalize("NFKD", s or "")
+    return "".join(c for c in nfkd if not unicodedata.combining(c))
+
+
+def _norm_col(s: str) -> str:
+    """Nome de coluna canonico: minusculas + sem acento + so alfanumerico.
+
+    Ex: 'Volume financeiro (R$)' -> 'volumefinanceirors',
+        'Numero de negocios'      -> 'numerodenegocios',
+        'Cod. identificador'       -> 'codidentificador'.
+    Tolera variacoes do header B3 sem precisar manter listas exatas.
+    """
+    return "".join(c for c in _strip_accents(s).lower() if c.isalnum())
+
+
+def parse_br_float(s: str) -> float:
+    """Numero BR -> float; '-' ou '' -> 0.0.
+
+    '1.234.567,89' -> 1234567.89. Ponto como separador de milhar, virgula
+    como decimal (convencao pt-BR usada pela B3 no CSV de export).
+    """
+    s = (s or "").strip()
+    if not s or s == "-":
+        return 0.0
+    return float(s.replace(".", "").replace(",", "."))
+
+
+def parse_br_float_optional(s: str) -> float | None:
+    """Como parse_br_float, mas '-' ou '' -> None (preserva ausencia)."""
+    s = (s or "").strip()
+    if not s or s == "-":
+        return None
+    return float(s.replace(".", "").replace(",", "."))
+
+
+def parse_br_int_optional(s: str) -> int | None:
+    """'1.234' -> 1234; '-' ou '' -> None."""
+    s = (s or "").strip()
+    if not s or s == "-":
+        return None
+    return int(s.replace(".", ""))
+
+
+def parse_br_date_iso(s: str) -> str | None:
+    """'15/05/2026' -> '2026-05-15T00:00:00'; '-' ou '' -> None.
+
+    Preserva o formato 'YYYY-MM-DDT00:00:00' usado nos JSONs atuais
+    (esperado por build_dashboard sem alteracao).
+    """
+    s = (s or "").strip()
+    if not s or s == "-":
+        return None
+    parts = s.split("/")
+    if len(parts) != 3:
+        return None
+    dd, mm, yyyy = parts
+    return f"{yyyy}-{mm.zfill(2)}-{dd.zfill(2)}T00:00:00"
+
+
+def fetch_export_csv(
+    table_name: str,
+    date_iso: str,
+    *,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+) -> str:
+    """POST /bdi/table/export/csv?lang=pt-BR -> texto CSV completo (utf-8).
+
+    Erros seguem a mesma convencao de post_page: 403 com x-deny-reason ->
+    SandboxBlockedError; 403/404 -> B3UnavailableError; 5xx persistente
+    -> requests.HTTPError propagado.
+    """
+    body = {
+        "Name": table_name,
+        "Date": date_iso,
+        "FinalDate": date_iso,
+        "ClientId": "",
+        "Filters": {},
+    }
+    try:
+        r = request_with_retry(
+            "POST",
+            EXPORT_URL,
+            params={"lang": "pt-BR"},
+            headers=B3_HEADERS,
+            json=body,
+            max_attempts=max_retries,
+        )
+    except requests.HTTPError as exc:
+        resp = exc.response
+        if resp is not None:
+            deny_reason = resp.headers.get("x-deny-reason")
+            if resp.status_code == 403 and deny_reason:
+                raise SandboxBlockedError(
+                    f"HTTP 403 bloqueado pela sandbox (x-deny-reason={deny_reason}): "
+                    f"host arquivos.b3.com.br fora da allowlist. Rode este script "
+                    f"em ambiente com egress livre (ex: GitHub Actions)."
+                ) from exc
+            if resp.status_code in (403, 404):
+                raise B3UnavailableError(f"HTTP {resp.status_code}") from exc
+        raise
+    return r.content.decode("utf-8-sig")
+
+
+def parse_export_csv(csv_text: str) -> tuple[dict[str, int], list[list[str]]]:
+    """Parse texto CSV exportado pela B3.
+
+    Localiza o header tabular procurando a primeira linha que (a) contem
+    a substring 'Data neg' (case+accent insensitive) e (b) tem ';'
+    separator. Linhas iniciais de glossario/preambulo (5-7) sao puladas
+    automaticamente. Funciona tanto para Trade (header comeca em
+    'Instrumento financeiro' mas contem 'Data negocio' adiante) quanto
+    para ConsolidatedRecords (header comeca em 'Data negocio').
+
+    Retorna (col_index, data_rows):
+      - col_index: dict mapeando nome normalizado (_norm_col) -> indice
+        da coluna no header. Caller usa get_col() pra extrair celulas.
+      - data_rows: lista de listas de strings, ainda em formato BR
+        (numeros com virgula, datas DD/MM/YYYY). Caller faz o parse via
+        parse_br_float / parse_br_date_iso conforme tipo da coluna.
+    """
+    lines = csv_text.splitlines()
+    header_idx = None
+    for i, ln in enumerate(lines):
+        if ";" not in ln:
+            continue
+        normalized = _strip_accents(ln).lower()
+        if "data neg" in normalized:
+            header_idx = i
+            break
+    if header_idx is None:
+        raise RuntimeError(
+            "Header CSV B3 nao encontrado (linha com 'Data neg' + ';')"
+        )
+    reader = csv.reader(
+        io.StringIO("\n".join(lines[header_idx:])), delimiter=";"
+    )
+    rows = list(reader)
+    if not rows:
+        return {}, []
+    header = rows[0]
+    col_index = {_norm_col(h): i for i, h in enumerate(header)}
+    data_rows = [r for r in rows[1:] if any(c.strip() for c in r)]
+    return col_index, data_rows
+
+
+def get_col(row: list, col_index: dict[str, int], *names: str) -> str:
+    """Retorna a celula da primeira variante de nome que casar.
+
+    Aceita aliases (ex: com/sem acento) sem forcar uma normalizacao unica
+    nos call sites. Devolve '' se nenhum nome casar ou se o indice
+    estiver fora da linha (linhas curtas).
+    """
+    for name in names:
+        key = _norm_col(name)
+        if key in col_index:
+            idx = col_index[key]
+            if 0 <= idx < len(row):
+                return row[idx] or ""
+    return ""
 
 
 def last_n_business_days(n: int, today: date | None = None) -> list[date]:

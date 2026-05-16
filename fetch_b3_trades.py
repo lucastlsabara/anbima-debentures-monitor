@@ -1,51 +1,49 @@
-"""Fetch de trades de renda fixa da B3 (DEB/CRA/CRI/CFF/COE).
+"""Fetch de trades de renda fixa da B3 (DEB/CRA/CRI/CFF/COE) — trade-by-trade.
 
-Endpoint publico nao documentado:
-  POST https://arquivos.b3.com.br/bdi/table/Trade/{ini}/{fim}/{page}/{page_size}
-Headers: Content-Type: application/json
-Body: {}
+Fonte de dados (fetch full): endpoint OFICIAL de export CSV
+  POST https://arquivos.b3.com.br/bdi/table/export/csv?lang=pt-BR
+  Body: {"Name":"Trade","Date":<dia>,"FinalDate":<dia>,
+         "ClientId":"","Filters":{}}
+  Response: text/csv (utf-8 com BOM, separator ';', 5-7 linhas de
+  glossario antes do header tabular). 1 unico request, sem paginacao.
 
-Comportamento (sem args, modo canonico):
+Migracao do endpoint paginado (PR atual): mesma motivacao do
+fetch_b3_trades_consolidated — paginado degrada sob carga. TbT hoje
+funciona razoavelmente em volume (~92 paginas) mas migramos pra ter
+robustez contra crescimento + simetria com o consolidated. Validacao
+empirica em 2026-05-15: 45.910 trades paginated -> 45.911 export, mesmo
+conteudo. O ping@1 paginado continua usado APENAS pro cache check leve.
+
+Comportamento:
   Para cada um dos 5 dias uteis B3 mais recentes [D-0..D-4]:
     1. CACHE CHECK (ping leve POST .../1/1, page_size=1) compara 3
-       indicadores com o `meta` local: lastUpdateDate, totalRecords
-       (=table.pageCount@page_size=1) e firstPageBytes (tamanho do
-       envelope do ping serializado deterministico).
-    2. Se TODOS os 3 indicadores baterem -> cache-hit, PULA fetch full.
-    3. Se QUALQUER indicador divergir / meta ausente / JSON corrompido
-       / ping falhar -> cache-miss, faz fetch full paginado.
-    4. Apos fetch full bem-sucedido: escreve data/b3_trades/<date>.json
-       (atomico via .tmp + rename) com `meta` populado a partir do ping.
+       indicadores com o `meta` local (lastUpdateDate + totalRecords
+       + firstPageBytes). Cache-hit -> pula fetch full.
+    2. Cache-miss OU --force -> fetch full via export CSV.
+    3. Apos fetch: escreve data/b3_trades/<date>.json (atomico via
+       .tmp + rename) com `meta` populado a partir do ping@1.
 
-Esquema do JSON local (decisao de design):
-  Adicionamos a chave top-level `meta` ao schema existente — NAO
-  movemos `rows` para uma sub-chave nem criamos arquivo paralelo
-  .meta.json. Motivacao: zero impacto em consumers existentes
-  (`build_dashboard.py` continua lendo `payload['rows']`), e o cache
-  check ja conta com `meta.schemaVersion` para distinguir formato
-  novo do antigo. JSONs sem `meta` (gerados por versoes anteriores)
-  sao tratados como cache-miss na primeira execucao apos este merge —
-  refetch full popula o meta e nas execucoes seguintes o cache hit
-  funciona normalmente.
+Enriquecimento de setor PRESERVADO: apos parse do CSV, cada linha DEB
+recebe `setor` via sectors.classify(ticker, issuer); demais
+instrumentos recebem "Outros". Logica identica a antes da migracao.
 
-Modo unitario (CLI: python fetch_b3_trades.py YYYY-MM-DD): aplica a
-mesma logica (cache check + fetch on miss) para um unico dia.
+Esquema do JSON local: inalterado (14 cols na ordem
+instrument/issuer/ticker/setor/qtd/price/vol/rate/origin/time/
+trade_code/isin/settlement_dt/situation), com `meta` no top-level
+(schemaVersion=2). build_dashboard nao precisa saber da migracao.
 
-Modo self-test (CLI: python fetch_b3_trades.py --self-test): roda os
-6 cenarios sem rede (cache-hit + 5 variantes de cache-miss) usando um
-mock local de post_page. Exit 0 se todos passarem.
+Modo unitario (CLI: `python fetch_b3_trades.py YYYY-MM-DD`): aplica a
+mesma logica (cache check + fetch on miss) pra um unico dia. Aceita
+`--force` pra ignorar cache check.
+
+Modo self-test (CLI: `python fetch_b3_trades.py --self-test`): 6
+cenarios de cache check + 1 cenario de parse CSV (7 totais).
 
 Em caso de erro (rede/timeout apos retry, 5xx) durante fetch full:
-NAO toca no arquivo existente. Preserva versao anterior. Contabiliza
-falha. 403/404 (FDS/feriado/dia ainda nao publicado): pula sem alterar
-arquivo.
+NAO toca no arquivo existente. 403/404: pula sem alterar arquivo.
 
 Historico antigo (>5 dias uteis) NUNCA eh tocado por este script.
-
-Persiste data/b3_trades/{YYYY-MM-DD}.json em formato colunar minificado
-+ `meta` e atualiza data/b3_trades/manifest.json incrementalmente
-(apenas as entradas dos dias da janela sao sobrescritas; manifest
-preserva historico completo).
+Persistencia: data/b3_trades/{YYYY-MM-DD}.json + manifest incremental.
 """
 
 from __future__ import annotations
@@ -53,7 +51,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -63,15 +60,18 @@ from b3_api import (
     build_meta_from_ping,
     check_cache,
     extract_total_records,
+    fetch_export_csv,
+    get_col,
+    parse_br_date_iso,
+    parse_br_float,
+    parse_br_float_optional,
+    parse_export_csv,
     ping_first_page,
-    post_page,
     refresh_recent_days as _refresh_recent_days,
 )
 
 
 TABLE_NAME = "Trade"
-PAGE_SIZE = 500
-SLEEP_BETWEEN_PAGES = 0.2
 REFRESH_WINDOW_DAYS = 5
 
 DATA_DIR = Path(__file__).parent / "data" / "b3_trades"
@@ -83,29 +83,45 @@ COLUMNS = [
 ]
 
 
-def _row_from_array(arr: list) -> list:
-    instrument = arr[2]
-    issuer = arr[3]
-    ticker = arr[4]
+def _map_trade_row(raw: list, col_index: dict[str, int]) -> list:
+    """Mapeia uma linha do CSV B3 (14 cols pt-BR) pro schema local
+    (14 cols ingles + setor enriquecido). `Data negocio` do CSV eh
+    descartada (redundante com o dia alvo do arquivo). `setor` eh
+    inferido apenas pra DEB via sectors.classify; demais -> 'Outros'
+    (logica identica a antes da migracao pro export CSV).
+
+    `isin` em '-'/'' vira None (compat com schema atual: visto None pra
+    nao-DEB e str pra DEB). `rate` em '-' vira None.
+    """
+    g = lambda *names: get_col(raw, col_index, *names)
+    instrument = g("Instrumento financeiro").strip()
+    issuer = g("Emissor").strip()
+    ticker = g("Codigo IF", "Código IF").strip()
     if instrument == "DEB":
         setor = sectors.classify(ticker, issuer)
     else:
         setor = "Outros"
+    isin_raw = g("Codigo ISIN", "Código ISIN").strip()
+    isin = None if isin_raw in ("", "-") else isin_raw
     return [
         instrument,
         issuer,
         ticker,
         setor,
-        arr[5],
-        arr[6],
-        arr[7],
-        arr[8],
-        arr[9],
-        arr[10],
-        arr[12],
-        arr[13],
-        arr[14],
-        arr[15],
+        parse_br_float(g("Quantidade negociada")),
+        parse_br_float(g("Preco negocio", "Preço negócio")),
+        parse_br_float(g("Volume financeiro (R$)", "Volume financeiro")),
+        parse_br_float_optional(g("Taxa negocio", "Taxa negócio")),
+        g("Origem negocio", "Origem negócio").strip(),
+        g("Horario negocio", "Horário negócio").strip(),
+        g(
+            "Cod. identificador do negocio",
+            "Cód. identificador do negócio",
+            "Codigo identificador do negocio",
+        ).strip(),
+        isin,
+        parse_br_date_iso(g("Data liquidacao", "Data liquidação")),
+        g("Situacao negocio", "Situação negócio").strip(),
     ]
 
 
@@ -113,8 +129,7 @@ def _write_payload_atomic(out_path: Path, payload: dict) -> None:
     """Grava payload em <out_path>.tmp e renomeia atomicamente.
 
     os.replace eh atomico no mesmo filesystem (POSIX e Windows). Evita
-    arquivos meio-gravados que confundiriam o proximo cache check
-    (caso tipico que motivou a robustez extra desta versao).
+    arquivos meio-gravados que confundiriam o proximo cache check.
     """
     tmp_path = out_path.parent / f"{out_path.name}.tmp"
     tmp_path.write_text(
@@ -124,59 +139,36 @@ def _write_payload_atomic(out_path: Path, payload: dict) -> None:
 
 
 def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
-    """Fetch full paginado de UM dia + escrita atomica.
+    """Fetch full via export CSV + escrita atomica de UM dia.
 
     `ping_envelope`: envelope do ping@1 usado no cache check (pode ser
-    None se o ping falhou). Se nao-None, eh reaproveitado para popular
+    None se o ping falhou). Se nao-None, eh reaproveitado pra popular
     o `meta` apos o fetch — economiza uma chamada extra.
 
     Retorna dict do `result` (status, n_trades, vol_brl).
-    Levanta B3UnavailableError se o fetch full topar com 403/404.
+    Levanta B3UnavailableError se o export topar com 403/404.
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     out_path = DATA_DIR / f"{date_iso}.json"
 
-    first = post_page(TABLE_NAME, date_iso, 1, PAGE_SIZE)
-    table = first.get("table") or {}
-    page_count = int(table.get("pageCount") or 0)
-    last_b3_update = first.get("lastUpdateDate")
-    total_b3_records_envelope = extract_total_records(first)
-
-    print(f"[{date_iso}] {page_count} pagina(s)")
+    csv_text = fetch_export_csv(TABLE_NAME, date_iso)
+    col_index, raw_rows = parse_export_csv(csv_text)
 
     rows: list[list] = []
     instruments_count: dict[str, int] = {}
     vol_total = 0.0
+    for raw in raw_rows:
+        row = _map_trade_row(raw, col_index)
+        rows.append(row)
+        inst = row[0] or "?"
+        instruments_count[inst] = instruments_count.get(inst, 0) + 1
+        try:
+            vol_total += float(row[6] or 0)
+        except (TypeError, ValueError):
+            pass
 
-    def _ingest_values(values):
-        nonlocal vol_total
-        for arr in values or []:
-            row = _row_from_array(arr)
-            rows.append(row)
-            inst = row[0] or "?"
-            instruments_count[inst] = instruments_count.get(inst, 0) + 1
-            try:
-                vol_total += float(row[6] or 0)
-            except (TypeError, ValueError):
-                pass
-
-    _ingest_values(table.get("values"))
-
-    for page in range(2, page_count + 1):
-        time.sleep(SLEEP_BETWEEN_PAGES)
-        resp = post_page(TABLE_NAME, date_iso, page, PAGE_SIZE)
-        _ingest_values((resp.get("table") or {}).get("values"))
-
-    total_b3_records = (
-        total_b3_records_envelope
-        if total_b3_records_envelope is not None
-        else len(rows)
-    )
-
-    # Se o ping do cache check falhou antes, tenta um ping agora para
-    # popular o `meta`. Falha no re-ping nao bloqueia a gravacao: meta
-    # fica ausente e o proximo run dara cache-miss com motivo=metadata_ausente.
-    meta = None
+    last_b3_update = None
+    total_b3_records: int | None = None
     if ping_envelope is None:
         try:
             ping_envelope = ping_first_page(TABLE_NAME, date_iso)
@@ -186,6 +178,13 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
                 f"meta nao sera gravado neste run (proximo run refetcha)"
             )
             ping_envelope = None
+    if ping_envelope is not None:
+        last_b3_update = ping_envelope.get("lastUpdateDate")
+        total_b3_records = extract_total_records(ping_envelope)
+    if total_b3_records is None:
+        total_b3_records = len(rows)
+
+    meta = None
     if ping_envelope is not None:
         meta = build_meta_from_ping(
             ping_envelope, datetime.now(timezone.utc).isoformat()
@@ -200,7 +199,7 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
         "rows": rows,
         "stats": {
             "n_trades": len(rows),
-            "n_pages_fetched": max(page_count, 1),
+            "csv_bytes": len(csv_text),
             "instruments_count": instruments_count,
             "vol_brl_total": vol_total,
         },
@@ -210,7 +209,10 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
 
     _write_payload_atomic(out_path, payload)
     size_mb = out_path.stat().st_size / (1024 * 1024)
-    print(f"[{date_iso}] OK: {len(rows):,} trades, {size_mb:.2f} MB".replace(",", "."))
+    print(
+        f"[{date_iso}] OK: {len(rows):,} trades, {size_mb:.2f} MB (export CSV)"
+        .replace(",", ".")
+    )
 
     _update_manifest(date_iso, len(rows), vol_total, out_path.name)
 
@@ -222,39 +224,52 @@ def _fetch_full_day(date_iso: str, ping_envelope: dict | None) -> dict:
     }
 
 
-def fetch_day(date_iso: str) -> dict:
+def fetch_day(date_iso: str, *, force: bool = False) -> dict:
     """Busca trades de UM dia com cache check + fetch on miss.
+
+    `force=True` ignora cache check e refaz o fetch full via export CSV.
 
     Retorna dict com `status` em {'cache_hit', 'updated', 'unavailable'}
     e `cache_motivo` (cache_hit | metadata_ausente | json_corrompido |
     ping_falhou | lastUpdate_changed | totalRecords_changed |
-    firstPageBytes_changed | unavailable).
+    firstPageBytes_changed | unavailable | forced).
     'cache_hit': arquivo existente preservado, fetch full pulado.
     'updated': fetch full completo, arquivo reescrito (atomico).
     'unavailable': B3 retornou 403/404 (FDS/feriado/dia nao publicado) —
                    arquivo existente preservado.
-
-    Levanta RuntimeError se houver falha de rede apos os retries no
-    fetch full (chamador deve capturar e contar como falha sem alterar
-    arquivo).
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     out_path = DATA_DIR / f"{date_iso}.json"
 
-    try:
-        cache_hit, motivo, ping_envelope = check_cache(
-            TABLE_NAME, date_iso, out_path
-        )
-    except B3UnavailableError as exc:
-        print(
-            f"[{date_iso}] {exc} - esperado em FDS/feriado/dia ainda nao publicado, pulando"
-        )
-        return {"date": date_iso, "status": "unavailable", "cache_motivo": "unavailable"}
+    if force:
+        motivo = "forced"
+        try:
+            ping_envelope = ping_first_page(TABLE_NAME, date_iso)
+        except B3UnavailableError as exc:
+            print(
+                f"[{date_iso}] {exc} - esperado em FDS/feriado/dia ainda nao publicado, pulando"
+            )
+            return {"date": date_iso, "status": "unavailable", "cache_motivo": "unavailable"}
+        except Exception as exc:
+            print(
+                f"[{date_iso}] AVISO: ping@1 falhou em modo --force ({exc}); "
+                f"prosseguindo sem meta inicial"
+            )
+            ping_envelope = None
+    else:
+        try:
+            cache_hit, motivo, ping_envelope = check_cache(
+                TABLE_NAME, date_iso, out_path
+            )
+        except B3UnavailableError as exc:
+            print(
+                f"[{date_iso}] {exc} - esperado em FDS/feriado/dia ainda nao publicado, pulando"
+            )
+            return {"date": date_iso, "status": "unavailable", "cache_motivo": "unavailable"}
 
-    if cache_hit:
-        return {"date": date_iso, "status": "cache_hit", "cache_motivo": motivo}
+        if cache_hit:
+            return {"date": date_iso, "status": "cache_hit", "cache_motivo": motivo}
 
-    # Cache-miss: fetch full. Reaproveita ping_envelope para popular meta.
     try:
         result = _fetch_full_day(date_iso, ping_envelope)
     except B3UnavailableError as exc:
@@ -304,30 +319,47 @@ def _update_manifest(date_iso: str, n_trades: int, vol_brl: float, filename: str
     )
 
 
-def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS) -> int:
+def refresh_recent_days(n: int = REFRESH_WINDOW_DAYS, *, force: bool = False) -> int:
     summary_path = os.environ.get("B3_TRADES_CACHE_SUMMARY")
     return _refresh_recent_days(
-        fetch_day, n, label="B3 Trade", summary_path=summary_path
+        lambda d: fetch_day(d, force=force), n, label="B3 Trade",
+        summary_path=summary_path,
     )
 
 
 # ----------------------------------------------------------------------------
-# Self-test (offline): valida os 6 cenarios de cache check sem rede.
+# Self-test (offline): 6 cenarios de cache check + 1 cenario de parse CSV.
 # ----------------------------------------------------------------------------
+_SAMPLE_CSV_TRADE = (
+    "ANBIMA Servicos\n"
+    "Negocios Renda Fixa - Trade by Trade\n"
+    "Data Referencia: 15/05/2026\n"
+    "\n"
+    "Glossario...\n"
+    "Instrumento financeiro;Emissor;Codigo IF;Quantidade negociada;"
+    "Preco negocio;Volume financeiro (R$);Taxa negocio;Origem negocio;"
+    "Horario negocio;Data negocio;Cod. identificador do negocio;"
+    "Codigo ISIN;Data liquidacao;Situacao negocio\n"
+    "DEB;TIM S.A.;TIMS24;1.000;1.000,00;1.000.000,00;5,5;Balcao;"
+    "10:00:00;15/05/2026;#TC1;BRTIMSDB001;16/05/2026;Confirmado\n"
+    "COE;BANCO X;BX1234;500;1,00;500,00;-;Registro;11:00:00;"
+    "15/05/2026;#TC2;-;15/05/2026;Confirmado\n"
+)
+
+
 def _run_self_test() -> int:
-    """Smoke test offline dos 6 cenarios documentados.
+    """6 cenarios de cache check + 1 cenario de parse CSV (=7 totais).
 
     Cobre: cache-hit, lastUpdate_changed, totalRecords_changed,
-    firstPageBytes_changed, metadata_ausente, json_corrompido.
+    firstPageBytes_changed, metadata_ausente, json_corrompido, parse CSV
+    (incluindo enriquecimento de setor pra DEB).
 
-    Mocka post_page via monkey-patch e usa um diretorio temporario para
-    nao tocar em data/b3_trades/ real. Retorna 0 se TODOS os 6
-    cenarios passarem, 1 caso contrario.
+    Mocka post_page via monkey-patch e usa diretorio temporario pra nao
+    tocar em data/b3_trades/ real. Retorna 0 se TODOS passarem.
     """
     import tempfile
     import b3_api
 
-    # Fixtures: 1 registro fake (estrutura B3 nao importa para o cache).
     ping_envelope_base = {
         "lastUpdateDate": "2026-05-14T13:22:51.31",
         "table": {
@@ -343,8 +375,6 @@ def _run_self_test() -> int:
         **ping_envelope_base,
         "table": {**ping_envelope_base["table"], "pageCount": 99999},
     }
-    # Para mudar firstPageBytes sem mexer em lastUpdate nem pageCount:
-    # altera o 'values' (mesmo numero de registros, conteudo diferente).
     ping_envelope_changed_bytes = {
         **ping_envelope_base,
         "table": {
@@ -401,7 +431,6 @@ def _run_self_test() -> int:
                     return ping_env
 
                 b3_api.post_page = _mock_post_page
-                # b3_api.ping_first_page chama post_page, ja monkey-patched.
 
                 hit, motivo, _ = b3_api.check_cache(
                     TABLE_NAME, "2026-05-14", out_path
@@ -417,27 +446,64 @@ def _run_self_test() -> int:
     finally:
         b3_api.post_page = original_post_page
 
+    # Cenario adicional: parse CSV + enriquecimento de setor. Garante
+    # que a migracao pro export CSV preserva o schema (14 cols) e que
+    # sectors.classify continua sendo aplicado em DEB.
+    col_index, raw_rows = b3_api.parse_export_csv(_SAMPLE_CSV_TRADE)
+    parsed = [_map_trade_row(r, col_index) for r in raw_rows]
+    csv_ok = (
+        len(parsed) == 2
+        and parsed[0][0] == "DEB"          # instrument
+        and parsed[0][2] == "TIMS24"       # ticker
+        and parsed[0][3] != "Outros"       # setor enriquecido (DEB)
+        and parsed[0][4] == 1000.0         # qtd
+        and parsed[0][5] == 1000.0         # price
+        and abs(parsed[0][6] - 1000000.0) < 1e-6  # vol
+        and parsed[0][7] == 5.5            # rate
+        and parsed[0][9] == "10:00:00"     # time
+        and parsed[0][10] == "#TC1"        # trade_code
+        and parsed[0][11] == "BRTIMSDB001"  # isin
+        and parsed[0][12] == "2026-05-16T00:00:00"  # settlement_dt
+        and parsed[0][13] == "Confirmado"  # situation
+        and parsed[1][0] == "COE"
+        and parsed[1][3] == "Outros"       # nao-DEB
+        and parsed[1][7] is None           # rate '-' -> None
+        and parsed[1][11] is None          # isin '-' -> None
+    )
+    status = "OK" if csv_ok else "FAIL"
+    print(
+        f"  [{status}] parse CSV + setor: rows={len(parsed)} "
+        f"setor_DEB={parsed[0][3] if parsed else None}"
+    )
+    if not csv_ok:
+        failures.append("parse CSV")
+
     print()
     if failures:
         print(f"SELF-TEST FALHOU em {len(failures)} cenario(s): {failures}")
         return 1
-    print("SELF-TEST OK (6/6 cenarios)")
+    print("SELF-TEST OK (7/7 cenarios)")
     return 0
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) >= 2 and argv[1] == "--self-test":
+    args = list(argv[1:])
+    force = False
+    if "--force" in args:
+        force = True
+        args = [a for a in args if a != "--force"]
+    if args and args[0] == "--self-test":
         return _run_self_test()
-    if len(argv) >= 2:
-        date_iso = argv[1]
+    if args:
+        date_iso = args[0]
         date.fromisoformat(date_iso)
         try:
-            fetch_day(date_iso)
+            fetch_day(date_iso, force=force)
         except Exception as exc:
             print(f"FALHA: {exc}")
             return 1
         return 0
-    return refresh_recent_days()
+    return refresh_recent_days(force=force)
 
 
 if __name__ == "__main__":
