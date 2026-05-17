@@ -52,7 +52,7 @@ on:
         required: false
         default: ''
       force_refetch:
-        description: 'Forcar refetch ignorando cache (B3 Consolidated + Trades + ANBIMA)'
+        description: 'Forcar refetch ignorando cache (B3 Consolidated + Trades + ANBIMA + Indices ANBIMA)'
         required: false
         type: boolean
         default: false
@@ -281,6 +281,17 @@ jobs:
         run: |
           echo "Aplicando politica de retencao 60 du B3 em data/b3_trades*/"
           python scripts/podar_historico.py
+
+      - name: Fetch ANBIMA indices (IDA + IMA, beta)
+        # Beta: continue-on-error nao derruba o pipeline se a fonte S3 da ANBIMA
+        # estiver indisponivel. Caches por Last-Modified evitam re-baixar nada
+        # quando os arquivos nao mudaram.
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
+        continue-on-error: true
+        env:
+          FORCE_FLAG: ${{ inputs.force_refetch && '--force' || '' }}
+        run: |
+          python3 fetch_anbima_indices.py $FORCE_FLAG
 
       - name: Detecta mudancas em data/ e history/
         id: changes

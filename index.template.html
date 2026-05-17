@@ -344,6 +344,26 @@
   }
   .comp-actions button:hover:not(:disabled) { border-color:var(--accent); }
   .comp-actions button:disabled { opacity:0.45; cursor:default; }
+  /* Toggle segmentado (aba Índices ANBIMA: IDA / IMA) */
+  .seg-toggle {
+    display:inline-flex; background:var(--surface2);
+    border:1px solid var(--border-strong); border-radius:6px;
+    padding:2px; gap:2px;
+  }
+  .seg-toggle button {
+    background:transparent; color:var(--muted);
+    border:none; padding:6px 18px; border-radius:4px;
+    font-size:12.5px; font-family:inherit; cursor:pointer;
+    font-weight:500;
+  }
+  .seg-toggle button:hover { color:var(--fg); }
+  .seg-toggle button.active {
+    background:var(--accent); color:#0e1116; font-weight:600;
+  }
+  /* Seta de variação diária na tabela de Índices ANBIMA */
+  .idx-arrow { font-size:10px; margin-right:3px; vertical-align:1px; }
+  .idx-arrow.pos { color:var(--pos); }
+  .idx-arrow.neg { color:var(--neg); }
   /* Tabulator dark tweaks */
   .tabulator { font-size:12px; background:transparent; border:none; }
   .tabulator .tabulator-header {
@@ -458,6 +478,7 @@
   <a href="#/dispersao" data-tab="dispersao">Debêntures: Gráfico</a>
   <a href="#/trades" data-tab="trades">Pesquisa de Trades</a>
   <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
+  <a href="#/indices-anbima" data-tab="indices-anbima">Índices ANBIMA</a>
 </nav>
 
 <main>
@@ -761,6 +782,26 @@
   </div>
 </section>
 
+<!-- ===================== Tab: Índices ANBIMA ===================== -->
+<!-- Esboço minimal: toggle IDA / IMA + tabela do latest snapshot por
+     subíndice. Dados em data/indices_anbima.json (gerado por
+     build_anbima_indices, alimentado por fetch_anbima_indices.py). -->
+<section id="tab-indices-anbima" class="tab hide">
+  <div class="panel">
+    <h2 style="font-size:14px;text-transform:none;letter-spacing:0;color:var(--fg);margin-bottom:4px;">Índices ANBIMA</h2>
+    <div class="muted" id="idx-subtitle" style="font-size:11.5px;color:var(--muted);margin-bottom:12px;">
+      Fonte: ANBIMA Data (S3 público) — Atualizado: —
+    </div>
+    <div class="seg-toggle" id="idx-toggle" role="tablist">
+      <button type="button" data-fam="IDA" class="active">IDA</button>
+      <button type="button" data-fam="IMA">IMA</button>
+    </div>
+  </div>
+  <div class="panel">
+    <div id="idx-table"></div>
+  </div>
+</section>
+
 </main>
 
 <footer>
@@ -920,7 +961,7 @@ function adaptiveTextColor(bgHex) {
 /* ============================================================
  *  hash routing
  * ============================================================ */
-const TABS = ["visao","dispersao","movimentacoes","heatmap","titulos-publicos","trades"];
+const TABS = ["visao","dispersao","movimentacoes","heatmap","titulos-publicos","trades","indices-anbima"];
 const loaded = new Set();
 
 // Rotas antigas redirecionadas para evitar bookmarks quebrados:
@@ -1014,6 +1055,7 @@ async function renderTab(name) {
   if (name === "heatmap") return renderHeatmap();
   if (name === "titulos-publicos") return renderTitulosPublicos();
   if (name === "trades") return renderTrades();
+  if (name === "indices-anbima") return renderIndicesAnbima();
 }
 
 /* ============================================================
@@ -5174,6 +5216,116 @@ function tr2_renderScatterRateChart(divId, rowsOverride) {
     hoverlabel: { namelength: -1 },
   });
   Plotly.newPlot(divId, traces, layout, PLOTLY_CONFIG);
+}
+
+/* ============================================================
+ *  Tab — Índices ANBIMA (IDA / IMA, latest snapshot)
+ *  Esboço minimal: toggle de família + tabela do latest dia.
+ *  Dados em data/indices_anbima.json (build_anbima_indices).
+ * ============================================================ */
+let INDICES_ANBIMA = null;
+let IDX_TABLE = null;
+let IDX_FAM = "IDA";
+
+// Formato BR para o número índice (separador de milhar . e decimal ,).
+function _idxFmtNumero(v) {
+  if (v == null) return "—";
+  return v.toLocaleString("pt-BR", {
+    minimumFractionDigits: 6, maximumFractionDigits: 6,
+  });
+}
+
+function _idxFmtPctSigned(v) {
+  if (v == null) return "—";
+  return (v >= 0 ? "+" : "") + v.toLocaleString("pt-BR", {
+    minimumFractionDigits: 4, maximumFractionDigits: 4,
+  }) + "%";
+}
+
+// Coluna "Var. Diária": seta verde/vermelha + valor BR.
+function _idxFmtDiaria(cell) {
+  const v = cell.getValue();
+  if (v == null) return "—";
+  const arrow = v > 0
+    ? '<span class="idx-arrow pos">▲</span>'
+    : (v < 0 ? '<span class="idx-arrow neg">▼</span>' : "");
+  return arrow + _idxFmtPctSigned(v);
+}
+
+function _idxFmtInt(cell) {
+  const v = cell.getValue();
+  if (v == null) return "—";
+  return Math.round(v).toLocaleString("pt-BR");
+}
+
+function _idxColumnsFor(familia) {
+  const cols = [
+    { title: "Subíndice", field: "indice", widthGrow: 1.5 },
+    { title: "Data", field: "ultima_data", width: 110,
+      formatter: c => brDate(c.getValue()) },
+    { title: "Número Índice", field: "numero_indice", hozAlign: "right",
+      formatter: c => _idxFmtNumero(c.getValue()) },
+    { title: "Var. Diária", field: "variacao_diaria_pct", hozAlign: "right",
+      formatter: _idxFmtDiaria },
+    { title: "Var. Mês", field: "variacao_mensal_pct", hozAlign: "right",
+      formatter: c => _idxFmtPctSigned(c.getValue()) },
+    { title: "Var. Ano", field: "variacao_anual_pct", hozAlign: "right",
+      formatter: c => _idxFmtPctSigned(c.getValue()) },
+    { title: "Var. 12m", field: "variacao_12m_pct", hozAlign: "right",
+      formatter: c => _idxFmtPctSigned(c.getValue()) },
+    { title: "Var. 24m", field: "variacao_24m_pct", hozAlign: "right",
+      formatter: c => _idxFmtPctSigned(c.getValue()) },
+    { title: "Duration (d.u.)", field: "duration_du", hozAlign: "right",
+      formatter: _idxFmtInt },
+  ];
+  if (familia === "IMA") {
+    cols.push({
+      title: "PMR", field: "pmr", hozAlign: "right",
+      formatter: _idxFmtInt,
+    });
+  }
+  return cols;
+}
+
+function _drawIdxTable() {
+  if (!INDICES_ANBIMA) return;
+  const rows = (INDICES_ANBIMA.indices || [])
+    .filter(r => r.familia === IDX_FAM);
+  if (IDX_TABLE) {
+    try { IDX_TABLE.destroy(); } catch (_) { /* idem */ }
+  }
+  IDX_TABLE = new Tabulator("#idx-table", {
+    data: rows,
+    layout: "fitColumns",
+    resizableColumns: false,
+    initialSort: [{ column: "indice", dir: "asc" }],
+    columns: _idxColumnsFor(IDX_FAM),
+  });
+}
+
+async function renderIndicesAnbima() {
+  INDICES_ANBIMA = await loadJSON("data/indices_anbima.json");
+  const sub = document.getElementById("idx-subtitle");
+  if (sub) {
+    sub.textContent =
+      "Fonte: ANBIMA Data (S3 público) — Atualizado: "
+      + (INDICES_ANBIMA.ultima_data
+          ? fmtDataExtenso(INDICES_ANBIMA.ultima_data) : "—");
+  }
+  // Wire-up dos botões do toggle (somente uma vez por tab load).
+  const toggle = document.getElementById("idx-toggle");
+  if (toggle && !toggle.dataset.wired) {
+    toggle.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-fam]");
+      if (!btn) return;
+      IDX_FAM = btn.dataset.fam;
+      toggle.querySelectorAll("button").forEach(b =>
+        b.classList.toggle("active", b === btn));
+      _drawIdxTable();
+    });
+    toggle.dataset.wired = "1";
+  }
+  _drawIdxTable();
 }
 
 // DOMContentLoaded garante que os scripts <head defer> (Tabulator, Plotly,

@@ -44,6 +44,7 @@ ROOT = Path(__file__).parent
 HIST_DIR = ROOT / "history"
 DATA_DIR = ROOT / "data"
 B3_CONS_DIR = DATA_DIR / "b3_trades_consolidated"
+ANBIMA_INDICES_DIR = DATA_DIR / "anbima_indices"
 
 # Indexadores efetivamente exibidos no dashboard. Para reincluir % do DI ou
 # IGP-M+ no futuro, basta acrescentá-los aqui — os snapshots em history/
@@ -730,6 +731,62 @@ def build_titpub_history(snaps: list[dict]) -> dict:
 
 
 # ----------------------------------------------------------------------------
+# indices ANBIMA (IDA + IMA) — Tab "Índices ANBIMA"
+# ----------------------------------------------------------------------------
+# Le 1 JSON por subindice em data/anbima_indices/<SLUG>.json (gerado por
+# fetch_anbima_indices.py) e exporta APENAS o latest snapshot (ultima
+# linha do historico) num payload compacto. Frontend so precisa do latest
+# para a tabela; o historico completo fica disponivel se quisermos plotar
+# series temporais no futuro.
+
+def build_anbima_indices() -> dict:
+    if not ANBIMA_INDICES_DIR.exists():
+        return {"familias": [], "indices": [], "ultima_data": None}
+    indices: list[dict] = []
+    ultima_data: str | None = None
+    for path in sorted(ANBIMA_INDICES_DIR.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            print(f"[warn ] {path} invalido, pulando", file=sys.stderr)
+            continue
+        rows = payload.get("rows") or []
+        if not rows:
+            continue
+        cols = payload.get("columns") or []
+        idx = {c: i for i, c in enumerate(cols)}
+        last = rows[-1]
+
+        def _g(name):
+            i = idx.get(name)
+            return last[i] if i is not None and i < len(last) else None
+
+        ult = _g("data")
+        if ult and (ultima_data is None or ult > ultima_data):
+            ultima_data = ult
+        indices.append({
+            "slug": payload.get("slug"),
+            "indice": payload.get("indice"),
+            "familia": payload.get("familia"),
+            "ultima_data": ult,
+            "numero_indice": _g("numero_indice"),
+            "variacao_diaria_pct": _g("variacao_diaria_pct"),
+            "variacao_mensal_pct": _g("variacao_mensal_pct"),
+            "variacao_anual_pct": _g("variacao_anual_pct"),
+            "variacao_12m_pct": _g("variacao_12m_pct"),
+            "variacao_24m_pct": _g("variacao_24m_pct"),
+            "duration_du": _g("duration_du"),
+            "pmr": _g("pmr"),
+        })
+    familias = sorted({i["familia"] for i in indices if i.get("familia")})
+    return {
+        "familias": familias,
+        "indices": indices,
+        "ultima_data": ultima_data,
+    }
+
+
+# ----------------------------------------------------------------------------
 # HTML
 # ----------------------------------------------------------------------------
 
@@ -800,6 +857,8 @@ def main() -> int:
         _write_json(DATA_DIR / "movements.json", build_movements(snaps))))
     sizes.append(("titpub_history.json",
         _write_json(DATA_DIR / "titpub_history.json", build_titpub_history(snaps))))
+    sizes.append(("indices_anbima.json",
+        _write_json(DATA_DIR / "indices_anbima.json", build_anbima_indices())))
 
     disp_index = build_dispersion(snaps, disp_dir)
     sizes.append(("dispersion/_index.json",
