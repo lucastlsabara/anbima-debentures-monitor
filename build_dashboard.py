@@ -734,16 +734,17 @@ def build_titpub_history(snaps: list[dict]) -> dict:
 # indices ANBIMA (IDA + IMA) — Tab "Índices ANBIMA"
 # ----------------------------------------------------------------------------
 # Le 1 JSON por subindice em data/anbima_indices/<SLUG>.json (gerado por
-# fetch_anbima_indices.py) e exporta APENAS o latest snapshot (ultima
-# linha do historico) num payload compacto. Frontend so precisa do latest
-# para a tabela; o historico completo fica disponivel se quisermos plotar
-# series temporais no futuro.
+# fetch_anbima_indices.py) e exporta a SERIE HISTORICA COMPLETA do numero
+# indice de cada subindice. Frontend calcula rentabilidade entre datas
+# arbitrarias client-side (rent = num_final / num_inicial - 1) — assim a
+# UX deixa de depender das colunas "Variacao X%" do XLS (periodos fixos)
+# e permite range arbitrario. Payload total ~2 MB pra 17 indices.
 
 def build_anbima_indices() -> dict:
     if not ANBIMA_INDICES_DIR.exists():
-        return {"familias": [], "indices": [], "ultima_data": None}
-    indices: list[dict] = []
-    ultima_data: str | None = None
+        return {"fetched_at": None, "indices": {}}
+    indices: dict[str, dict] = {}
+    fetched_at: str | None = None
     for path in sorted(ANBIMA_INDICES_DIR.glob("*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -755,34 +756,43 @@ def build_anbima_indices() -> dict:
             continue
         cols = payload.get("columns") or []
         idx = {c: i for i, c in enumerate(cols)}
+        i_data = idx.get("data")
+        i_num = idx.get("numero_indice")
+        i_dur = idx.get("duration_du")
+        i_pmr = idx.get("pmr")
+        if i_data is None or i_num is None:
+            print(f"[warn ] {path} sem coluna data/numero_indice", file=sys.stderr)
+            continue
+        series: list[list] = []
+        for r in rows:
+            d = r[i_data] if i_data < len(r) else None
+            n = r[i_num] if i_num < len(r) else None
+            if d is None or n is None:
+                continue
+            series.append([d, n])
+        if not series:
+            continue
+        series.sort(key=lambda p: p[0])
         last = rows[-1]
-
-        def _g(name):
-            i = idx.get(name)
-            return last[i] if i is not None and i < len(last) else None
-
-        ult = _g("data")
-        if ult and (ultima_data is None or ult > ultima_data):
-            ultima_data = ult
-        indices.append({
-            "slug": payload.get("slug"),
+        slug = payload.get("slug")
+        indices[slug] = {
+            "slug": slug,
             "indice": payload.get("indice"),
             "familia": payload.get("familia"),
-            "ultima_data": ult,
-            "numero_indice": _g("numero_indice"),
-            "variacao_diaria_pct": _g("variacao_diaria_pct"),
-            "variacao_mensal_pct": _g("variacao_mensal_pct"),
-            "variacao_anual_pct": _g("variacao_anual_pct"),
-            "variacao_12m_pct": _g("variacao_12m_pct"),
-            "variacao_24m_pct": _g("variacao_24m_pct"),
-            "duration_du": _g("duration_du"),
-            "pmr": _g("pmr"),
-        })
-    familias = sorted({i["familia"] for i in indices if i.get("familia")})
+            "duration_latest": (
+                last[i_dur] if i_dur is not None and i_dur < len(last) else None
+            ),
+            "pmr_latest": (
+                last[i_pmr] if i_pmr is not None and i_pmr < len(last) else None
+            ),
+            "series": series,
+        }
+        fa = payload.get("fetched_at")
+        if fa and (fetched_at is None or fa > fetched_at):
+            fetched_at = fa
     return {
-        "familias": familias,
+        "fetched_at": fetched_at,
         "indices": indices,
-        "ultima_data": ultima_data,
     }
 
 
