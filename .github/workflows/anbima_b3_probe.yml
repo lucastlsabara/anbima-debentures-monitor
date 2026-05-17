@@ -293,6 +293,14 @@ jobs:
         run: |
           python3 fetch_anbima_indices.py $FORCE_FLAG
 
+      - name: Fetch benchmarks (CDI, IPCA)
+        # CDI/IPCA via BCB SGS (API publica, sem auth). Beta:
+        # continue-on-error preserva o resto do pipeline se BCB indisponivel.
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
+        continue-on-error: true
+        run: |
+          python3 fetch_benchmarks.py
+
       - name: Detecta mudancas em data/ e history/
         id: changes
         if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'

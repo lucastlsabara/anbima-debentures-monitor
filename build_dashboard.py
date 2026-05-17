@@ -45,6 +45,7 @@ HIST_DIR = ROOT / "history"
 DATA_DIR = ROOT / "data"
 B3_CONS_DIR = DATA_DIR / "b3_trades_consolidated"
 ANBIMA_INDICES_DIR = DATA_DIR / "anbima_indices"
+BENCHMARKS_DIR = DATA_DIR / "benchmarks"
 
 # Indexadores efetivamente exibidos no dashboard. Para reincluir % do DI ou
 # IGP-M+ no futuro, basta acrescentá-los aqui — os snapshots em history/
@@ -741,10 +742,45 @@ def build_titpub_history(snaps: list[dict]) -> dict:
 # e permite range arbitrario. Payload total ~2 MB pra 17 indices.
 
 def build_anbima_indices() -> dict:
-    if not ANBIMA_INDICES_DIR.exists():
-        return {"fetched_at": None, "indices": {}}
+    """Agrega indices ANBIMA (IDA + IMA) + benchmarks (CDI + IPCA) num so payload.
+
+    Benchmarks vivem em data/benchmarks/ (schema enxuto ["data",
+    "numero_indice"]) e usam familia "Benchmark". O frontend trata os 3
+    grupos (Benchmark/IDA/IMA) como secoes paralelas de checkboxes.
+    """
     indices: dict[str, dict] = {}
     fetched_at: str | None = None
+    # Benchmarks (CDI, IPCA) — entram primeiro pra ficarem no inicio do
+    # payload e em destaque no UI.
+    if BENCHMARKS_DIR.exists():
+        for path in sorted(BENCHMARKS_DIR.glob("*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                print(f"[warn ] {path} invalido, pulando", file=sys.stderr)
+                continue
+            rows = payload.get("rows") or []
+            if not rows:
+                continue
+            slug = payload.get("slug")
+            series = [[r[0], r[1]] for r in rows if r[0] is not None and r[1] is not None]
+            series.sort(key=lambda p: p[0])
+            if not series:
+                continue
+            indices[slug] = {
+                "slug": slug,
+                "indice": payload.get("indice"),
+                "familia": payload.get("familia") or "Benchmark",
+                "duration_latest": None,
+                "pmr_latest": None,
+                "series": series,
+            }
+            fa = payload.get("fetched_at")
+            if fa and (fetched_at is None or fa > fetched_at):
+                fetched_at = fa
+
+    if not ANBIMA_INDICES_DIR.exists():
+        return {"fetched_at": fetched_at, "indices": indices}
     for path in sorted(ANBIMA_INDICES_DIR.glob("*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))

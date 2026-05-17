@@ -360,12 +360,6 @@
     background:var(--accent); color:#0e1116; border-color:var(--accent);
     font-weight:600;
   }
-  .idx-radio {
-    color:var(--fg); font-size:12.5px;
-    display:inline-flex; align-items:center; gap:6px;
-    cursor:pointer;
-  }
-  .idx-radio input { accent-color:var(--accent); }
   .idx-actions { margin-left:auto; display:inline-flex; gap:6px; }
   .idx-actions button {
     background:var(--surface2); color:var(--muted);
@@ -378,6 +372,22 @@
     display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));
     gap:4px 14px; margin-top:6px;
   }
+  /* Iteração 3: famílias agrupadas em colunas paralelas (Benchmark|IDA|IMA),
+     todos os 19 checkboxes visíveis ao mesmo tempo. */
+  .idx-groups {
+    display:grid;
+    grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) minmax(220px, 2fr);
+    gap:18px; margin-top:10px;
+  }
+  @media (max-width: 900px) {
+    .idx-groups { grid-template-columns: 1fr; }
+  }
+  .idx-group h3 {
+    font-size:10.5px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--muted); font-weight:600; margin:0 0 6px 0;
+    border-bottom:1px solid var(--border); padding-bottom:4px;
+  }
+  .idx-group .idx-checks { margin-top:4px; }
   .idx-check {
     display:flex; align-items:center; gap:6px;
     color:var(--fg); font-size:12px; cursor:pointer;
@@ -819,17 +829,15 @@
 </section>
 
 <!-- ===================== Tab: Índices ANBIMA ===================== -->
-<!-- Iteração 2: date range picker + radio Família + checkboxes de
-     subíndices + gráfico de barras Plotly com rentabilidade no período
-     escolhido + tabela enxuta. Dados em data/indices_anbima.json
-     (build_anbima_indices serializa a série histórica completa do
-     número índice; rentabilidade = num_final / num_inicial - 1 é
-     calculada client-side). -->
+<!-- Iteração 3: multi-select cruzado entre 3 famílias (Benchmark + IDA +
+     IMA) em uma única tela, Duration em anos (du/252), gráfico ao final.
+     Dados em data/indices_anbima.json (19 séries: CDI, IPCA, 5 IDA, 12
+     IMA). Rentabilidade = num_final / num_inicial - 1 client-side. -->
 <section id="tab-indices-anbima" class="tab hide">
   <div class="panel">
     <h2 style="font-size:14px;text-transform:none;letter-spacing:0;color:var(--fg);margin-bottom:4px;">Índices ANBIMA</h2>
     <div class="muted" id="idx-subtitle" style="font-size:11.5px;color:var(--muted);margin-bottom:12px;">
-      Fonte: ANBIMA Data (S3 público) — Última atualização: —
+      Fonte: ANBIMA Data (S3 público) + BCB SGS (CDI, IPCA) — Última atualização: —
     </div>
 
     <div class="controls filter-row">
@@ -846,31 +854,21 @@
         <button type="button" data-preset="2A">2A</button>
       </div>
       <span id="idx-range-msg" class="idx-range-msg hide"></span>
-    </div>
-
-    <div class="controls filter-row">
-      <label>Família:</label>
-      <label class="idx-radio">
-        <input type="radio" name="idx-fam" value="IDA"> IDA
-      </label>
-      <label class="idx-radio">
-        <input type="radio" name="idx-fam" value="IMA" checked> IMA
-      </label>
       <div class="idx-actions">
         <button type="button" id="idx-sel-all">Selecionar todos</button>
         <button type="button" id="idx-clear">Limpar</button>
       </div>
     </div>
 
-    <div class="idx-checks" id="idx-checks"></div>
-  </div>
-
-  <div class="panel">
-    <div id="idx-chart" class="chart-tall"></div>
+    <div class="idx-groups" id="idx-groups"></div>
   </div>
 
   <div class="panel">
     <div id="idx-table-wrap"></div>
+  </div>
+
+  <div class="panel">
+    <div id="idx-chart" class="chart-tall"></div>
   </div>
 </section>
 
@@ -5291,28 +5289,44 @@ function tr2_renderScatterRateChart(divId, rowsOverride) {
 }
 
 /* ============================================================
- *  Tab — Índices ANBIMA (IDA / IMA, série histórica completa)
+ *  Tab — Índices ANBIMA (Benchmark + IDA + IMA, série histórica completa)
  *
- *  Payload data/indices_anbima.json traz, para cada um dos 17
- *  subíndices, a série histórica (data, número índice) do número
- *  índice. Rentabilidade entre datas D1 e D2 é calculada client-side:
- *      rent = numero_indice[D2] / numero_indice[D1] - 1
- *  Isso libera a UX das colunas "Variacao X%" do XLS (períodos fixos
- *  diária/mensal/anual/12m/24m) e permite range arbitrário.
+ *  Iteração 3:
+ *   - 19 séries (CDI, IPCA, 5 IDA, 12 IMA) — multi-select cruzado em
+ *     3 colunas paralelas (Benchmark|IDA|IMA), todos visíveis ao
+ *     mesmo tempo.
+ *   - Duration em ANOS (d.u. / 252, 2 casas). CDI/IPCA = "—" (são
+ *     referências, sem duration).
+ *   - Tabela ANTES do gráfico (chart vai para o final da página).
+ *   - Defaults: CDI, IPCA, IDADI, IDAIPCA, IMAB selecionados; range
+ *     últimos 12 meses.
  *
- *  Defaults: período = últimos 12 meses até a data mais recente,
- *  família = IMA, todos os 12 checkboxes marcados, rentabilidade
- *  absoluta (não anualizada).
+ *  Mesma fórmula client-side pra TODAS as séries (incluindo IPCA com
+ *  mês parcial): rent = numero_indice[D2] / numero_indice[D1] - 1.
+ *  A complexidade da composição exponencial do IPCA é resolvida no
+ *  backend (fetch_benchmarks.py) ao construir o número índice diário.
  * ============================================================ */
 let INDICES_ANBIMA = null;
-let IDX_FAM = "IMA";
 let IDX_DATE_INI = null;   // ISO 'YYYY-MM-DD'
 let IDX_DATE_FIM = null;   // ISO 'YYYY-MM-DD'
-let IDX_SELECTED = new Set();  // slugs marcados (família atual)
+let IDX_SELECTED = new Set();  // slugs marcados (cruzados entre famílias)
 let IDX_MAX_DATA = null;   // última data disponível em qualquer série
 let IDX_WIRED = false;
 
-const IDX_FAM_COLOR = { IDA: "#7ab2f0", IMA: "#c9a6ff" };
+// Ordem fixa das famílias na UI; paleta de cores por família (Benchmark
+// cinza/preto = referência, IDA azul, IMA verde).
+const IDX_FAMILIES = ["Benchmark", "IDA", "IMA"];
+const IDX_FAM_LABEL = {
+  Benchmark: "Benchmarks",
+  IDA: "IDA",
+  IMA: "IMA",
+};
+const IDX_FAM_COLOR = {
+  Benchmark: "#9aa3b5",
+  IDA: "#7ab2f0",
+  IMA: "#7ad19a",
+};
+const IDX_DEFAULT_SELECTION = ["CDI", "IPCA", "IDADI", "IDAIPCA", "IMAB"];
 
 // Formato BR — número índice com 6 casas decimais (precisão original).
 function _idxFmtNumero(v) {
@@ -5338,6 +5352,16 @@ function _idxFmtRent(v) {
 function _idxFmtInt(v) {
   if (v == null) return "—";
   return Math.round(v).toLocaleString("pt-BR");
+}
+
+// Duration em anos = duration_du / 252, 2 casas, sufixo "anos".
+// Benchmarks (CDI/IPCA) trazem duration_latest = null → "—".
+function _idxFmtDurAnos(du) {
+  if (du == null) return "—";
+  const anos = du / 252;
+  return anos.toLocaleString("pt-BR", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  }) + " anos";
 }
 
 // Calcula rentabilidade entre dataIni e dataFim usando a série ordenada
@@ -5378,7 +5402,7 @@ function _idxApplyPreset(preset) {
   else if (preset === "YTD") IDX_DATE_INI = IDX_MAX_DATA.slice(0, 4) + "-01-01";
 }
 
-// Subíndices da família atual, ordenados pelo nome amigável.
+// Subíndices da família, ordenados pelo nome amigável.
 function _idxSubsForFamily(fam) {
   const all = INDICES_ANBIMA.indices || {};
   return Object.values(all)
@@ -5386,15 +5410,33 @@ function _idxSubsForFamily(fam) {
     .sort((a, b) => a.indice.localeCompare(b.indice, "pt-BR"));
 }
 
+// Itera todas as 19 séries em ordem canônica (Benchmark, IDA, IMA).
+function _idxAllSubs() {
+  const out = [];
+  for (const fam of IDX_FAMILIES) {
+    for (const s of _idxSubsForFamily(fam)) out.push(s);
+  }
+  return out;
+}
+
+// Renderiza 3 grupos de checkboxes lado-a-lado. Cada grupo tem header
+// com nome da família + atalhos "todos"/"limpar" daquela família.
 function _idxRenderChecks() {
-  const wrap = document.getElementById("idx-checks");
-  const subs = _idxSubsForFamily(IDX_FAM);
-  wrap.innerHTML = subs.map(s => {
-    const checked = IDX_SELECTED.has(s.slug) ? "checked" : "";
-    return `<label class="idx-check">
-      <input type="checkbox" data-slug="${escapeAttr(s.slug)}" ${checked}>
-      <span>${escapeHtml(s.indice)}</span>
-    </label>`;
+  const wrap = document.getElementById("idx-groups");
+  wrap.innerHTML = IDX_FAMILIES.map(fam => {
+    const subs = _idxSubsForFamily(fam);
+    if (!subs.length) return "";
+    const items = subs.map(s => {
+      const checked = IDX_SELECTED.has(s.slug) ? "checked" : "";
+      return `<label class="idx-check">
+        <input type="checkbox" data-slug="${escapeAttr(s.slug)}" ${checked}>
+        <span>${escapeHtml(s.indice)}</span>
+      </label>`;
+    }).join("");
+    return `<div class="idx-group" data-fam="${escapeAttr(fam)}">
+      <h3>${escapeHtml(IDX_FAM_LABEL[fam] || fam)}</h3>
+      <div class="idx-checks">${items}</div>
+    </div>`;
   }).join("");
 }
 
@@ -5428,12 +5470,12 @@ function _idxRedraw() {
   msg.classList.add("hide");
   msg.textContent = "";
 
-  const subs = _idxSubsForFamily(IDX_FAM)
-    .filter(s => IDX_SELECTED.has(s.slug));
+  // Multi-select cruzado: pega TODAS as séries marcadas (Benchmark + IDA + IMA).
+  const subs = _idxAllSubs().filter(s => IDX_SELECTED.has(s.slug));
 
   if (!subs.length) {
     Plotly.purge(chartDiv);
-    chartDiv.innerHTML = '<div class="empty">Selecione pelo menos um subíndice.</div>';
+    chartDiv.innerHTML = '<div class="empty">Selecione pelo menos uma série.</div>';
     wrapTbl.innerHTML = "";
     return;
   }
@@ -5443,8 +5485,51 @@ function _idxRedraw() {
     return { sub: s, calc: r };
   });
 
-  // Gráfico: barras horizontais (nomes longos cabem melhor no eixo Y),
-  // ordenadas por rentabilidade ASC pra empilhar do menor pro maior.
+  // Tabela detalhada (vem ANTES do gráfico no DOM, mas renderizamos
+  // primeiro pra leitura linear na ordem Benchmark > IDA > IMA).
+  const famOrder = new Map(IDX_FAMILIES.map((f, i) => [f, i]));
+  const tblRows = rows.slice().sort((a, b) => {
+    const fa = famOrder.get(a.sub.familia) ?? 99;
+    const fb = famOrder.get(b.sub.familia) ?? 99;
+    if (fa !== fb) return fa - fb;
+    return a.sub.indice.localeCompare(b.sub.indice, "pt-BR");
+  });
+  const head = `
+    <table class="idx-tbl">
+      <thead>
+        <tr>
+          <th>Série</th>
+          <th class="num">Num. Inicial</th>
+          <th class="num">Num. Final</th>
+          <th class="num">Rentabilidade</th>
+          <th class="num">Duration</th>
+        </tr>
+      </thead>
+      <tbody>`;
+  const body = tblRows.map(r => {
+    if (!r.calc) {
+      return `<tr>
+        <td>${escapeHtml(r.sub.indice)}</td>
+        <td class="num">—</td>
+        <td class="num">—</td>
+        <td class="num">Sem dados no período</td>
+        <td class="num">${_idxFmtDurAnos(r.sub.duration_latest)}</td>
+      </tr>`;
+    }
+    const cls = r.calc.rent >= 0 ? "pos" : "neg";
+    return `<tr>
+      <td>${escapeHtml(r.sub.indice)}</td>
+      <td class="num">${_idxFmtNumero(r.calc.numIni)}<br><span class="muted" style="color:var(--muted);font-size:10.5px;">${brDate(r.calc.dataIni)}</span></td>
+      <td class="num">${_idxFmtNumero(r.calc.numFim)}<br><span class="muted" style="color:var(--muted);font-size:10.5px;">${brDate(r.calc.dataFim)}</span></td>
+      <td class="num ${cls}">${_idxFmtRent(r.calc.rent)}</td>
+      <td class="num">${_idxFmtDurAnos(r.sub.duration_latest)}</td>
+    </tr>`;
+  }).join("");
+  wrapTbl.innerHTML = head + body + "</tbody></table>";
+
+  // Gráfico: barras horizontais, ordenadas por rentabilidade ASC. Cor
+  // por família (Benchmark cinza, IDA azul, IMA verde) — destaca a
+  // origem da série de relance.
   const sorted = [...rows].sort((a, b) => {
     const ra = a.calc ? a.calc.rent : -Infinity;
     const rb = b.calc ? b.calc.rent : -Infinity;
@@ -5452,13 +5537,10 @@ function _idxRedraw() {
   });
   const y = sorted.map(r => r.sub.indice);
   const x = sorted.map(r => r.calc ? r.calc.rent * 100 : null);
-  const colors = sorted.map(r => {
-    if (!r.calc) return cssVar("--muted");
-    return r.calc.rent >= 0 ? cssVar("--pos") : cssVar("--neg");
-  });
+  const colors = sorted.map(r => IDX_FAM_COLOR[r.sub.familia] || cssVar("--muted"));
   const hover = sorted.map(r => {
     if (!r.calc) return r.sub.indice + "<br>Sem dados no período";
-    return `<b>${r.sub.indice}</b>`
+    return `<b>${r.sub.indice}</b> <i>(${r.sub.familia})</i>`
       + `<br>${brDate(r.calc.dataIni)}: ${_idxFmtNumero(r.calc.numIni)}`
       + `<br>${brDate(r.calc.dataFim)}: ${_idxFmtNumero(r.calc.numFim)}`
       + `<br>Rentabilidade: ${((r.calc.rent * 100) >= 0 ? "+" : "")}`
@@ -5480,7 +5562,7 @@ function _idxRedraw() {
   const height = Math.max(260, 36 * sorted.length + 80);
   const layout = Object.assign({}, base, {
     height,
-    margin: { l: 200, r: 60, t: 16, b: 40 },
+    margin: { l: 220, r: 60, t: 16, b: 40 },
     xaxis: Object.assign({}, base.xaxis, {
       ticksuffix: "%", tickformat: ".2f", zeroline: true,
       zerolinecolor: cssVar("--border-strong"),
@@ -5491,51 +5573,6 @@ function _idxRedraw() {
     showlegend: false,
   });
   Plotly.newPlot(chartDiv, [trace], layout, PLOTLY_CONFIG);
-
-  // Tabela enxuta — mesma ordem do gráfico não importa; usamos a ordem
-  // alfabética dos subíndices marcados pra leitura linear.
-  const tblRows = rows.slice().sort((a, b) =>
-    a.sub.indice.localeCompare(b.sub.indice, "pt-BR"));
-  const head = `
-    <table class="idx-tbl">
-      <thead>
-        <tr>
-          <th>Subíndice</th>
-          <th class="num">Num. Inicial</th>
-          <th class="num">Num. Final</th>
-          <th class="num">Rentabilidade</th>
-          <th class="num">Duration (d.u.)</th>
-        </tr>
-      </thead>
-      <tbody>`;
-  const body = tblRows.map(r => {
-    if (!r.calc) {
-      return `<tr>
-        <td>${escapeHtml(r.sub.indice)}</td>
-        <td class="num">—</td>
-        <td class="num">—</td>
-        <td class="num">Sem dados no período</td>
-        <td class="num">${_idxFmtInt(r.sub.duration_latest)}</td>
-      </tr>`;
-    }
-    const cls = r.calc.rent >= 0 ? "pos" : "neg";
-    return `<tr>
-      <td>${escapeHtml(r.sub.indice)}</td>
-      <td class="num">${_idxFmtNumero(r.calc.numIni)}<br><span class="muted" style="color:var(--muted);font-size:10.5px;">${brDate(r.calc.dataIni)}</span></td>
-      <td class="num">${_idxFmtNumero(r.calc.numFim)}<br><span class="muted" style="color:var(--muted);font-size:10.5px;">${brDate(r.calc.dataFim)}</span></td>
-      <td class="num ${cls}">${_idxFmtRent(r.calc.rent)}</td>
-      <td class="num">${_idxFmtInt(r.sub.duration_latest)}</td>
-    </tr>`;
-  }).join("");
-  wrapTbl.innerHTML = head + body + "</tbody></table>";
-}
-
-function _idxOnFamilyChange(fam) {
-  IDX_FAM = fam;
-  // Repopula seleção: todos da nova família marcados por default.
-  IDX_SELECTED = new Set(_idxSubsForFamily(fam).map(s => s.slug));
-  _idxRenderChecks();
-  _idxRedraw();
 }
 
 function _idxWireUp() {
@@ -5562,14 +5599,9 @@ function _idxWireUp() {
     _idxRedraw();
   });
 
-  document.querySelectorAll('input[name="idx-fam"]').forEach(r => {
-    r.addEventListener("change", (e) => {
-      if (e.target.checked) _idxOnFamilyChange(e.target.value);
-    });
-  });
-
+  // Selecionar todos / Limpar — afetam TODAS as 19 séries (Benchmark+IDA+IMA).
   document.getElementById("idx-sel-all").addEventListener("click", () => {
-    IDX_SELECTED = new Set(_idxSubsForFamily(IDX_FAM).map(s => s.slug));
+    IDX_SELECTED = new Set(_idxAllSubs().map(s => s.slug));
     _idxRenderChecks();
     _idxRedraw();
   });
@@ -5579,7 +5611,9 @@ function _idxWireUp() {
     _idxRedraw();
   });
 
-  document.getElementById("idx-checks").addEventListener("change", (e) => {
+  // Delegação de eventos: um único listener na grade de grupos pega
+  // mudanças em qualquer checkbox das 3 famílias.
+  document.getElementById("idx-groups").addEventListener("change", (e) => {
     const cb = e.target.closest('input[type="checkbox"][data-slug]');
     if (!cb) return;
     if (cb.checked) IDX_SELECTED.add(cb.dataset.slug);
@@ -5599,15 +5633,18 @@ async function renderIndicesAnbima() {
       if (last && (maxData == null || last > maxData)) maxData = last;
     }
     IDX_MAX_DATA = maxData;
-    // Defaults: últimos 12 meses, família IMA, todos os checkboxes marcados.
+    // Defaults iteração 3: últimos 12 meses + CDI/IPCA/IDADI/IDAIPCA/IMAB.
     _idxApplyPreset("1A");
-    IDX_SELECTED = new Set(_idxSubsForFamily(IDX_FAM).map(s => s.slug));
+    const available = new Set(Object.keys(INDICES_ANBIMA.indices || {}));
+    IDX_SELECTED = new Set(
+      IDX_DEFAULT_SELECTION.filter(slug => available.has(slug))
+    );
   }
 
   const sub = document.getElementById("idx-subtitle");
   if (sub) {
     sub.textContent =
-      "Fonte: ANBIMA Data (S3 público) — Última atualização: "
+      "Fonte: ANBIMA Data (S3 público) + BCB SGS (CDI, IPCA) — Última atualização: "
       + (IDX_MAX_DATA ? fmtDataExtenso(IDX_MAX_DATA) : "—");
   }
 
