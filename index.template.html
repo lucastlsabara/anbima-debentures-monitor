@@ -368,12 +368,8 @@
     cursor:pointer;
   }
   .idx-actions button:hover { color:var(--fg); border-color:var(--accent); }
-  .idx-checks {
-    display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));
-    gap:4px 14px; margin-top:6px;
-  }
-  /* Iteração 4: famílias empilhadas verticalmente, checkboxes em linha
-     com flex-wrap para otimizar espaço. */
+  /* Iteração 5: famílias empilhadas verticalmente; dentro de cada família,
+     checkboxes em linha (flex-row + wrap) — sem grid, sem coluna fixa. */
   .idx-groups {
     display:flex; flex-direction:column;
     gap:10px; margin-top:10px;
@@ -383,10 +379,13 @@
     color:var(--muted); font-weight:600; margin:0 0 6px 0;
     border-bottom:1px solid var(--border); padding-bottom:4px;
   }
-  .idx-group .idx-checks {
-    display:flex; flex-wrap:wrap;
-    gap:4px 14px; margin-top:4px;
+  .idx-checks {
+    display:flex; flex-direction:row; flex-wrap:wrap;
+    gap:8px 16px; margin-top:4px;
   }
+  /* Iteração 5: card do gráfico sem altura fixa — adapta ao n_series
+     via height calculado em JS (_idxRedraw). */
+  .idx-chart { width:100%; min-height:200px; }
   .idx-check {
     display:inline-flex; align-items:center; gap:6px;
     color:var(--fg); font-size:12px; cursor:pointer;
@@ -867,7 +866,7 @@
   </div>
 
   <div class="panel">
-    <div id="idx-chart" class="chart-tall"></div>
+    <div id="idx-chart" class="idx-chart"></div>
   </div>
 </section>
 
@@ -5558,7 +5557,9 @@ function _idxRedraw() {
     hovertemplate: hover.map(h => h + "<extra></extra>"),
   };
   const base = PLOTLY_LAYOUT();
-  const height = Math.max(260, 36 * sorted.length + 80);
+  // Altura adaptativa: ~60px por barra + margens. Evita espaço vazio
+  // quando há poucas séries selecionadas.
+  const height = Math.max(180, sorted.length * 60 + 100);
   const layout = Object.assign({}, base, {
     height,
     margin: { l: 220, r: 60, t: 16, b: 40 },
