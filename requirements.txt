@@ -4,3 +4,4 @@ pandas==3.0.3
 requests==2.33.1
 holidays>=0.50
 pytz>=2024.1
+openpyxl>=3.1
