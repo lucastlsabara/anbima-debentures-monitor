@@ -368,28 +368,26 @@
     cursor:pointer;
   }
   .idx-actions button:hover { color:var(--fg); border-color:var(--accent); }
-  .idx-checks {
-    display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));
-    gap:4px 14px; margin-top:6px;
-  }
-  /* Iteração 3: famílias agrupadas em colunas paralelas (Benchmark|IDA|IMA),
-     todos os 19 checkboxes visíveis ao mesmo tempo. */
+  /* Iteração 5: famílias empilhadas verticalmente; dentro de cada família,
+     checkboxes em linha (flex-row + wrap) — sem grid, sem coluna fixa. */
   .idx-groups {
-    display:grid;
-    grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) minmax(220px, 2fr);
-    gap:18px; margin-top:10px;
-  }
-  @media (max-width: 900px) {
-    .idx-groups { grid-template-columns: 1fr; }
+    display:flex; flex-direction:column;
+    gap:10px; margin-top:10px;
   }
   .idx-group h3 {
     font-size:10.5px; text-transform:uppercase; letter-spacing:.06em;
     color:var(--muted); font-weight:600; margin:0 0 6px 0;
     border-bottom:1px solid var(--border); padding-bottom:4px;
   }
-  .idx-group .idx-checks { margin-top:4px; }
+  .idx-checks {
+    display:flex; flex-direction:row; flex-wrap:wrap;
+    gap:8px 16px; margin-top:4px;
+  }
+  /* Iteração 5: card do gráfico sem altura fixa — adapta ao n_series
+     via height calculado em JS (_idxRedraw). */
+  .idx-chart { width:100%; min-height:200px; }
   .idx-check {
-    display:flex; align-items:center; gap:6px;
+    display:inline-flex; align-items:center; gap:6px;
     color:var(--fg); font-size:12px; cursor:pointer;
     padding:3px 2px;
   }
@@ -868,7 +866,7 @@
   </div>
 
   <div class="panel">
-    <div id="idx-chart" class="chart-tall"></div>
+    <div id="idx-chart" class="idx-chart"></div>
   </div>
 </section>
 
@@ -917,7 +915,7 @@ const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
 // Substituído pelo build com hash dos JSONs em data/. Em dev (template puro)
 // fica vazio e o cache do browser dita a frescor. Em produção, ?v=<hash>
 // invalida o cache do GitHub Pages quando snapshots novos chegam.
-const BUILD_VERSION = "817a62739d9b";
+const BUILD_VERSION = "9a2bbdace974";
 
 const cache = new Map();
 async function loadJSON(path) {
@@ -5559,7 +5557,9 @@ function _idxRedraw() {
     hovertemplate: hover.map(h => h + "<extra></extra>"),
   };
   const base = PLOTLY_LAYOUT();
-  const height = Math.max(260, 36 * sorted.length + 80);
+  // Altura adaptativa: ~60px por barra + margens. Evita espaço vazio
+  // quando há poucas séries selecionadas.
+  const height = Math.max(180, sorted.length * 60 + 100);
   const layout = Object.assign({}, base, {
     height,
     margin: { l: 220, r: 60, t: 16, b: 40 },
