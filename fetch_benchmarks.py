@@ -69,10 +69,25 @@ FAMILIA = "Benchmark"
 
 _OUT_COLUMNS = ["data", "numero_indice"]
 
-USER_AGENT = (
-    "anbima-debentures-monitor/1.0 "
-    "(+https://github.com/lucastlsabara/anbima-debentures-monitor)"
-)
+# BCB SGS faz content-negotiation e devolve 406 Not Acceptable quando o
+# cliente nao parece um browser (User-Agent default do python-requests ou
+# UA "tecnico"). Reproduzivel em runner US-east do GitHub Actions; nao
+# reproduz local. Por isso usamos UA realista de browser + Accept amplo.
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, */*",
+}
+
+# Corte da serie diaria do IPCA: anteriormente o acc base 1000 era ancorado
+# no primeiro ponto BCB (1980-01), o que faz o num indice explodir
+# (~9.5e17 em 2026) por causa da hiperinflacao BR 1980-1994. Ancoramos em
+# 2000-01-01 (pos-Plano Real, pos-estabilizacao) pra manter o num indice
+# em ordem de grandeza utilizavel.
+IPCA_SERIES_START = date(2000, 1, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +95,7 @@ USER_AGENT = (
 # ---------------------------------------------------------------------------
 
 def _http_get_json(url: str) -> list[dict]:
-    r = request_with_retry("GET", url, headers={"User-Agent": USER_AGENT})
+    r = request_with_retry("GET", url, headers=HEADERS)
     return r.json()
 
 
@@ -139,12 +154,17 @@ def _next_month(y: int, m: int) -> tuple[int, int]:
 def build_ipca_series(
     monthly_pairs: list[tuple[date, float]],
     today: date,
+    *,
+    start: date | None = None,
 ) -> list[list]:
     """Constroi serie diaria [iso_date, acc] do numero indice IPCA.
 
     monthly_pairs: pontos do BCB SGS 433 em ordem ASC (data_mes_ref, ipca_pct).
         data_mes_ref tipicamente DD=01 do mes referencia.
     today: data limite (inclusive). O ultimo mes vai ate today.
+    start: data de inicio da serie diaria (default IPCA_SERIES_START =
+        2000-01-01). Meses anteriores a `start` sao ignorados; acc base
+        1000 eh ancorado no primeiro dia util da janela serializada.
 
     Logica:
       - Pra cada mes (do primeiro divulgado ate o mes corrente, inclusive):
@@ -157,16 +177,22 @@ def build_ipca_series(
             today, se for o mes corrente). Cada aplicacao gera um ponto da
             serie [iso_date, acc].
 
-    acc inicial = 1000.0 (anchor virtual antes do primeiro dia util).
+    acc inicial = 1000.0 (anchor virtual antes do primeiro dia util da
+    janela). NAO acumulamos desde 1980 (BCB) pra evitar que o num indice
+    estoure ordens de grandeza por causa da hiperinflacao 1980-1994.
     """
     if not monthly_pairs:
         return []
 
+    if start is None:
+        start = IPCA_SERIES_START
+
     by_ym = {(d.year, d.month): v for d, v in monthly_pairs}
     last_known = monthly_pairs[-1][1]
 
-    first = monthly_pairs[0]
-    y, m = first[0].year, first[0].month
+    first_ym = (monthly_pairs[0][0].year, monthly_pairs[0][0].month)
+    start_ym = (start.year, start.month)
+    y, m = max(first_ym, start_ym)
     end_y, end_m = today.year, today.month
 
     series: list[list] = []
