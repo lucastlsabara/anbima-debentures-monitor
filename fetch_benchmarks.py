@@ -79,7 +79,14 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json, */*",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "Referer": "https://www.bcb.gov.br/estatisticas/historicoseries",
+    "Cache-Control": "no-cache",
 }
 
 # Corte da serie diaria do IPCA: anteriormente o acc base 1000 era ancorado
