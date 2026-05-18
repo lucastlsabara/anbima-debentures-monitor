@@ -49,30 +49,35 @@ import argparse
 import json
 import sys
 import unittest
+import urllib.parse
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import requests
 
-from _http_utils import request_with_retry
 from b3_calendar import is_b3_business_day, today_brt
 
 ROOT = Path(__file__).parent
 OUT_DIR = ROOT / "data" / "benchmarks"
 
-SOURCES: dict[str, str] = {
-    "CDI": "https://api.bcb.gov.br/dados/serie/bcdata.sgs.12/dados?formato=json",
-    "IPCA": "https://api.bcb.gov.br/dados/serie/bcdata.sgs.433/dados?formato=json",
+# Series BCB SGS usadas: 12 = CDI diario (% a.d.), 433 = IPCA mensal (% a.m.).
+SERIES: dict[str, int] = {
+    "CDI": 12,
+    "IPCA": 433,
 }
 
 FAMILIA = "Benchmark"
 
 _OUT_COLUMNS = ["data", "numero_indice"]
 
-# BCB SGS faz content-negotiation e devolve 406 Not Acceptable quando o
-# cliente nao parece um browser (User-Agent default do python-requests ou
-# UA "tecnico"). Reproduzivel em runner US-east do GitHub Actions; nao
-# reproduz local. Por isso usamos UA realista de browser + Accept amplo.
+# BCB SGS bloqueia o IP do runner GH Actions US-east (Azure) e devolve
+# HTTP 406 independentemente dos headers (validado empiricamente em 4
+# runs com varios sets: UA Chrome, Accept-Language, Sec-Fetch-*, Referer).
+# Eh IP-block, nao content-negotiation. Por isso a coleta usa cascata de
+# fontes (`_bcb_sgs_fetch`): tenta direto e, em caso de falha, cai em
+# proxies publicos (codetabs -> allorigins) que repassam o JSON puro.
+# HEADERS continuam sendo enviados em todas as fontes porque alguns
+# proxies fazem passthrough do User-Agent ao backend.
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -98,12 +103,80 @@ IPCA_SERIES_START = date(2000, 1, 1)
 
 
 # ---------------------------------------------------------------------------
-# HTTP
+# HTTP - cascata de fontes BCB SGS
 # ---------------------------------------------------------------------------
 
-def _http_get_json(url: str) -> list[dict]:
-    r = request_with_retry("GET", url, headers=HEADERS)
-    return r.json()
+def _bcb_sgs_fetch(
+    serie_id: int,
+    *,
+    headers: dict | None = None,
+    timeout: int = 30,
+) -> list[dict]:
+    """Baixa uma serie do BCB SGS com cascata de fallback.
+
+    Ordem de tentativa:
+      1. Direto em api.bcb.gov.br (rapido se passar; ideal fora de
+         runners Azure US-east).
+      2. Proxy publico codetabs (10/10 PASS em teste local, latencia
+         ~0.4-1.2s, devolve JSON puro). O slash final apos `/proxy/` eh
+         OBRIGATORIO -- sem ele ha redirect 301.
+      3. Proxy publico allorigins.win/raw (instavel ~4/10; quando passa,
+         devolve JSON puro). Tem 2 retries internos pra HTTP 522
+         (Cloudflare timeout) e outras falhas transitorias.
+      4. Falha total: levanta RuntimeError. O caller deve tratar (o step
+         do workflow tem `continue-on-error: true` e o build_dashboard.py
+         degrade graciosamente quando data/benchmarks/<slug>.json nao
+         existe).
+
+    Devolve a lista de dicts {data, valor} crua do BCB.
+    """
+    hdrs = headers if headers is not None else HEADERS
+    base = (
+        f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{serie_id}"
+        f"/dados?formato=json"
+    )
+    quoted = urllib.parse.quote(base, safe="")
+    sources = [
+        ("direct", base),
+        ("codetabs", f"https://api.codetabs.com/v1/proxy/?quest={quoted}"),
+        ("allorigins", f"https://api.allorigins.win/raw?url={quoted}"),
+    ]
+    last_err: Exception | None = None
+    for label, url in sources:
+        retries = 2 if label == "allorigins" else 0
+        for attempt in range(retries + 1):
+            try:
+                r = requests.get(
+                    url,
+                    headers=hdrs,
+                    timeout=timeout,
+                    allow_redirects=True,
+                )
+                r.raise_for_status()
+                data = r.json()
+                if not isinstance(data, list) or not data:
+                    raise ValueError(
+                        f"resposta vazia ou formato inesperado de {label}"
+                    )
+                print(
+                    f"[bench] serie {serie_id} via {label}: {len(data)} pontos",
+                    file=sys.stderr,
+                )
+                return data
+            except Exception as e:
+                last_err = e
+                suffix = ""
+                if retries:
+                    suffix = f" (tentativa {attempt + 1}/{retries + 1})"
+                print(
+                    f"[bench] serie {serie_id} {label}{suffix} falhou: {e}, "
+                    f"tentando proximo",
+                    file=sys.stderr,
+                )
+                continue
+    raise RuntimeError(
+        f"[bench] todas as fontes falharam para serie {serie_id}: {last_err}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +326,7 @@ def _write_payload(slug: str, indice_label: str, rows: list[list]) -> None:
 
 
 def fetch_cdi() -> int:
-    data = _http_get_json(SOURCES["CDI"])
+    data = _bcb_sgs_fetch(SERIES["CDI"])
     pairs = [_parse_bcb_pair(item) for item in data]
     pairs.sort(key=lambda p: p[0])
     series = build_cdi_series(pairs)
@@ -263,7 +336,7 @@ def fetch_cdi() -> int:
 
 def fetch_ipca(today: date | None = None) -> int:
     today = today or today_brt()
-    data = _http_get_json(SOURCES["IPCA"])
+    data = _bcb_sgs_fetch(SERIES["IPCA"])
     pairs = [_parse_bcb_pair(item) for item in data]
     pairs.sort(key=lambda p: p[0])
     series = build_ipca_series(pairs, today)
@@ -276,13 +349,13 @@ def run_all() -> int:
     try:
         n = fetch_cdi()
         print(f"[bench] CDI ok ({n} pontos)", file=sys.stderr)
-    except (requests.RequestException, ValueError, KeyError) as e:
+    except (requests.RequestException, RuntimeError, ValueError, KeyError) as e:
         print(f"[bench] ::error:: CDI: {e}", file=sys.stderr)
         n_fail += 1
     try:
         n = fetch_ipca()
         print(f"[bench] IPCA ok ({n} pontos)", file=sys.stderr)
-    except (requests.RequestException, ValueError, KeyError) as e:
+    except (requests.RequestException, RuntimeError, ValueError, KeyError) as e:
         print(f"[bench] ::error:: IPCA: {e}", file=sys.stderr)
         n_fail += 1
     return 1 if n_fail else 0
@@ -443,6 +516,13 @@ def run_self_test() -> int:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Coleta CDI e IPCA via BCB SGS e gera num indice diario.",
+    )
+    p.add_argument(
+        "--force", action="store_true",
+        help=(
+            "No-op aqui: a serie eh sempre reconstruida from scratch. Flag "
+            "mantida pra paridade com outros fetchers e uso futuro."
+        ),
     )
     p.add_argument(
         "--self-test", action="store_true",
