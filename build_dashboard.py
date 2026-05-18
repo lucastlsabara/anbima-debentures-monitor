@@ -742,7 +742,7 @@ def build_titpub_history(snaps: list[dict]) -> dict:
 # e permite range arbitrario. Payload total ~2 MB pra 17 indices.
 
 def build_anbima_indices() -> dict:
-    """Agrega indices ANBIMA (IDA + IMA) + benchmarks (CDI + IPCA) num so payload.
+    """Agrega indices ANBIMA (IDA + IMA) + benchmark IPCA num so payload.
 
     Benchmarks vivem em data/benchmarks/ (schema enxuto ["data",
     "numero_indice"]) e usam familia "Benchmark". O frontend trata os 3
@@ -750,8 +750,8 @@ def build_anbima_indices() -> dict:
     """
     indices: dict[str, dict] = {}
     fetched_at: str | None = None
-    # Benchmarks (CDI, IPCA) — entram primeiro pra ficarem no inicio do
-    # payload e em destaque no UI.
+    # Benchmark IPCA — entra primeiro pra ficar no inicio do payload e em
+    # destaque no UI.
     if BENCHMARKS_DIR.exists():
         for path in sorted(BENCHMARKS_DIR.glob("*.json")):
             try:

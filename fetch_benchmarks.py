@@ -1,17 +1,14 @@
-"""Baixa benchmarks de mercado (CDI e IPCA) via BCB SGS e gera numero
-indice diario acumulado base 1000.
+"""Baixa o benchmark IPCA via BCB SGS e gera numero indice diario base 1000.
 
-Fontes:
-  - CDI: https://api.bcb.gov.br/dados/serie/bcdata.sgs.12/dados?formato=json
-    Serie 12 (CDI diario, % a.d.); ~252 pontos por ano.
+Fonte:
   - IPCA: https://api.bcb.gov.br/dados/serie/bcdata.sgs.433/dados?formato=json
     Serie 433 (IPCA mensal, % a.m.); 1 ponto por mes (DD=01).
 
-Saida: data/benchmarks/<SLUG>.json com schema enxuto:
+Saida: data/benchmarks/IPCA.json com schema enxuto:
   {
-    "indice": "CDI" | "IPCA",
+    "indice": "IPCA",
     "familia": "Benchmark",
-    "slug": "CDI" | "IPCA",
+    "slug": "IPCA",
     "fetched_at": "...",
     "columns": ["data", "numero_indice"],
     "rows": [["YYYY-MM-DD", float], ...]
@@ -19,9 +16,7 @@ Saida: data/benchmarks/<SLUG>.json com schema enxuto:
 
 REGRA MATEMATICA: todo calculo eh COMPOSTO. Nunca aditivo. Composicao
 exponencial em todas as operacoes (acumular, distribuir entre dias uteis,
-combinar segmentos). Ver detalhes em IPCA abaixo.
-
-CDI: produto direto dos (1 + valor[i]/100), com acc[0] = 1000.
+combinar segmentos).
 
 IPCA: construir num indice DIARIO (apenas dias uteis) tal que a mesma
 formula simples (num_fim/num_ini - 1) que o frontend usa pros outros
@@ -37,10 +32,9 @@ exata: produto dos fatores diarios = (1 + ipca_mes/100). Pra mes em curso
 distribuindo entre os dias uteis ATE hoje, mas a base do expoente eh DU
 do mes corrente (nao do mes proxy).
 
-Self-test (--self-test): 5 cenarios cobrindo CDI direto, IPCA fechado,
-IPCA parcial (exponencial != linear), IPCA mes em curso com proxy, e
-sanity matematico 12m (composicao exponencial preserva o composto
-mensal).
+Self-test (--self-test): cenarios cobrindo IPCA fechado, IPCA parcial
+(exponencial != linear), IPCA mes em curso com proxy, e sanity matematico
+12m (composicao exponencial preserva o composto mensal).
 """
 
 from __future__ import annotations
@@ -49,7 +43,6 @@ import argparse
 import json
 import sys
 import unittest
-import urllib.parse
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -60,9 +53,8 @@ from b3_calendar import is_b3_business_day, today_brt
 ROOT = Path(__file__).parent
 OUT_DIR = ROOT / "data" / "benchmarks"
 
-# Series BCB SGS usadas: 12 = CDI diario (% a.d.), 433 = IPCA mensal (% a.m.).
+# Serie BCB SGS usada: 433 = IPCA mensal (% a.m.).
 SERIES: dict[str, int] = {
-    "CDI": 12,
     "IPCA": 433,
 }
 
@@ -70,14 +62,6 @@ FAMILIA = "Benchmark"
 
 _OUT_COLUMNS = ["data", "numero_indice"]
 
-# BCB SGS bloqueia o IP do runner GH Actions US-east (Azure) e devolve
-# HTTP 406 independentemente dos headers (validado empiricamente em 4
-# runs com varios sets: UA Chrome, Accept-Language, Sec-Fetch-*, Referer).
-# Eh IP-block, nao content-negotiation. Por isso a coleta usa cascata de
-# fontes (`_bcb_sgs_fetch`): tenta direto e, em caso de falha, cai em
-# proxies publicos (codetabs -> allorigins) que repassam o JSON puro.
-# HEADERS continuam sendo enviados em todas as fontes porque alguns
-# proxies fazem passthrough do User-Agent ao backend.
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -85,13 +69,6 @@ HEADERS = {
         "Chrome/120.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-origin",
-    "Referer": "https://www.bcb.gov.br/estatisticas/historicoseries",
-    "Cache-Control": "no-cache",
 }
 
 # Corte da serie diaria do IPCA: anteriormente o acc base 1000 era ancorado
@@ -103,80 +80,22 @@ IPCA_SERIES_START = date(2000, 1, 1)
 
 
 # ---------------------------------------------------------------------------
-# HTTP - cascata de fontes BCB SGS
+# HTTP
 # ---------------------------------------------------------------------------
 
-def _bcb_sgs_fetch(
-    serie_id: int,
-    *,
-    headers: dict | None = None,
-    timeout: int = 30,
-) -> list[dict]:
-    """Baixa uma serie do BCB SGS com cascata de fallback.
-
-    Ordem de tentativa:
-      1. Direto em api.bcb.gov.br (rapido se passar; ideal fora de
-         runners Azure US-east).
-      2. Proxy publico codetabs (10/10 PASS em teste local, latencia
-         ~0.4-1.2s, devolve JSON puro). O slash final apos `/proxy/` eh
-         OBRIGATORIO -- sem ele ha redirect 301.
-      3. Proxy publico allorigins.win/raw (instavel ~4/10; quando passa,
-         devolve JSON puro). Tem 2 retries internos pra HTTP 522
-         (Cloudflare timeout) e outras falhas transitorias.
-      4. Falha total: levanta RuntimeError. O caller deve tratar (o step
-         do workflow tem `continue-on-error: true` e o build_dashboard.py
-         degrade graciosamente quando data/benchmarks/<slug>.json nao
-         existe).
-
-    Devolve a lista de dicts {data, valor} crua do BCB.
-    """
-    hdrs = headers if headers is not None else HEADERS
-    base = (
+def _bcb_sgs_fetch(serie_id: int, *, timeout: int = 30) -> list[dict]:
+    """Baixa uma serie do BCB SGS direto, sem fallback."""
+    url = (
         f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{serie_id}"
         f"/dados?formato=json"
     )
-    quoted = urllib.parse.quote(base, safe="")
-    sources = [
-        ("direct", base),
-        ("codetabs", f"https://api.codetabs.com/v1/proxy/?quest={quoted}"),
-        ("allorigins", f"https://api.allorigins.win/raw?url={quoted}"),
-    ]
-    last_err: Exception | None = None
-    for label, url in sources:
-        retries = 2 if label == "allorigins" else 0
-        for attempt in range(retries + 1):
-            try:
-                r = requests.get(
-                    url,
-                    headers=hdrs,
-                    timeout=timeout,
-                    allow_redirects=True,
-                )
-                r.raise_for_status()
-                data = r.json()
-                if not isinstance(data, list) or not data:
-                    raise ValueError(
-                        f"resposta vazia ou formato inesperado de {label}"
-                    )
-                print(
-                    f"[bench] serie {serie_id} via {label}: {len(data)} pontos",
-                    file=sys.stderr,
-                )
-                return data
-            except Exception as e:
-                last_err = e
-                suffix = ""
-                if retries:
-                    suffix = f" (tentativa {attempt + 1}/{retries + 1})"
-                print(
-                    f"[bench] serie {serie_id} {label}{suffix} falhou: {e}, "
-                    f"tentando proximo",
-                    file=sys.stderr,
-                )
-                continue
-    raise RuntimeError(
-        f"[bench] todas as fontes falharam para serie {serie_id}: {last_err}"
-    )
+    r = requests.get(url, headers=HEADERS, timeout=timeout)
+    r.raise_for_status()
+    data = r.json()
+    if not isinstance(data, list) or not data:
+        raise ValueError(f"resposta vazia ou formato inesperado serie {serie_id}")
+    print(f"[bench] serie {serie_id}: {len(data)} pontos", file=sys.stderr)
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -191,23 +110,6 @@ def _parse_br_date(s: str) -> date:
 
 def _parse_bcb_pair(item: dict) -> tuple[date, float]:
     return _parse_br_date(item["data"]), float(item["valor"])
-
-
-# ---------------------------------------------------------------------------
-# CDI: numero indice diario por composicao multiplicativa
-# ---------------------------------------------------------------------------
-
-def build_cdi_series(pairs: list[tuple[date, float]]) -> list[list]:
-    """Constroi serie [iso_date, acc] base 1000 a partir das taxas diarias CDI.
-
-    pairs: lista de (data, valor_pct_a_d), ordem ASC.
-    """
-    series: list[list] = []
-    acc = 1000.0
-    for d, v in pairs:
-        acc *= (1.0 + v / 100.0)
-        series.append([d.isoformat(), acc])
-    return series
 
 
 # ---------------------------------------------------------------------------
@@ -325,15 +227,6 @@ def _write_payload(slug: str, indice_label: str, rows: list[list]) -> None:
     )
 
 
-def fetch_cdi() -> int:
-    data = _bcb_sgs_fetch(SERIES["CDI"])
-    pairs = [_parse_bcb_pair(item) for item in data]
-    pairs.sort(key=lambda p: p[0])
-    series = build_cdi_series(pairs)
-    _write_payload("CDI", "CDI", series)
-    return len(series)
-
-
 def fetch_ipca(today: date | None = None) -> int:
     today = today or today_brt()
     data = _bcb_sgs_fetch(SERIES["IPCA"])
@@ -346,12 +239,6 @@ def fetch_ipca(today: date | None = None) -> int:
 
 def run_all() -> int:
     n_fail = 0
-    try:
-        n = fetch_cdi()
-        print(f"[bench] CDI ok ({n} pontos)", file=sys.stderr)
-    except (requests.RequestException, RuntimeError, ValueError, KeyError) as e:
-        print(f"[bench] ::error:: CDI: {e}", file=sys.stderr)
-        n_fail += 1
     try:
         n = fetch_ipca()
         print(f"[bench] IPCA ok ({n} pontos)", file=sys.stderr)
@@ -367,22 +254,6 @@ def run_all() -> int:
 
 class _SelfTest(unittest.TestCase):
     TOL = 1e-9
-
-    def test_cdi_composicao_multiplicativa(self):
-        # 5 dias uteis com taxas conhecidas. Validar que
-        # acc[fim]/acc[ini] - 1 == produto((1+v_i/100)) - 1.
-        taxas_pct = [0.05, 0.04, 0.05, 0.06, 0.05]
-        # Datas arbitrarias (5 dias seguidos uteis em maio/2026).
-        datas = [date(2026, 5, 11) + timedelta(days=i) for i in range(5)]
-        pairs = list(zip(datas, taxas_pct))
-        series = build_cdi_series(pairs)
-        self.assertEqual(len(series), 5)
-        # acc[-1]/1000 deveria ser produto((1+v/100)).
-        prod = 1.0
-        for v in taxas_pct:
-            prod *= (1.0 + v / 100.0)
-        rent_observado = series[-1][1] / 1000.0
-        self.assertAlmostEqual(rent_observado, prod, delta=self.TOL)
 
     def test_ipca_mes_fechado_composicao_exata(self):
         # IPCA = 0.5%, mes com 20 DU. Forcar DU=20 construindo um mes
@@ -515,7 +386,7 @@ def run_self_test() -> int:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Coleta CDI e IPCA via BCB SGS e gera num indice diario.",
+        description="Coleta IPCA via BCB SGS e gera num indice diario.",
     )
     p.add_argument(
         "--force", action="store_true",
@@ -526,7 +397,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--self-test", action="store_true",
-        help="Roda 5 cenarios in-process (composicao exponencial vs linear).",
+        help="Roda cenarios in-process (composicao exponencial vs linear).",
     )
     return p.parse_args()
 

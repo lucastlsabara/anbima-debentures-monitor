@@ -52,7 +52,7 @@ on:
         required: false
         default: ''
       force_refetch:
-        description: 'Forcar refetch ignorando cache (B3 Consolidated + Trades + ANBIMA + Indices ANBIMA IDA/IMA + Benchmarks CDI/IPCA)'
+        description: 'Forcar refetch ignorando cache (B3 Consolidated + Trades + ANBIMA + Indices ANBIMA IDA/IMA + Benchmark IPCA)'
         required: false
         type: boolean
         default: false
@@ -293,8 +293,8 @@ jobs:
         run: |
           python3 fetch_anbima_indices.py $FORCE_FLAG
 
-      - name: Fetch benchmarks (CDI, IPCA)
-        # CDI/IPCA via BCB SGS (API publica, sem auth). Beta:
+      - name: Fetch benchmark IPCA
+        # IPCA via BCB SGS (API publica, sem auth). Beta:
         # continue-on-error preserva o resto do pipeline se BCB indisponivel.
         # --force aqui eh no-op (serie sempre reconstruida from scratch),
         # mas mantido pra paridade com os outros steps quando o usuario

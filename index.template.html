@@ -829,13 +829,13 @@
 <!-- ===================== Tab: Índices ANBIMA ===================== -->
 <!-- Iteração 3: multi-select cruzado entre 3 famílias (Benchmark + IDA +
      IMA) em uma única tela, Duration em anos (du/252), gráfico ao final.
-     Dados em data/indices_anbima.json (19 séries: CDI, IPCA, 5 IDA, 12
+     Dados em data/indices_anbima.json (18 séries: IPCA, 5 IDA, 12
      IMA). Rentabilidade = num_final / num_inicial - 1 client-side. -->
 <section id="tab-indices-anbima" class="tab hide">
   <div class="panel">
     <h2 style="font-size:14px;text-transform:none;letter-spacing:0;color:var(--fg);margin-bottom:4px;">Índices ANBIMA</h2>
     <div class="muted" id="idx-subtitle" style="font-size:11.5px;color:var(--muted);margin-bottom:12px;">
-      Fonte: ANBIMA Data (S3 público) + BCB SGS (CDI, IPCA) — Última atualização: —
+      Fonte: ANBIMA Data (S3 público) + BCB SGS (IPCA) — Última atualização: —
     </div>
 
     <div class="controls filter-row">
@@ -5290,13 +5290,13 @@ function tr2_renderScatterRateChart(divId, rowsOverride) {
  *  Tab — Índices ANBIMA (Benchmark + IDA + IMA, série histórica completa)
  *
  *  Iteração 3:
- *   - 19 séries (CDI, IPCA, 5 IDA, 12 IMA) — multi-select cruzado em
+ *   - 18 séries (IPCA, 5 IDA, 12 IMA) — multi-select cruzado em
  *     3 colunas paralelas (Benchmark|IDA|IMA), todos visíveis ao
  *     mesmo tempo.
- *   - Duration em ANOS (d.u. / 252, 2 casas). CDI/IPCA = "—" (são
- *     referências, sem duration).
+ *   - Duration em ANOS (d.u. / 252, 2 casas). IPCA = "—" (é
+ *     referência, sem duration).
  *   - Tabela ANTES do gráfico (chart vai para o final da página).
- *   - Defaults: CDI, IPCA, IDADI, IDAIPCA, IMAB selecionados; range
+ *   - Defaults: IPCA, IDADI, IDAIPCA, IMAB selecionados; range
  *     últimos 12 meses.
  *
  *  Mesma fórmula client-side pra TODAS as séries (incluindo IPCA com
@@ -5324,7 +5324,7 @@ const IDX_FAM_COLOR = {
   IDA: "#7ab2f0",
   IMA: "#7ad19a",
 };
-const IDX_DEFAULT_SELECTION = ["CDI", "IPCA", "IDADI", "IDAIPCA", "IMAB"];
+const IDX_DEFAULT_SELECTION = ["IPCA", "IDADI", "IDAIPCA", "IMAB"];
 
 // Formato BR — número índice com 6 casas decimais (precisão original).
 function _idxFmtNumero(v) {
@@ -5353,7 +5353,7 @@ function _idxFmtInt(v) {
 }
 
 // Duration em anos = duration_du / 252, 2 casas, sufixo "anos".
-// Benchmarks (CDI/IPCA) trazem duration_latest = null → "—".
+// Benchmark IPCA traz duration_latest = null → "—".
 function _idxFmtDurAnos(du) {
   if (du == null) return "—";
   const anos = du / 252;
@@ -5408,7 +5408,7 @@ function _idxSubsForFamily(fam) {
     .sort((a, b) => a.indice.localeCompare(b.indice, "pt-BR"));
 }
 
-// Itera todas as 19 séries em ordem canônica (Benchmark, IDA, IMA).
+// Itera todas as 18 séries em ordem canônica (Benchmark, IDA, IMA).
 function _idxAllSubs() {
   const out = [];
   for (const fam of IDX_FAMILIES) {
@@ -5599,7 +5599,7 @@ function _idxWireUp() {
     _idxRedraw();
   });
 
-  // Selecionar todos / Limpar — afetam TODAS as 19 séries (Benchmark+IDA+IMA).
+  // Selecionar todos / Limpar — afetam TODAS as 18 séries (Benchmark+IDA+IMA).
   document.getElementById("idx-sel-all").addEventListener("click", () => {
     IDX_SELECTED = new Set(_idxAllSubs().map(s => s.slug));
     _idxRenderChecks();
@@ -5633,7 +5633,7 @@ async function renderIndicesAnbima() {
       if (last && (maxData == null || last > maxData)) maxData = last;
     }
     IDX_MAX_DATA = maxData;
-    // Defaults iteração 3: últimos 12 meses + CDI/IPCA/IDADI/IDAIPCA/IMAB.
+    // Defaults iteração 3: últimos 12 meses + IPCA/IDADI/IDAIPCA/IMAB.
     _idxApplyPreset("1A");
     const available = new Set(Object.keys(INDICES_ANBIMA.indices || {}));
     IDX_SELECTED = new Set(
@@ -5644,7 +5644,7 @@ async function renderIndicesAnbima() {
   const sub = document.getElementById("idx-subtitle");
   if (sub) {
     sub.textContent =
-      "Fonte: ANBIMA Data (S3 público) + BCB SGS (CDI, IPCA) — Última atualização: "
+      "Fonte: ANBIMA Data (S3 público) + BCB SGS (IPCA) — Última atualização: "
       + (IDX_MAX_DATA ? fmtDataExtenso(IDX_MAX_DATA) : "—");
   }
 
