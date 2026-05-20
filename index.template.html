@@ -521,6 +521,7 @@
   <a href="#/heatmap" data-tab="heatmap">Debêntures: Setor × Prazo</a>
   <a href="#/dispersao" data-tab="dispersao">Debêntures: Gráfico</a>
   <a href="#/trades" data-tab="trades">Pesquisa de Trades</a>
+  <a href="#/marcacao-b3" data-tab="marcacao-b3">Marcação B3</a>
   <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
   <a href="#/indices-anbima" data-tab="indices-anbima">Índices ANBIMA</a>
 </nav>
@@ -826,6 +827,46 @@
   </div>
 </section>
 
+<!-- ===================== Tab: Marcação B3 ===================== -->
+<!-- Marcação alternativa para papéis sem cobertura ANBIMA: taxa média
+     ponderada por volume, agrupada por (ticker, período) a partir dos
+     trades B3 (data/b3_trades/). Pura agregação client-side. -->
+<section id="tab-marcacao-b3" class="tab hide">
+  <div class="panel">
+    <div class="controls filter-row">
+      <label>Data Anterior:
+        <input type="text" id="mkb-date-anterior" placeholder="DD-MM-YYYY">
+      </label>
+      <label>Data Atual:
+        <input type="text" id="mkb-date-atual" placeholder="DD-MM-YYYY">
+      </label>
+      <label>Volume mínimo (R$):
+        <input type="text" id="mkb-min-volume" placeholder="ex: 10000000"
+               inputmode="numeric" style="width:140px">
+      </label>
+      <label>Periodicidade:
+        <select id="mkb-period">
+          <option value="daily">Diária</option>
+          <option value="weekly" selected>Semanal</option>
+          <option value="monthly">Mensal</option>
+          <option value="annual">Anual</option>
+        </select>
+      </label>
+      <span id="mkb-status" class="trd-status"></span>
+      <span id="mkb-date-error" class="date-error hide"></span>
+    </div>
+    <div class="muted" style="font-size:11.5px;color:var(--muted);margin-top:6px;">
+      Volume mínimo aceita número puro sem separador. Ex: 10000000 = R$ 10 MM.
+      Taxa de marcação = média das taxas dos trades, ponderada pelo volume de cada trade.
+    </div>
+  </div>
+  <div id="mkb-empty" class="empty hide"></div>
+  <div class="panel" id="mkb-table-panel">
+    <h2>Marcação B3 por período</h2>
+    <div id="mkb-table"></div>
+  </div>
+</section>
+
 <!-- ===================== Tab: Índices ANBIMA ===================== -->
 <!-- Iteração 3: multi-select cruzado entre 3 famílias (Benchmark + IDA +
      IMA) em uma única tela, Duration em anos (du/252), gráfico ao final.
@@ -1029,7 +1070,7 @@ function adaptiveTextColor(bgHex) {
 /* ============================================================
  *  hash routing
  * ============================================================ */
-const TABS = ["visao","dispersao","movimentacoes","heatmap","titulos-publicos","trades","indices-anbima"];
+const TABS = ["visao","dispersao","movimentacoes","heatmap","titulos-publicos","trades","marcacao-b3","indices-anbima"];
 const loaded = new Set();
 
 // Rotas antigas redirecionadas para evitar bookmarks quebrados:
@@ -1123,6 +1164,7 @@ async function renderTab(name) {
   if (name === "heatmap") return renderHeatmap();
   if (name === "titulos-publicos") return renderTitulosPublicos();
   if (name === "trades") return renderTrades();
+  if (name === "marcacao-b3") return renderMarcacaoB3();
   if (name === "indices-anbima") return renderIndicesAnbima();
 }
 
@@ -5376,6 +5418,435 @@ function tr2_renderScatterRateChart(divId, rowsOverride) {
     hoverlabel: { namelength: -1 },
   });
   Plotly.newPlot(divId, traces, layout, PLOTLY_CONFIG);
+}
+
+/* ============================================================
+ *  Tab — Marcação B3
+ *
+ *  Marcação alternativa (taxa média ponderada por volume) para papéis
+ *  com pouca/nenhuma cobertura ANBIMA. Pura agregação client-side
+ *  sobre data/b3_trades/<date>.json. Reusa TRD_DAY_CACHE / TRD_COLUMNS
+ *  do módulo de Trades; não toca em fetchers nem em outras abas.
+ *
+ *  Pipeline:
+ *    1. Janela [Data Anterior, Data Atual] -> fetch dias do manifesto B3.
+ *    2. Filtros: descarta cancelados, taxa null/-, volume <= 0,
+ *       volume < volume_minimo (se informado).
+ *    3. Bucketiza por (ticker, periodo) onde periodo depende da
+ *       Periodicidade (diária/semanal ISO/mensal/anual).
+ *    4. Taxa marcação = Σ(taxa_i * vol_i) / Σ(vol_i); Volume = Σ(vol_i).
+ * ============================================================ */
+let MKB_MANIFEST = null;
+let MKB_FP_ATUAL = null, MKB_FP_ANTERIOR = null;
+let MKB_DATE_ATUAL = null, MKB_DATE_ANTERIOR = null;
+let MKB_MIN_VOLUME = null;          // null = sem filtro
+let MKB_PERIOD = "weekly";          // daily | weekly | monthly | annual
+let MKB_RANGE_ROWS = null;          // cache dos trades carregados na última janela
+let MKB_RANGE_KEY = "";             // chave da última janela carregada
+let MKB_TABLE = null;
+let MKB_INITED = false;
+let MKB_RECALC_TIMER = null;
+
+function mkb_setStatus(msg) {
+  const el = document.getElementById("mkb-status");
+  if (!el) return;
+  el.textContent = msg || "";
+}
+
+function mkb_showEmpty(msg) {
+  const e = document.getElementById("mkb-empty");
+  const p = document.getElementById("mkb-table-panel");
+  if (msg) {
+    e.textContent = msg;
+    e.classList.remove("hide");
+    p.classList.add("hide");
+  } else {
+    e.textContent = "";
+    e.classList.add("hide");
+    p.classList.remove("hide");
+  }
+}
+
+function mkb_showDateError(msg) {
+  const el = document.getElementById("mkb-date-error");
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove("hide");
+}
+function mkb_clearDateError() {
+  const el = document.getElementById("mkb-date-error");
+  if (!el) return;
+  el.textContent = "";
+  el.classList.add("hide");
+}
+
+// Chave de período a partir de "YYYY-MM-DD" + MKB_PERIOD. Retorna
+// { key, label, sortKey } — key é única e estável para agrupamento;
+// sortKey ordena cronologicamente; label é o texto exibido na coluna.
+function mkb_periodKey(iso, period) {
+  const [y, m, d] = iso.split("-").map(Number);
+  if (period === "annual") {
+    return { key: String(y), label: String(y), sortKey: String(y) };
+  }
+  if (period === "monthly") {
+    const mm = String(m).padStart(2, "0");
+    const meses = ["Jan","Fev","Mar","Abr","Mai","Jun",
+                   "Jul","Ago","Set","Out","Nov","Dez"];
+    return { key: `${y}-${mm}`, label: `${meses[m-1]}/${y}`, sortKey: `${y}-${mm}` };
+  }
+  if (period === "weekly") {
+    // ISO week (segunda-domingo). Algoritmo padrão: Date UTC, ajusta para
+    // quinta-feira da semana, mede dias desde 1º de janeiro do ano-piloto.
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    const dayNum = dt.getUTCDay() || 7;
+    dt.setUTCDate(dt.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(dt.getUTCFullYear(), 0, 1));
+    const weekNo = Math.ceil(((dt - yearStart) / 86400000 + 1) / 7);
+    const isoYear = dt.getUTCFullYear();
+    // Segunda da semana ISO da data original (não a deslocada).
+    const monday = new Date(Date.UTC(y, m - 1, d));
+    monday.setUTCDate(monday.getUTCDate() - (dayNum - 1));
+    const sunday = new Date(monday);
+    sunday.setUTCDate(sunday.getUTCDate() + 6);
+    const dd = n => String(n).padStart(2, "0");
+    const lblMon = `${dd(monday.getUTCDate())}/${dd(monday.getUTCMonth() + 1)}`;
+    const lblSun = `${dd(sunday.getUTCDate())}/${dd(sunday.getUTCMonth() + 1)}`;
+    const ww = String(weekNo).padStart(2, "0");
+    return {
+      key: `${isoYear}-W${ww}`,
+      label: `${lblMon}-${lblSun}`,
+      sortKey: `${isoYear}-W${ww}`,
+    };
+  }
+  // daily
+  const dd = String(d).padStart(2, "0");
+  const mm = String(m).padStart(2, "0");
+  return { key: iso, label: `${dd}/${mm}`, sortKey: iso };
+}
+
+async function renderMarcacaoB3() {
+  if (!MKB_INITED) {
+    document.getElementById("mkb-min-volume").addEventListener("input", (e) => {
+      const raw = (e.target.value || "").replace(/[^\d.]/g, "");
+      const n = raw === "" ? null : Number(raw);
+      MKB_MIN_VOLUME = (n != null && Number.isFinite(n) && n > 0) ? n : null;
+      mkb_scheduleRecalc();
+    });
+    document.getElementById("mkb-period").addEventListener("change", (e) => {
+      MKB_PERIOD = e.target.value;
+      mkb_renderTable();   // só re-agrupa, não refaz fetch
+    });
+    MKB_INITED = true;
+  }
+  await mkb_initDatesAndLoad();
+}
+
+async function mkb_initDatesAndLoad() {
+  mkb_setStatus("Carregando manifest…");
+  let manifest;
+  try {
+    manifest = await loadJSON("data/b3_trades/manifest.json");
+  } catch (e) {
+    console.error("[marcacao-b3] manifest", e);
+    mkb_setStatus("");
+    mkb_showEmpty("Sem dados de B3 trades disponíveis.");
+    return;
+  }
+  mkb_setStatus("");
+  MKB_MANIFEST = manifest;
+
+  const dates = (manifest.dates || [])
+    .filter(e => (e.n_trades || 0) > 0)
+    .map(e => e.date);
+  if (!dates.length) {
+    mkb_showEmpty("Sem dados de B3 trades disponíveis.");
+    return;
+  }
+  const latest = dates[dates.length - 1];
+  const earliest = dates[0];
+
+  // Datas iniciais: sincroniza com globais se compatíveis; senão pega
+  // janela = [earliest, latest] para dar uma visão completa por default.
+  if (GLOBAL_DATE_ATUAL) {
+    MKB_DATE_ATUAL = _nearestEnabledDate(GLOBAL_DATE_ATUAL, dates) || latest;
+  } else {
+    MKB_DATE_ATUAL = latest;
+  }
+  if (GLOBAL_DATE_ANTERIOR) {
+    const earlierDates = dates.filter(d => d < MKB_DATE_ATUAL);
+    MKB_DATE_ANTERIOR = _nearestEnabledDate(GLOBAL_DATE_ANTERIOR, earlierDates) || earlierDates[0] || null;
+  } else {
+    // Default: data mais antiga do manifesto -> janela completa.
+    const earlierDates = dates.filter(d => d < MKB_DATE_ATUAL);
+    MKB_DATE_ANTERIOR = earlierDates.length ? earlierDates[0] : null;
+  }
+  GLOBAL_DATE_ATUAL = MKB_DATE_ATUAL;
+  if (MKB_DATE_ANTERIOR) GLOBAL_DATE_ANTERIOR = MKB_DATE_ANTERIOR;
+
+  if (MKB_FP_ATUAL) MKB_FP_ATUAL.destroy();
+  if (MKB_FP_ANTERIOR) MKB_FP_ANTERIOR.destroy();
+  MKB_FP_ATUAL = flatpickr("#mkb-date-atual", {
+    dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
+    enable: dates, defaultDate: MKB_DATE_ATUAL,
+    minDate: earliest, maxDate: latest,
+    onChange: (_, d) => { if (d) mkb_onDateChange("atual", d); },
+  });
+  MKB_FP_ANTERIOR = flatpickr("#mkb-date-anterior", {
+    dateFormat: "Y-m-d", altInput: true, altFormat: "d-m-Y",
+    enable: dates.filter(d => d <= MKB_DATE_ATUAL),
+    defaultDate: MKB_DATE_ANTERIOR || undefined,
+    minDate: earliest, maxDate: MKB_DATE_ATUAL,
+    onChange: (_, d) => { if (d) mkb_onDateChange("anterior", d); },
+  });
+
+  _registerDateSync({
+    key: "marcacao-b3",
+    getEnabledAtual: () => {
+      if (!MKB_MANIFEST) return [];
+      return (MKB_MANIFEST.dates || [])
+        .filter(e => (e.n_trades || 0) > 0)
+        .map(e => e.date);
+    },
+    getEnabledAnteriorFor: (atu) => {
+      if (!MKB_MANIFEST) return [];
+      return (MKB_MANIFEST.dates || [])
+        .filter(e => (e.n_trades || 0) > 0 && e.date <= atu)
+        .map(e => e.date);
+    },
+    applyDates: (atu, ant) => {
+      MKB_DATE_ATUAL = atu;
+      MKB_DATE_ANTERIOR = ant;
+      if (MKB_FP_ATUAL) MKB_FP_ATUAL.setDate(atu, false);
+      if (MKB_FP_ANTERIOR) {
+        const enabled = (MKB_MANIFEST.dates || [])
+          .filter(e => (e.n_trades || 0) > 0 && e.date <= atu)
+          .map(e => e.date);
+        MKB_FP_ANTERIOR.set("enable", enabled);
+        MKB_FP_ANTERIOR.set("maxDate", atu);
+        if (ant) MKB_FP_ANTERIOR.setDate(ant, false);
+        else MKB_FP_ANTERIOR.clear(false);
+      }
+      mkb_scheduleRecalc();
+    },
+  });
+
+  await mkb_load();
+}
+
+function mkb_onDateChange(which, d) {
+  mkb_clearDateError();
+  if (which === "atual") {
+    MKB_DATE_ATUAL = d;
+    if (MKB_DATE_ANTERIOR && MKB_DATE_ANTERIOR > MKB_DATE_ATUAL) {
+      MKB_DATE_ANTERIOR = null;
+      if (MKB_FP_ANTERIOR) MKB_FP_ANTERIOR.clear(false);
+    }
+    if (MKB_FP_ANTERIOR && MKB_MANIFEST) {
+      const enabled = (MKB_MANIFEST.dates || [])
+        .filter(e => (e.n_trades || 0) > 0 && e.date <= MKB_DATE_ATUAL)
+        .map(e => e.date);
+      MKB_FP_ANTERIOR.set("enable", enabled);
+      MKB_FP_ANTERIOR.set("maxDate", MKB_DATE_ATUAL);
+    }
+  } else {
+    MKB_DATE_ANTERIOR = d;
+    if (MKB_DATE_ATUAL && MKB_DATE_ANTERIOR > MKB_DATE_ATUAL) {
+      mkb_showDateError("Data Anterior não pode ser maior que Data Atual.");
+      return;
+    }
+  }
+  _syncDatesFrom("marcacao-b3", MKB_DATE_ATUAL, MKB_DATE_ANTERIOR);
+  mkb_scheduleRecalc();
+}
+
+function mkb_scheduleRecalc() {
+  if (MKB_RECALC_TIMER) clearTimeout(MKB_RECALC_TIMER);
+  MKB_RECALC_TIMER = setTimeout(() => {
+    MKB_RECALC_TIMER = null;
+    mkb_load();
+  }, 250);
+}
+
+function mkb_datesInRange() {
+  if (!MKB_MANIFEST || !MKB_DATE_ATUAL) return [];
+  const ini = MKB_DATE_ANTERIOR || MKB_DATE_ATUAL;
+  const fim = MKB_DATE_ATUAL;
+  const out = [];
+  for (const e of MKB_MANIFEST.dates || []) {
+    if ((e.n_trades || 0) <= 0) continue;
+    if (e.date >= ini && e.date <= fim) out.push(e);
+  }
+  return out;
+}
+
+async function mkb_fetchTradeDay(entry) {
+  if (TRD_DAY_CACHE.has(entry.date)) return TRD_DAY_CACHE.get(entry.date);
+  const path = "data/b3_trades/" + entry.filename;
+  const url = BUILD_VERSION ? path + "?v=" + BUILD_VERSION : path;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(entry.date + " HTTP " + r.status);
+  const j = await r.json();
+  TRD_DAY_CACHE.set(entry.date, j);
+  return j;
+}
+
+async function mkb_load() {
+  if (!MKB_MANIFEST || !MKB_DATE_ATUAL) return;
+  const entries = mkb_datesInRange();
+  const rangeKey = entries.map(e => e.date).join(",");
+  if (rangeKey === MKB_RANGE_KEY && MKB_RANGE_ROWS != null) {
+    mkb_renderTable();
+    return;
+  }
+  if (!entries.length) {
+    MKB_RANGE_ROWS = [];
+    MKB_RANGE_KEY = rangeKey;
+    mkb_showEmpty("Nenhum dia útil B3 dentro da janela selecionada.");
+    return;
+  }
+  mkb_setStatus(`Carregando ${entries.length} dia(s)…`);
+  mkb_showEmpty(null);
+  let payloads;
+  try {
+    payloads = await Promise.all(entries.map(e => mkb_fetchTradeDay(e)));
+  } catch (e) {
+    console.error("[marcacao-b3] fetch", e);
+    mkb_setStatus("");
+    mkb_showEmpty("Falha ao carregar trades: " + e.message);
+    return;
+  }
+  const all = [];
+  for (const p of payloads) {
+    for (const r of p.rows) {
+      const obj = trd_rowToObj(r, p.date);
+      if (_trd_isCancelled(obj.situation)) continue;
+      all.push(obj);
+    }
+  }
+  MKB_RANGE_ROWS = all;
+  MKB_RANGE_KEY = rangeKey;
+  mkb_setStatus("");
+  mkb_renderTable();
+}
+
+// Agrega MKB_RANGE_ROWS aplicando filtros (taxa válida, volume mínimo)
+// e bucketizando por (ticker, período). Devolve:
+//   { rows: [...], columns: [{key,label,sortKey}, ...] }
+function mkb_aggregate() {
+  if (!MKB_RANGE_ROWS) return { rows: [], periods: [] };
+  // chave -> {ticker, issuer, perPeriod: Map(periodKey -> {sumWR, sumV})}
+  const acc = new Map();
+  const periodsMap = new Map(); // periodKey -> {label, sortKey}
+  for (const r of MKB_RANGE_ROWS) {
+    const rate = typeof r.rate === "number" ? r.rate : null;
+    if (rate == null || !Number.isFinite(rate)) continue;
+    const vol = typeof r.vol === "number" ? r.vol : null;
+    if (vol == null || !Number.isFinite(vol) || vol <= 0) continue;
+    if (MKB_MIN_VOLUME != null && vol < MKB_MIN_VOLUME) continue;
+    if (!r.ticker) continue;
+    const p = mkb_periodKey(r.date, MKB_PERIOD);
+    if (!periodsMap.has(p.key)) periodsMap.set(p.key, p);
+    let row = acc.get(r.ticker);
+    if (!row) {
+      row = { ticker: r.ticker, issuer: r.issuer || "", per: new Map() };
+      acc.set(r.ticker, row);
+    }
+    if (!row.issuer && r.issuer) row.issuer = r.issuer;
+    let bucket = row.per.get(p.key);
+    if (!bucket) { bucket = { sumWR: 0, sumV: 0 }; row.per.set(p.key, bucket); }
+    bucket.sumWR += rate * vol;
+    bucket.sumV += vol;
+  }
+  const periods = [...periodsMap.values()]
+    .sort((a, b) => a.sortKey < b.sortKey ? -1 : (a.sortKey > b.sortKey ? 1 : 0));
+  const rows = [];
+  for (const row of acc.values()) {
+    const flat = { ticker: row.ticker, issuer: row.issuer };
+    let any = false;
+    for (const p of periods) {
+      const b = row.per.get(p.key);
+      if (b && b.sumV > 0) {
+        flat[`taxa__${p.key}`] = b.sumWR / b.sumV;
+        flat[`vol__${p.key}`] = b.sumV;
+        any = true;
+      } else {
+        flat[`taxa__${p.key}`] = null;
+        flat[`vol__${p.key}`] = null;
+      }
+    }
+    if (any) rows.push(flat);
+  }
+  rows.sort((a, b) => a.ticker.localeCompare(b.ticker, "pt-BR"));
+  return { rows, periods };
+}
+
+function mkb_renderTable() {
+  const { rows, periods } = mkb_aggregate();
+  if (!rows.length) {
+    if (MKB_TABLE) { try { MKB_TABLE.destroy(); } catch (_) {} MKB_TABLE = null; }
+    mkb_showEmpty("Nenhum papel com taxa válida no período (aplicando filtros).");
+    return;
+  }
+  mkb_showEmpty(null);
+
+  const periodCols = periods.map(p => ({
+    title: p.label,
+    columns: [
+      {
+        title: "Taxa marcação",
+        field: `taxa__${p.key}`,
+        hozAlign: "right",
+        width: 120,
+        formatter: c => {
+          const v = c.getValue();
+          if (v == null || !Number.isFinite(v)) return "—";
+          return fmtPp(v);
+        },
+        sorter: "number",
+      },
+      {
+        title: "Volume considerado",
+        field: `vol__${p.key}`,
+        hozAlign: "right",
+        width: 140,
+        formatter: c => {
+          const v = c.getValue();
+          if (v == null || !Number.isFinite(v)) return "—";
+          return "R$ " + trd_fmtMoneyShort(v);
+        },
+        tooltip: c => {
+          const v = c.getValue();
+          if (v == null || !Number.isFinite(v)) return "";
+          return trd_fmtMoneyFull(v);
+        },
+        sorter: "number",
+      },
+    ],
+  }));
+
+  const columns = [
+    { title: "Ticker", field: "ticker", width: 110, frozen: true,
+      headerFilter: "input", headerFilterFunc: trd_likeCI },
+    { title: "Emissor", field: "issuer", minWidth: 220,
+      headerFilter: "input", headerFilterFunc: trd_likeCI },
+    ...periodCols,
+  ];
+
+  if (MKB_TABLE) {
+    try { MKB_TABLE.destroy(); } catch (_) {}
+    MKB_TABLE = null;
+  }
+  MKB_TABLE = new Tabulator("#mkb-table", {
+    data: rows,
+    layout: "fitDataStretch",
+    resizableColumns: true,
+    height: "70vh",
+    pagination: true,
+    paginationSize: 50,
+    paginationSizeSelector: [25, 50, 100, 250],
+    initialSort: [{ column: "ticker", dir: "asc" }],
+    columns,
+  });
 }
 
 /* ============================================================
