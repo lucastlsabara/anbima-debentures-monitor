@@ -846,8 +846,8 @@
       </label>
       <label>Periodicidade:
         <select id="mkb-period">
-          <option value="daily">Diária</option>
-          <option value="weekly" selected>Semanal</option>
+          <option value="daily" selected>Diária</option>
+          <option value="weekly">Semanal</option>
           <option value="monthly">Mensal</option>
           <option value="annual">Anual</option>
         </select>
@@ -5441,7 +5441,7 @@ let MKB_MANIFEST = null;
 let MKB_FP_ATUAL = null, MKB_FP_ANTERIOR = null;
 let MKB_DATE_ATUAL = null, MKB_DATE_ANTERIOR = null;
 let MKB_MIN_VOLUME = null;          // null = sem filtro. Valor já em R$ (input em MM × 1e6).
-let MKB_PERIOD = "weekly";          // daily | weekly | monthly | annual
+let MKB_PERIOD = "daily";           // daily | weekly | monthly | annual
 let MKB_SHOW_VOLUME = false;        // checkbox "Exibir Volume" (default oculto)
 let MKB_RANGE_ROWS = null;          // cache dos trades carregados na última janela
 let MKB_RANGE_KEY = "";             // chave da última janela carregada
@@ -5774,21 +5774,50 @@ function mkb_aggregate() {
   for (const row of acc.values()) {
     const flat = { ticker: row.ticker, issuer: row.issuer };
     let any = false;
+    let firstPer = null, lastPer = null;
+    let firstTaxa = null, lastTaxa = null;
     for (const p of periods) {
       const b = row.per.get(p.key);
       if (b && b.sumV > 0) {
-        flat[`taxa__${p.key}`] = b.sumWR / b.sumV;
+        const t = b.sumWR / b.sumV;
+        flat[`taxa__${p.key}`] = t;
         flat[`vol__${p.key}`] = b.sumV;
         any = true;
+        if (firstPer == null) { firstPer = p; firstTaxa = t; }
+        lastPer = p; lastTaxa = t;
       } else {
         flat[`taxa__${p.key}`] = null;
         flat[`vol__${p.key}`] = null;
       }
     }
+    // delta = taxa(ultimo periodo com taxa) - taxa(primeiro periodo com taxa),
+    // convertido de pp para bps. Se papel tem taxa em apenas 1 periodo na
+    // janela (firstPer === lastPer), delta = null (sem variacao calculavel).
+    if (firstPer && lastPer && firstPer.key !== lastPer.key) {
+      flat.delta_bps = Math.round((lastTaxa - firstTaxa) * 100.0 * 10) / 10;
+      flat.delta_from_label = firstPer.label;
+      flat.delta_to_label = lastPer.label;
+    } else {
+      flat.delta_bps = null;
+      flat.delta_from_label = null;
+      flat.delta_to_label = null;
+    }
     if (any) rows.push(flat);
   }
   rows.sort((a, b) => a.ticker.localeCompare(b.ticker, "pt-BR"));
   return { rows, periods };
+}
+
+// p95 do |delta_bps| da tabela atual, pra gradiente de cor (mesma logica
+// usada em Movimentacoes via _bgForDelta).
+function mkb_computeDeltaStats(rows) {
+  const arr = rows.map(r => r.delta_bps)
+    .filter(v => v != null && Number.isFinite(v))
+    .map(v => Math.abs(v))
+    .sort((a, b) => a - b);
+  if (!arr.length) return { deltaAbsP95: 0 };
+  const idx = Math.min(arr.length - 1, Math.floor((arr.length - 1) * 0.95 + 0.5));
+  return { deltaAbsP95: arr[idx] };
 }
 
 function mkb_renderTable() {
@@ -5837,12 +5866,36 @@ function mkb_renderTable() {
     return { title: p.label, columns: subs };
   });
 
+  // Delta = taxa(ultimo periodo) - taxa(primeiro periodo) com taxa valida na
+  // janela, em bps. Mesmas classes/cores que a coluna "Δ Spread (bps)" da
+  // aba Movimentacoes (vermelho = taxa subiu, verde = taxa caiu) reusando
+  // _bgForDelta para gradiente HSLA por p95 absoluto.
+  const mkbDeltaStats = mkb_computeDeltaStats(rows);
+  const fmtMkbDelta = c => {
+    const v = c.getValue();
+    const el = c.getElement();
+    el.classList.remove("neg", "pos");
+    el.style.backgroundColor = "";
+    if (v == null || !Number.isFinite(v)) return "—";
+    if (v > 0) el.classList.add("neg");
+    else if (v < 0) el.classList.add("pos");
+    el.style.backgroundColor = _bgForDelta(v, mkbDeltaStats.deltaAbsP95);
+    return (v >= 0 ? "+" : "") + v.toFixed(0);
+  };
   const columns = [
     { title: "Ticker", field: "ticker", width: 110, frozen: true,
       headerFilter: "input", headerFilterFunc: trd_likeCI },
     { title: "Emissor", field: "issuer", minWidth: 220,
       headerFilter: "input", headerFilterFunc: trd_likeCI },
     ...periodCols,
+    { title: "Δ Taxa (bps)", field: "delta_bps", width: 130, hozAlign: "right",
+      headerSort: true, sorter: "number",
+      formatter: fmtMkbDelta,
+      tooltip: c => {
+        const r = c.getRow().getData();
+        if (r.delta_bps == null || !r.delta_from_label || !r.delta_to_label) return "";
+        return `${r.delta_from_label} → ${r.delta_to_label}`;
+      } },
   ];
 
   if (MKB_TABLE) {
