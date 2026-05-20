@@ -840,8 +840,8 @@
       <label>Data Atual:
         <input type="text" id="mkb-date-atual" placeholder="DD-MM-YYYY">
       </label>
-      <label>Volume mínimo (R$):
-        <input type="text" id="mkb-min-volume" placeholder="ex: 10000000"
+      <label>Volume mínimo (MM):
+        <input type="text" id="mkb-min-volume" placeholder="ex: 10"
                inputmode="numeric" style="width:140px">
       </label>
       <label>Periodicidade:
@@ -852,12 +852,12 @@
           <option value="annual">Anual</option>
         </select>
       </label>
+      <label style="display:inline-flex;align-items:center;gap:6px;">
+        <input type="checkbox" id="mkb-show-volume">
+        Exibir Volume
+      </label>
       <span id="mkb-status" class="trd-status"></span>
       <span id="mkb-date-error" class="date-error hide"></span>
-    </div>
-    <div class="muted" style="font-size:11.5px;color:var(--muted);margin-top:6px;">
-      Volume mínimo aceita número puro sem separador. Ex: 10000000 = R$ 10 MM.
-      Taxa de marcação = média das taxas dos trades, ponderada pelo volume de cada trade.
     </div>
   </div>
   <div id="mkb-empty" class="empty hide"></div>
@@ -5430,8 +5430,9 @@ function tr2_renderScatterRateChart(divId, rowsOverride) {
  *
  *  Pipeline:
  *    1. Janela [Data Anterior, Data Atual] -> fetch dias do manifesto B3.
- *    2. Filtros: descarta cancelados, taxa null/-, volume <= 0,
- *       volume < volume_minimo (se informado).
+ *    2. Filtros: apenas instrument="DEB" (debêntures), descarta cancelados,
+ *       taxa null/-, volume <= 0, volume < volume_minimo (se informado;
+ *       input em MM convertido para R$).
  *    3. Bucketiza por (ticker, periodo) onde periodo depende da
  *       Periodicidade (diária/semanal ISO/mensal/anual).
  *    4. Taxa marcação = Σ(taxa_i * vol_i) / Σ(vol_i); Volume = Σ(vol_i).
@@ -5439,8 +5440,9 @@ function tr2_renderScatterRateChart(divId, rowsOverride) {
 let MKB_MANIFEST = null;
 let MKB_FP_ATUAL = null, MKB_FP_ANTERIOR = null;
 let MKB_DATE_ATUAL = null, MKB_DATE_ANTERIOR = null;
-let MKB_MIN_VOLUME = null;          // null = sem filtro
+let MKB_MIN_VOLUME = null;          // null = sem filtro. Valor já em R$ (input em MM × 1e6).
 let MKB_PERIOD = "weekly";          // daily | weekly | monthly | annual
+let MKB_SHOW_VOLUME = false;        // checkbox "Exibir Volume" (default oculto)
 let MKB_RANGE_ROWS = null;          // cache dos trades carregados na última janela
 let MKB_RANGE_KEY = "";             // chave da última janela carregada
 let MKB_TABLE = null;
@@ -5529,12 +5531,19 @@ async function renderMarcacaoB3() {
     document.getElementById("mkb-min-volume").addEventListener("input", (e) => {
       const raw = (e.target.value || "").replace(/[^\d.]/g, "");
       const n = raw === "" ? null : Number(raw);
-      MKB_MIN_VOLUME = (n != null && Number.isFinite(n) && n > 0) ? n : null;
+      // Input em MM -> converte para R$ multiplicando por 1.000.000.
+      MKB_MIN_VOLUME = (n != null && Number.isFinite(n) && n > 0) ? n * 1e6 : null;
       mkb_scheduleRecalc();
     });
     document.getElementById("mkb-period").addEventListener("change", (e) => {
       MKB_PERIOD = e.target.value;
       mkb_renderTable();   // só re-agrupa, não refaz fetch
+    });
+    const showVolEl = document.getElementById("mkb-show-volume");
+    showVolEl.checked = MKB_SHOW_VOLUME;
+    showVolEl.addEventListener("change", (e) => {
+      MKB_SHOW_VOLUME = !!e.target.checked;
+      mkb_renderTable();
     });
     MKB_INITED = true;
   }
@@ -5720,6 +5729,8 @@ async function mkb_load() {
     for (const r of p.rows) {
       const obj = trd_rowToObj(r, p.date);
       if (_trd_isCancelled(obj.situation)) continue;
+      // Apenas debêntures (instrument = "DEB"). Descarta CRI/CRA/CFF/LF/etc.
+      if (obj.instrument !== "DEB") continue;
       all.push(obj);
     }
   }
@@ -5789,11 +5800,10 @@ function mkb_renderTable() {
   }
   mkb_showEmpty(null);
 
-  const periodCols = periods.map(p => ({
-    title: p.label,
-    columns: [
+  const periodCols = periods.map(p => {
+    const subs = [
       {
-        title: "Taxa marcação",
+        title: "Taxa",
         field: `taxa__${p.key}`,
         hozAlign: "right",
         width: 120,
@@ -5804,8 +5814,10 @@ function mkb_renderTable() {
         },
         sorter: "number",
       },
-      {
-        title: "Volume considerado",
+    ];
+    if (MKB_SHOW_VOLUME) {
+      subs.push({
+        title: "Volume",
         field: `vol__${p.key}`,
         hozAlign: "right",
         width: 140,
@@ -5820,9 +5832,10 @@ function mkb_renderTable() {
           return trd_fmtMoneyFull(v);
         },
         sorter: "number",
-      },
-    ],
-  }));
+      });
+    }
+    return { title: p.label, columns: subs };
+  });
 
   const columns = [
     { title: "Ticker", field: "ticker", width: 110, frozen: true,
