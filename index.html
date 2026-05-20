@@ -859,8 +859,25 @@
       <span id="mkb-status" class="trd-status"></span>
       <span id="mkb-date-error" class="date-error hide"></span>
     </div>
+    <div class="controls tr2-search-row">
+      <label class="tr2-pk-label-strong" for="mkb-picker">Buscar papel:</label>
+      <div class="tr2-pk-wrap tr2-pk-wrap-wide">
+        <input type="text" id="mkb-picker" autocomplete="off"
+               placeholder="ticker ou emissor (ex: GGBRA7, Gerdau)">
+      </div>
+    </div>
   </div>
   <div id="mkb-empty" class="empty hide"></div>
+  <div id="mkb-charts" class="hide">
+    <div class="panel">
+      <h2>Volume Total por Dia</h2>
+      <div id="mkb-volume-chart" class="chart" style="height:340px"></div>
+    </div>
+    <div class="panel">
+      <h2>Taxa × Tempo</h2>
+      <div id="mkb-bubble-chart" class="chart" style="height:380px"></div>
+    </div>
+  </div>
   <div class="panel" id="mkb-table-panel">
     <h2>Marcação B3 por período</h2>
     <div id="mkb-table"></div>
@@ -5448,6 +5465,8 @@ let MKB_RANGE_KEY = "";             // chave da última janela carregada
 let MKB_TABLE = null;
 let MKB_INITED = false;
 let MKB_RECALC_TIMER = null;
+let MKB_SEARCH = "";                // filtro "Buscar papel" (case insensitive em ticker OU emissor)
+let MKB_SEARCH_TIMER = null;
 
 function mkb_setStatus(msg) {
   const el = document.getElementById("mkb-status");
@@ -5458,15 +5477,25 @@ function mkb_setStatus(msg) {
 function mkb_showEmpty(msg) {
   const e = document.getElementById("mkb-empty");
   const p = document.getElementById("mkb-table-panel");
+  const c = document.getElementById("mkb-charts");
   if (msg) {
     e.textContent = msg;
     e.classList.remove("hide");
     p.classList.add("hide");
+    if (c) c.classList.add("hide");
   } else {
     e.textContent = "";
     e.classList.add("hide");
     p.classList.remove("hide");
   }
+}
+
+// Match case insensitive em ticker OU emissor. Sempre permite quando search vazio.
+function mkb_matchesSearch(ticker, issuer, q) {
+  if (!q) return true;
+  const needle = q.toLowerCase();
+  return (ticker || "").toLowerCase().includes(needle) ||
+         (issuer || "").toLowerCase().includes(needle);
 }
 
 function mkb_showDateError(msg) {
@@ -5544,6 +5573,16 @@ async function renderMarcacaoB3() {
     showVolEl.addEventListener("change", (e) => {
       MKB_SHOW_VOLUME = !!e.target.checked;
       mkb_renderTable();
+    });
+    const pickerEl = document.getElementById("mkb-picker");
+    pickerEl.value = MKB_SEARCH;
+    pickerEl.addEventListener("input", (e) => {
+      if (MKB_SEARCH_TIMER) clearTimeout(MKB_SEARCH_TIMER);
+      MKB_SEARCH_TIMER = setTimeout(() => {
+        MKB_SEARCH_TIMER = null;
+        MKB_SEARCH = (e.target.value || "").trim();
+        mkb_renderTable();
+      }, 150);
     });
     MKB_INITED = true;
   }
@@ -5821,13 +5860,21 @@ function mkb_computeDeltaStats(rows) {
 }
 
 function mkb_renderTable() {
-  const { rows, periods } = mkb_aggregate();
-  if (!rows.length) {
+  const aggregated = mkb_aggregate();
+  const periods = aggregated.periods;
+  const allRows = aggregated.rows;
+  const hasSearch = !!MKB_SEARCH;
+  const rows = hasSearch
+    ? allRows.filter(r => mkb_matchesSearch(r.ticker, r.issuer, MKB_SEARCH))
+    : allRows;
+
+  if (!allRows.length) {
     if (MKB_TABLE) { try { MKB_TABLE.destroy(); } catch (_) {} MKB_TABLE = null; }
     mkb_showEmpty("Nenhum papel com taxa válida no período (aplicando filtros).");
     return;
   }
   mkb_showEmpty(null);
+  mkb_renderCharts(rows, periods);
 
   const periodCols = periods.map(p => {
     const subs = [
@@ -5882,14 +5929,25 @@ function mkb_renderTable() {
     el.style.backgroundColor = _bgForDelta(v, mkbDeltaStats.deltaAbsP95);
     return (v >= 0 ? "+" : "") + v.toFixed(0);
   };
+  // Sorter custom: trata null/undefined/NaN/"-" como 0, mantendo papéis sem
+  // delta calculável no meio da ordenação (entre negativos e positivos).
+  // Visualmente o formatter continua exibindo "—".
+  const deltaSorterAsZero = (a, b) => {
+    const va = (typeof a === "number" && Number.isFinite(a)) ? a : 0;
+    const vb = (typeof b === "number" && Number.isFinite(b)) ? b : 0;
+    return va - vb;
+  };
   const columns = [
     { title: "Ticker", field: "ticker", width: 110, frozen: true,
       headerFilter: "input", headerFilterFunc: trd_likeCI },
     { title: "Emissor", field: "issuer", minWidth: 220,
       headerFilter: "input", headerFilterFunc: trd_likeCI },
     ...periodCols,
-    { title: "Δ Taxa (bps)", field: "delta_bps", width: 130, hozAlign: "right",
-      headerSort: true, sorter: "number",
+    // Delta Taxa: frozen à direita, width <= Emissor (110 < 220), sorter custom
+    // tratando "—" (null/NaN) como zero pra ficar no meio na ordenação.
+    { title: "Δ Taxa (bps)", field: "delta_bps", width: 110, frozen: true,
+      hozAlign: "right",
+      headerSort: true, sorter: deltaSorterAsZero,
       formatter: fmtMkbDelta,
       tooltip: c => {
         const r = c.getRow().getData();
@@ -5913,6 +5971,181 @@ function mkb_renderTable() {
     initialSort: [{ column: "ticker", dir: "asc" }],
     columns,
   });
+}
+
+/* ------------------------------------------------------------
+ *  Marcação B3 — gráficos (Volume por Data + Taxa × Tempo bubble)
+ *
+ *  Visibilidade condicional: só renderiza/mostra quando o campo
+ *  "Buscar papel" (MKB_SEARCH) tem texto. Caso contrário, oculta
+ *  o container #mkb-charts.
+ *
+ *  Grafico 1: replica o "Volume Total por Dia" da aba Pesquisa
+ *  de Trades modo Negocio a Negocio (single-series, ponta dupla
+ *  /2 via _trd_volumeByDate). Filtra MKB_RANGE_ROWS pelos papéis
+ *  que casam com MKB_SEARCH (ticker OU emissor, case insensitive),
+ *  preservando o filtro de apenas DEB já aplicado em mkb_load().
+ *
+ *  Grafico 2: bubble chart inédito. Eixo X = períodos conforme
+ *  Periodicidade (mesmas labels da tabela); Eixo Y = taxa média
+ *  ponderada (mesma célula da tabela); tamanho da bolha = volume;
+ *  1 trace (cor) por ticker via PALETTE_QUAL.
+ * ------------------------------------------------------------ */
+function mkb_renderCharts(filteredRows, periods) {
+  const container = document.getElementById("mkb-charts");
+  if (!container) return;
+  if (!MKB_SEARCH) {
+    container.classList.add("hide");
+    return;
+  }
+  container.classList.remove("hide");
+  mkb_renderVolumeChart();
+  mkb_renderBubbleChart(filteredRows, periods);
+}
+
+function mkb_renderVolumeChart() {
+  const div = "mkb-volume-chart";
+  const el = document.getElementById(div);
+  if (!el) return;
+  const base = PLOTLY_LAYOUT();
+  const src = (MKB_RANGE_ROWS || []).filter(r =>
+    mkb_matchesSearch(r.ticker, r.issuer, MKB_SEARCH)
+  );
+  const { xs, ys } = _trd_volumeByDate(src);
+  const traces = [{
+    type: "bar",
+    x: xs, y: ys,
+    marker: { color: cssVar("--accent") },
+    hovertemplate: "%{x}<br>Volume: R$ %{y:,.0f}<extra></extra>",
+  }];
+  const annotations = xs.map((x, i) => ({
+    text: _trd_fmtVolPerBar(ys[i] || 0),
+    x: x,
+    y: ys[i] || 0,
+    yshift: 12,
+    showarrow: false,
+    font: { color: "#d6dde7", size: 11 },
+  }));
+  const maxVal = ys.length ? Math.max(...ys) : 0;
+  const { tickvals, ticktext } = _trd_axisTicksFromMax(maxVal);
+  const layout = Object.assign({}, base, {
+    margin: { t: 30, r: 18, b: 60, l: 60 },
+    showlegend: false,
+    annotations: annotations,
+    xaxis: Object.assign({}, base.xaxis, {
+      type: "category",
+      categoryorder: "array",
+      categoryarray: xs,
+      tickangle: -25,
+      title: "",
+    }),
+    yaxis: Object.assign({}, base.yaxis, {
+      type: "linear",
+      title: "",
+      tickvals: tickvals,
+      ticktext: ticktext,
+    }),
+  });
+  Plotly.react(div, traces, layout,
+    Object.assign({}, PLOTLY_CONFIG, { displayModeBar: false }));
+}
+
+function mkb_renderBubbleChart(filteredRows, periods) {
+  const div = "mkb-bubble-chart";
+  const el = document.getElementById(div);
+  if (!el) return;
+  const base = PLOTLY_LAYOUT();
+
+  const xCategory = periods.map(p => p.label);
+
+  // Volume max global pra calcular sizeref único (consistente entre tickers).
+  let volMax = 0;
+  for (const r of filteredRows) {
+    for (const p of periods) {
+      const v = r[`vol__${p.key}`];
+      if (typeof v === "number" && Number.isFinite(v) && v > volMax) volMax = v;
+    }
+  }
+  // Plotly: sizemode "area" => area da bolha ∝ size. sizeref normaliza
+  // pra que a maior bolha bata em ~MAX_BUBBLE_PX. Formula recomendada:
+  // sizeref = 2 * max / (MAX_BUBBLE_PX**2).
+  const MAX_BUBBLE_PX = 60;
+  const sizeref = volMax > 0 ? (2.0 * volMax / (MAX_BUBBLE_PX * MAX_BUBBLE_PX)) : 1;
+
+  const traces = [];
+  filteredRows.forEach((r, idx) => {
+    const xs = [];
+    const ys = [];
+    const sizes = [];
+    const vols = [];
+    const labels = [];
+    for (const p of periods) {
+      const t = r[`taxa__${p.key}`];
+      const v = r[`vol__${p.key}`];
+      if (typeof t !== "number" || !Number.isFinite(t)) continue;
+      if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) continue;
+      xs.push(p.label);
+      ys.push(t);
+      sizes.push(v);
+      vols.push(v);
+      labels.push(p.label);
+    }
+    if (!xs.length) return;
+    const color = PALETTE_QUAL[idx % PALETTE_QUAL.length];
+    traces.push({
+      type: "scatter",
+      mode: "markers",
+      name: r.ticker,
+      x: xs,
+      y: ys,
+      customdata: vols.map((v, i) => [labels[i], v]),
+      marker: {
+        color: color,
+        size: sizes,
+        sizemode: "area",
+        sizeref: sizeref,
+        sizemin: 4,
+        line: { color: color, width: 1 },
+        opacity: 0.75,
+      },
+      hovertemplate:
+        "<b>" + r.ticker + "</b><br>" +
+        "Período: %{customdata[0]}<br>" +
+        "Taxa: %{y:.2f}%<br>" +
+        "Volume: R$ %{customdata[1]:,.0f}<extra></extra>",
+    });
+  });
+
+  if (!traces.length) {
+    Plotly.react(div, [], Object.assign({}, base, {
+      annotations: [{
+        text: "Sem dados de taxa para os papéis filtrados.",
+        showarrow: false, x: 0.5, y: 0.5, xref: "paper", yref: "paper",
+        font: { color: cssVar("--muted"), size: 13 },
+      }],
+      xaxis: { visible: false }, yaxis: { visible: false },
+    }), Object.assign({}, PLOTLY_CONFIG, { displayModeBar: false }));
+    return;
+  }
+
+  const layout = Object.assign({}, base, {
+    margin: { t: 30, r: 18, b: 70, l: 60 },
+    showlegend: true,
+    legend: { orientation: "h", x: 0, y: 1.12, font: { size: 11 } },
+    xaxis: Object.assign({}, base.xaxis, {
+      type: "category",
+      categoryorder: "array",
+      categoryarray: xCategory,
+      tickangle: -25,
+      title: "",
+    }),
+    yaxis: Object.assign({}, base.yaxis, {
+      title: "Taxa (%)",
+      ticksuffix: "%",
+    }),
+  });
+  Plotly.react(div, traces, layout,
+    Object.assign({}, PLOTLY_CONFIG, { displayModeBar: false }));
 }
 
 /* ============================================================
