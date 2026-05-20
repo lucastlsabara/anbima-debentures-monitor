@@ -418,6 +418,30 @@
   .tabulator .tabulator-row:hover { background:#22293a !important; }
   .tabulator .tabulator-cell.pos { color:var(--pos); }
   .tabulator .tabulator-cell.neg { color:var(--neg); }
+  /* Colunas frozen: cell precisa de background solido pra nao deixar
+     cells nao-frozen aparecerem por baixo ao rolar horizontalmente.
+     Tabulator nao pinta o background no nivel da cell por default —
+     herda do .tabulator-row, mas com sticky/absolute positioning a
+     cell frozen fica TRANSPARENTE em cima das demais. Igualamos o
+     background da row aqui. Cells com inline background (ex: Δ Taxa
+     com gradiente) tem precedencia natural. */
+  .tabulator .tabulator-row .tabulator-cell.tabulator-frozen {
+    background:var(--surface);
+  }
+  .tabulator .tabulator-row.tabulator-row-even .tabulator-cell.tabulator-frozen {
+    background:var(--surface2);
+  }
+  .tabulator .tabulator-row:hover .tabulator-cell.tabulator-frozen {
+    background:#22293a;
+  }
+  .tabulator .tabulator-header .tabulator-col.tabulator-frozen {
+    background:var(--surface2);
+  }
+  /* Separador visual para a coluna frozen a direita. */
+  .tabulator .tabulator-cell.tabulator-frozen.tabulator-frozen-right,
+  .tabulator .tabulator-col.tabulator-frozen.tabulator-frozen-right {
+    border-left:1px solid var(--border-strong);
+  }
   /* Aba Trades B3 */
   .trd-status { color:var(--muted); font-size:11.5px; margin-left:8px; }
   .date-error { color:var(--neg); font-size:11.5px; margin-left:8px; }
@@ -864,8 +888,11 @@
       <div class="tr2-pk-wrap tr2-pk-wrap-wide">
         <input type="text" id="mkb-picker" autocomplete="off"
                placeholder="ticker ou emissor (ex: GGBRA7, Gerdau)">
+        <div class="exclusion-suggestions hide tr2-pk-sug" id="mkb-suggestions"></div>
       </div>
+      <button type="button" id="mkb-clear" class="tr2-clear hide">Limpar tudo</button>
     </div>
+    <div class="tr2-chips" id="mkb-chips"></div>
   </div>
   <div id="mkb-empty" class="empty hide"></div>
   <div id="mkb-charts" class="hide">
@@ -5465,8 +5492,14 @@ let MKB_RANGE_KEY = "";             // chave da última janela carregada
 let MKB_TABLE = null;
 let MKB_INITED = false;
 let MKB_RECALC_TIMER = null;
-let MKB_SEARCH = "";                // filtro "Buscar papel" (case insensitive em ticker OU emissor)
-let MKB_SEARCH_TIMER = null;
+// Picker multi-select (mesmo comportamento da aba Pesquisa de Trades).
+// MKB_INDEX: {tickers, emissores} montado a partir de MKB_RANGE_ROWS (so DEB).
+// MKB_SELECTED: ticker -> {ticker, issuer} dos papeis selecionados.
+// MKB_SELECTED_ISSUERS: emissores selecionados explicitamente — preserva
+// o chip agregador mesmo apos mudar de janela.
+let MKB_INDEX = null;
+const MKB_SELECTED = new Map();
+const MKB_SELECTED_ISSUERS = new Set();
 
 function mkb_setStatus(msg) {
   const el = document.getElementById("mkb-status");
@@ -5488,14 +5521,6 @@ function mkb_showEmpty(msg) {
     e.classList.add("hide");
     p.classList.remove("hide");
   }
-}
-
-// Match case insensitive em ticker OU emissor. Sempre permite quando search vazio.
-function mkb_matchesSearch(ticker, issuer, q) {
-  if (!q) return true;
-  const needle = q.toLowerCase();
-  return (ticker || "").toLowerCase().includes(needle) ||
-         (issuer || "").toLowerCase().includes(needle);
 }
 
 function mkb_showDateError(msg) {
@@ -5555,6 +5580,224 @@ function mkb_periodKey(iso, period) {
   return { key: iso, label: `${dd}/${mm}`, sortKey: iso };
 }
 
+/* ------------------------------------------------------------
+ *  Marcação B3 — picker multi-select (espelha tr2_*)
+ *
+ *  Estado: MKB_SELECTED + MKB_SELECTED_ISSUERS (definidos no topo).
+ *  Reusa o CSS da Pesquisa de Trades (.tr2-pk-*, .ex-chip, .ex-sug,
+ *  .exclusion-suggestions, .tr2-chips). Indexa MKB_RANGE_ROWS via
+ *  tr2_buildIndex — como MKB_RANGE_ROWS so contem DEB, o dropdown
+ *  so sugere debentures. Selecionar um emissor adiciona TODOS os
+ *  tickers daquele emissor visiveis no range corrente.
+ * ------------------------------------------------------------ */
+function mkb_addTicker(ticker, issuer) {
+  if (!ticker || MKB_SELECTED.has(ticker)) return;
+  MKB_SELECTED.set(ticker, { ticker, issuer: issuer || "" });
+}
+
+function mkb_removeTicker(ticker) {
+  MKB_SELECTED.delete(ticker);
+}
+
+function mkb_clearAllChips() {
+  MKB_SELECTED.clear();
+  MKB_SELECTED_ISSUERS.clear();
+  mkb_renderChips();
+  mkb_renderTable();
+}
+
+// Emissores com >=2 tickers no range cujos tickers estao TODOS selecionados.
+function mkb_fullySelectedIssuers() {
+  const out = new Map();
+  if (!MKB_INDEX || !MKB_INDEX.emissores) return out;
+  for (const e of MKB_INDEX.emissores) {
+    if (e.count < 2) continue;
+    let all = true;
+    for (const t of e.tickers) {
+      if (!MKB_SELECTED.has(t)) { all = false; break; }
+    }
+    if (all) out.set(e.name, e.tickers.slice());
+  }
+  return out;
+}
+
+function mkb_renderChips() {
+  const box = document.getElementById("mkb-chips");
+  const clearBtn = document.getElementById("mkb-clear");
+  if (!box || !clearBtn) return;
+  if (!MKB_SELECTED.size && !MKB_SELECTED_ISSUERS.size) {
+    box.innerHTML = "";
+    clearBtn.classList.add("hide");
+    return;
+  }
+  const totalChips = MKB_SELECTED.size + MKB_SELECTED_ISSUERS.size;
+  if (totalChips >= 2) clearBtn.classList.remove("hide");
+  else clearBtn.classList.add("hide");
+
+  const issuerBuckets = new Map();
+  for (const v of MKB_SELECTED.values()) {
+    const issuer = v.issuer || "(sem emissor)";
+    if (!issuerBuckets.has(issuer)) issuerBuckets.set(issuer, []);
+    issuerBuckets.get(issuer).push(v);
+  }
+  for (const issuer of MKB_SELECTED_ISSUERS) {
+    if (!issuerBuckets.has(issuer)) issuerBuckets.set(issuer, []);
+  }
+
+  const fullIssuers = mkb_fullySelectedIssuers();
+  const issuerChips = [];
+  const tickerChips = [];
+  for (const [issuer, list] of issuerBuckets) {
+    if (fullIssuers.has(issuer) || MKB_SELECTED_ISSUERS.has(issuer)) {
+      issuerChips.push(
+        `<span class="ex-chip is-issuer-all" data-issuer="${escapeAttr(issuer)}">` +
+        `${escapeHtml(issuer)}` +
+        `<button type="button" data-remove-issuer="${escapeAttr(issuer)}" aria-label="Remover emissor">×</button>` +
+        `</span>`
+      );
+    }
+    for (const v of list) {
+      tickerChips.push(
+        `<span class="ex-chip is-ticker">` +
+        `${escapeHtml(v.ticker)}` +
+        `<button type="button" data-remove="${escapeAttr(v.ticker)}" aria-label="Remover">×</button>` +
+        `</span>`
+      );
+    }
+  }
+  const parts = [];
+  parts.push(...issuerChips);
+  if (issuerChips.length && tickerChips.length) {
+    parts.push(`<span class="tr2-chips-sep" aria-hidden="true"></span>`);
+  }
+  parts.push(...tickerChips);
+  box.innerHTML = parts.join("");
+  box.onclick = (e) => {
+    const issBtn = e.target.closest("button[data-remove-issuer]");
+    if (issBtn) {
+      const issuer = issBtn.dataset.removeIssuer;
+      MKB_SELECTED_ISSUERS.delete(issuer);
+      const toDelete = [];
+      for (const [t, v] of MKB_SELECTED) {
+        if ((v.issuer || "") === issuer) toDelete.push(t);
+      }
+      for (const t of toDelete) MKB_SELECTED.delete(t);
+      mkb_renderChips();
+      mkb_renderTable();
+      return;
+    }
+    const btn = e.target.closest("button[data-remove]");
+    if (!btn) return;
+    mkb_removeTicker(btn.dataset.remove);
+    mkb_renderChips();
+    mkb_renderTable();
+  };
+}
+
+function mkb_initPicker() {
+  const input = document.getElementById("mkb-picker");
+  const sugBox = document.getElementById("mkb-suggestions");
+  if (!input || !sugBox) return;
+
+  const compute = () => {
+    if (!MKB_INDEX) return { tickHits: [], emissHits: [] };
+    const q = input.value.trim().toLowerCase();
+    if (!q) return { tickHits: [], emissHits: [] };
+    const tickHits = [];
+    for (const t of MKB_INDEX.tickers) {
+      if (MKB_SELECTED.has(t.c)) continue;
+      if (t.c.toLowerCase().includes(q) ||
+          (t.issuer && t.issuer.toLowerCase().includes(q))) {
+        tickHits.push(t);
+        if (tickHits.length >= 8) break;
+      }
+    }
+    const emissHits = [];
+    for (const e of MKB_INDEX.emissores) {
+      if (e.name.toLowerCase().includes(q)) {
+        emissHits.push(e);
+        if (emissHits.length >= 8) break;
+      }
+    }
+    return { tickHits, emissHits };
+  };
+
+  const renderSug = (res) => {
+    if (!res || (!res.tickHits.length && !res.emissHits.length)) {
+      sugBox.classList.add("hide");
+      sugBox.innerHTML = "";
+      return;
+    }
+    const parts = [];
+    for (const e of res.emissHits) {
+      parts.push(
+        `<div class="ex-sug" data-kind="emiss" data-value="${escapeAttr(e.name)}">` +
+        `<span class="ex-sug-tag e">E</span>` +
+        `<span>${escapeHtml(e.name)}</span>` +
+        `<span class="ex-sug-meta">(${e.count} ${e.count === 1 ? "papel" : "papéis"})</span>` +
+        `</div>`
+      );
+    }
+    for (const t of res.tickHits) {
+      parts.push(
+        `<div class="ex-sug" data-kind="ticker" data-value="${escapeAttr(t.c)}" data-issuer="${escapeAttr(t.issuer)}">` +
+        `<span class="ex-sug-tag t">T</span>` +
+        `<span class="ex-sug-code">${escapeHtml(t.c)}</span>` +
+        `<span class="ex-sug-meta">${escapeHtml(t.issuer)}</span>` +
+        `</div>`
+      );
+    }
+    sugBox.innerHTML = parts.join("");
+    sugBox.classList.remove("hide");
+  };
+
+  input.addEventListener("input", () => renderSug(compute()));
+  input.addEventListener("focus", () => {
+    if (input.value.trim().length >= 1) renderSug(compute());
+  });
+  input.addEventListener("blur", () => {
+    setTimeout(() => sugBox.classList.add("hide"), 150);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { sugBox.classList.add("hide"); return; }
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const res = compute();
+    if (res.emissHits.length) mkb_pickEmissor(res.emissHits[0].name);
+    else if (res.tickHits.length) mkb_pickTicker(res.tickHits[0].c, res.tickHits[0].issuer);
+    input.value = "";
+    sugBox.classList.add("hide");
+  });
+  sugBox.addEventListener("mousedown", (e) => {
+    const row = e.target.closest(".ex-sug");
+    if (!row) return;
+    e.preventDefault();
+    if (row.dataset.kind === "emiss") mkb_pickEmissor(row.dataset.value);
+    else mkb_pickTicker(row.dataset.value, row.dataset.issuer || "");
+    input.value = "";
+    sugBox.classList.add("hide");
+  });
+}
+
+function mkb_pickTicker(ticker, issuer) {
+  mkb_addTicker(ticker, issuer);
+  mkb_renderChips();
+  mkb_renderTable();
+}
+
+function mkb_pickEmissor(name) {
+  if (!MKB_INDEX) return;
+  const e = MKB_INDEX.emissores.find(x => x.name === name);
+  if (!e) return;
+  MKB_SELECTED_ISSUERS.add(name);
+  for (const t of e.tickers) {
+    const meta = MKB_INDEX.tickers.find(x => x.c === t);
+    mkb_addTicker(t, meta ? meta.issuer : name);
+  }
+  mkb_renderChips();
+  mkb_renderTable();
+}
+
 async function renderMarcacaoB3() {
   if (!MKB_INITED) {
     document.getElementById("mkb-min-volume").addEventListener("input", (e) => {
@@ -5574,15 +5817,9 @@ async function renderMarcacaoB3() {
       MKB_SHOW_VOLUME = !!e.target.checked;
       mkb_renderTable();
     });
-    const pickerEl = document.getElementById("mkb-picker");
-    pickerEl.value = MKB_SEARCH;
-    pickerEl.addEventListener("input", (e) => {
-      if (MKB_SEARCH_TIMER) clearTimeout(MKB_SEARCH_TIMER);
-      MKB_SEARCH_TIMER = setTimeout(() => {
-        MKB_SEARCH_TIMER = null;
-        MKB_SEARCH = (e.target.value || "").trim();
-        mkb_renderTable();
-      }, 150);
+    mkb_initPicker();
+    document.getElementById("mkb-clear").addEventListener("click", () => {
+      mkb_clearAllChips();
     });
     MKB_INITED = true;
   }
@@ -5775,8 +6012,36 @@ async function mkb_load() {
   }
   MKB_RANGE_ROWS = all;
   MKB_RANGE_KEY = rangeKey;
+  // (Re)constroi indice de tickers/emissores pro picker. Reusa o builder
+  // da aba Pesquisa de Trades (mesma estrutura de rows). MKB_RANGE_ROWS
+  // ja contem apenas DEB, entao o dropdown so vai sugerir debêntures.
+  MKB_INDEX = tr2_buildIndex(MKB_RANGE_ROWS);
+  // Purga selecoes orfas (papeis fora da janela atual) — mas mantem
+  // emissores selecionados explicitamente em MKB_SELECTED_ISSUERS pra
+  // reincluir tickers do emissor que voltem na janela.
+  mkb_reconcileSelectionWithIndex();
   mkb_setStatus("");
   mkb_renderTable();
+}
+
+// Apos rebuild de MKB_INDEX, garante que:
+//  - Emissores em MKB_SELECTED_ISSUERS reincorporem seus tickers presentes
+//    no novo range (idempotente).
+//  - Tickers em MKB_SELECTED que nao existem mais no range continuam ate
+//    o user removê-los (mesma logica do tr2 picker — chip preservado).
+function mkb_reconcileSelectionWithIndex() {
+  if (!MKB_INDEX) return;
+  for (const issuer of MKB_SELECTED_ISSUERS) {
+    const e = MKB_INDEX.emissores.find(x => x.name === issuer);
+    if (!e) continue;
+    for (const t of e.tickers) {
+      if (!MKB_SELECTED.has(t)) {
+        const meta = MKB_INDEX.tickers.find(x => x.c === t);
+        MKB_SELECTED.set(t, { ticker: t, issuer: meta ? meta.issuer : issuer });
+      }
+    }
+  }
+  mkb_renderChips();
 }
 
 // Agrega MKB_RANGE_ROWS aplicando filtros (taxa válida, volume mínimo)
@@ -5863,9 +6128,9 @@ function mkb_renderTable() {
   const aggregated = mkb_aggregate();
   const periods = aggregated.periods;
   const allRows = aggregated.rows;
-  const hasSearch = !!MKB_SEARCH;
-  const rows = hasSearch
-    ? allRows.filter(r => mkb_matchesSearch(r.ticker, r.issuer, MKB_SEARCH))
+  const hasSelection = MKB_SELECTED.size > 0;
+  const rows = hasSelection
+    ? allRows.filter(r => MKB_SELECTED.has(r.ticker))
     : allRows;
 
   if (!allRows.length) {
@@ -5883,6 +6148,8 @@ function mkb_renderTable() {
         field: `taxa__${p.key}`,
         hozAlign: "right",
         width: 120,
+        widthGrow: 0,
+        widthShrink: 0,
         formatter: c => {
           const v = c.getValue();
           if (v == null || !Number.isFinite(v)) return "—";
@@ -5897,6 +6164,8 @@ function mkb_renderTable() {
         field: `vol__${p.key}`,
         hozAlign: "right",
         width: 140,
+        widthGrow: 0,
+        widthShrink: 0,
         formatter: c => {
           const v = c.getValue();
           if (v == null || !Number.isFinite(v)) return "—";
@@ -5938,14 +6207,19 @@ function mkb_renderTable() {
     return va - vb;
   };
   const columns = [
-    { title: "Ticker", field: "ticker", width: 110, frozen: true,
+    { title: "Ticker", field: "ticker", width: 110, widthGrow: 0, widthShrink: 0, frozen: true,
       headerFilter: "input", headerFilterFunc: trd_likeCI },
-    { title: "Emissor", field: "issuer", minWidth: 220,
+    // Emissor: unica coluna que absorve espaco extra quando ha poucas
+    // colunas de periodo (widthGrow:3 vs 0 nas demais). minWidth garante
+    // largura util mesmo com janela apertada.
+    { title: "Emissor", field: "issuer", minWidth: 220, widthGrow: 3,
       headerFilter: "input", headerFilterFunc: trd_likeCI },
     ...periodCols,
-    // Delta Taxa: frozen à direita, width <= Emissor (110 < 220), sorter custom
-    // tratando "—" (null/NaN) como zero pra ficar no meio na ordenação.
-    { title: "Δ Taxa (bps)", field: "delta_bps", width: 110, frozen: true,
+    // Delta Taxa: frozen a direita, largura travada (90..130) pra nao
+    // ficar grotesca quando ha poucos periodos. Sorter custom trata
+    // null/NaN como zero (papel sem delta no meio da ordenacao).
+    { title: "Δ Taxa (bps)", field: "delta_bps",
+      width: 110, minWidth: 90, maxWidth: 130, widthGrow: 0, widthShrink: 0, frozen: true,
       hozAlign: "right",
       headerSort: true, sorter: deltaSorterAsZero,
       formatter: fmtMkbDelta,
@@ -5962,7 +6236,11 @@ function mkb_renderTable() {
   }
   MKB_TABLE = new Tabulator("#mkb-table", {
     data: rows,
-    layout: "fitDataStretch",
+    // fitColumns + widthGrow=3 em Emissor faz a coluna do emissor
+    // absorver espaco livre. Demais colunas tem widthGrow=0 e largura
+    // fixa. Quando o total das colunas excede o container, Tabulator
+    // habilita scroll horizontal e Ticker / Δ Taxa permanecem fixas.
+    layout: "fitColumns",
     resizableColumns: true,
     height: "70vh",
     pagination: true,
@@ -5976,15 +6254,15 @@ function mkb_renderTable() {
 /* ------------------------------------------------------------
  *  Marcação B3 — gráficos (Volume por Data + Taxa × Tempo bubble)
  *
- *  Visibilidade condicional: só renderiza/mostra quando o campo
- *  "Buscar papel" (MKB_SEARCH) tem texto. Caso contrário, oculta
- *  o container #mkb-charts.
+ *  Visibilidade condicional: só renderiza/mostra quando ha pelo
+ *  menos 1 papel/emissor selecionado no picker (MKB_SELECTED).
+ *  Caso contrário, oculta o container #mkb-charts.
  *
  *  Grafico 1: replica o "Volume Total por Dia" da aba Pesquisa
  *  de Trades modo Negocio a Negocio (single-series, ponta dupla
- *  /2 via _trd_volumeByDate). Filtra MKB_RANGE_ROWS pelos papéis
- *  que casam com MKB_SEARCH (ticker OU emissor, case insensitive),
- *  preservando o filtro de apenas DEB já aplicado em mkb_load().
+ *  /2 via _trd_volumeByDate). Filtra MKB_RANGE_ROWS pelos tickers
+ *  presentes em MKB_SELECTED, preservando o filtro de apenas DEB
+ *  já aplicado em mkb_load().
  *
  *  Grafico 2: bubble chart inédito. Eixo X = períodos conforme
  *  Periodicidade (mesmas labels da tabela); Eixo Y = taxa média
@@ -5994,7 +6272,7 @@ function mkb_renderTable() {
 function mkb_renderCharts(filteredRows, periods) {
   const container = document.getElementById("mkb-charts");
   if (!container) return;
-  if (!MKB_SEARCH) {
+  if (!MKB_SELECTED.size) {
     container.classList.add("hide");
     return;
   }
@@ -6009,7 +6287,7 @@ function mkb_renderVolumeChart() {
   if (!el) return;
   const base = PLOTLY_LAYOUT();
   const src = (MKB_RANGE_ROWS || []).filter(r =>
-    mkb_matchesSearch(r.ticker, r.issuer, MKB_SEARCH)
+    MKB_SELECTED.has(r.ticker)
   );
   const { xs, ys } = _trd_volumeByDate(src);
   const traces = [{
