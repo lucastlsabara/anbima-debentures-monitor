@@ -880,6 +880,10 @@
         <input type="checkbox" id="mkb-show-volume">
         Exibir Volume
       </label>
+      <label style="display:inline-flex;align-items:center;gap:6px;">
+        <input type="checkbox" id="mkb-intraday">
+        Intraday
+      </label>
       <span id="mkb-status" class="trd-status"></span>
       <span id="mkb-date-error" class="date-error hide"></span>
     </div>
@@ -5487,6 +5491,10 @@ let MKB_DATE_ATUAL = null, MKB_DATE_ANTERIOR = null;
 let MKB_MIN_VOLUME = null;          // null = sem filtro. Valor já em R$ (input em MM × 1e6).
 let MKB_PERIOD = "daily";           // daily | weekly | monthly | annual
 let MKB_SHOW_VOLUME = false;        // checkbox "Exibir Volume" (default oculto)
+let MKB_INTRADAY = false;           // checkbox "Intraday" (default desmarcado)
+// Set de tickers que passam pelo filtro Intraday (taxa válida no ULTIMO
+// período da janela atual). null = filtro desligado (mostra todos).
+let MKB_INTRADAY_VISIBLE = null;
 let MKB_RANGE_ROWS = null;          // cache dos trades carregados na última janela
 let MKB_RANGE_KEY = "";             // chave da última janela carregada
 let MKB_TABLE = null;
@@ -5822,6 +5830,12 @@ async function renderMarcacaoB3() {
     showVolEl.checked = MKB_SHOW_VOLUME;
     showVolEl.addEventListener("change", (e) => {
       MKB_SHOW_VOLUME = !!e.target.checked;
+      mkb_renderTable();
+    });
+    const intradayEl = document.getElementById("mkb-intraday");
+    intradayEl.checked = MKB_INTRADAY;
+    intradayEl.addEventListener("change", (e) => {
+      MKB_INTRADAY = !!e.target.checked;
       mkb_renderTable();
     });
     mkb_initPicker();
@@ -6175,7 +6189,21 @@ function mkb_renderTable() {
   MKB_VISIBLE_TICKERS = null;
   const aggregated = mkb_aggregate();
   const periods = aggregated.periods;
-  const allRows = aggregated.rows;
+  let allRows = aggregated.rows;
+  // Filtro Intraday: mantém só papéis com taxa válida no ULTIMO período da
+  // janela atual (o período que contém a Data Atual, baseado em MKB_PERIOD).
+  // Recalcula a cada render — Data Atual / Periodicidade / Volume mínimo
+  // mudam o último período e/ou a presença de taxa nele.
+  if (MKB_INTRADAY && periods.length) {
+    const lastKey = periods[periods.length - 1].key;
+    allRows = allRows.filter(r => {
+      const v = r[`taxa__${lastKey}`];
+      return v != null && Number.isFinite(v);
+    });
+    MKB_INTRADAY_VISIBLE = new Set(allRows.map(r => r.ticker));
+  } else {
+    MKB_INTRADAY_VISIBLE = null;
+  }
   const hasSelection = MKB_SELECTED.size > 0;
   const rows = hasSelection
     ? allRows.filter(r => MKB_SELECTED.has(r.ticker))
@@ -6432,11 +6460,15 @@ function mkb_renderVolumeChart() {
   const base = PLOTLY_LAYOUT();
   const { singleIssuerMode, orderedSelected, colorFor } = _mkb_colorForTrace();
 
-  // Filtro secundário pelos headerFilters da tabela (dataFiltered).
+  // Filtro secundário pelos headerFilters da tabela (dataFiltered) +
+  // terceiro filtro Intraday (taxa válida no último período). Ambos
+  // valem para tickers/traces e para a agregação por dia logo abaixo.
   const allowed = MKB_VISIBLE_TICKERS;
-  const useful = allowed
+  const intraday = MKB_INTRADAY_VISIBLE;
+  let useful = allowed
     ? orderedSelected.filter(sel => allowed.has(sel.ticker))
     : orderedSelected;
+  if (intraday) useful = useful.filter(sel => intraday.has(sel.ticker));
 
   // Agrega volume por (ticker, data) com /2 (ponta dupla B3). A tabela usa
   // r.vol cru — só os gráficos passam por aqui.
@@ -6446,6 +6478,7 @@ function mkb_renderVolumeChart() {
     if (!r || !r.date || typeof r.vol !== "number") continue;
     if (!MKB_SELECTED.has(r.ticker)) continue;
     if (allowed && !allowed.has(r.ticker)) continue;
+    if (intraday && !intraday.has(r.ticker)) continue;
     dateSet.add(r.date);
     let m = byTickerDate.get(r.ticker);
     if (!m) { m = new Map(); byTickerDate.set(r.ticker, m); }
