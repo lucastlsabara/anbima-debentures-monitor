@@ -2,14 +2,15 @@ name: ANBIMA + B3 Probe & Import
 
 # Workflow UNICO da pipeline ANBIMA + B3 (canonico).
 #
-# Roda 3 slots noturnos por dia util B3 (21h, 00h, 03h BRT). Cada
+# Roda 3 slots por dia (20h BRT do dia D, 00h e 04h BRT do dia D+1). Cada
 # execucao processa o dia util corrente (determinado pelo step
 # "Determine target date" com regra hora>=19 -> HOJE, senao ONTEM).
 #
 # A cada execucao:
 #   1. Determina o dia alvo (HOJE BRT se hora>=19, senao ONTEM BRT).
-#      Slot 21h BRT -> HOJE; slots 00h/03h BRT -> ONTEM.
+#      Slot 20h BRT -> HOJE (=D); slots 00h/04h BRT -> ONTEM (=D).
 #   2. Guard B3: se nao for dia util B3, sai 0 sem fazer nada.
+#      (Fins de semana e feriados B3 bloqueiam os 3 slots naturalmente.)
 #   3. Probe: verifica disponibilidade dos 5 arquivos (ANBIMA Debentures,
 #      ANBIMA ETTJ, ANBIMA TPF, B3 Trade, B3 ConsolidatedRecords).
 #   4. Se TODOS os 5 estao publicados: importa ANBIMA (gap-fill 5 du B3),
@@ -20,31 +21,25 @@ name: ANBIMA + B3 Probe & Import
 #      slot tenta de novo.
 #
 # Sem marker de idempotencia diaria (removido em PR anterior). Multiplos
-# slots noturnos servem para pegar republicacoes da B3 dentro do mesmo
-# dia util — o cache check garante que slots subsequentes processem em
-# ~30s-1min quando nada mudou.
+# slots servem para pegar republicacoes da B3/ANBIMA ao longo da janela
+# 20h(D)->04h(D+1) — o cache check garante que slots subsequentes
+# processem em ~30s-1min quando nada mudou.
 
 on:
   schedule:
-    # 3 slots noturnos: 21h, 00h, 03h BRT (= 00h, 03h, 06h UTC) ter-sab UTC.
-    # Cada slot verifica metadata da B3 e refetch SO os dias que mudaram.
-    # Sem marker de idempotencia diaria (removido em PR anterior).
+    # 3 tentativas diarias para cobrir o dia de referencia D (ultimo dia
+    # util B3). BRT = UTC - 3. GitHub Actions roda cron em UTC.
     #
-    # Validacao de bordas (BRT = UTC-3):
-    #  21h BRT seg = 00h UTC ter (dia 2) -> dispara, ref = HOJE (seg, hour=21 >= 19)
-    #  00h BRT ter = 03h UTC ter (dia 2) -> dispara, ref = ONTEM (seg, hour=0  < 19)
-    #  03h BRT ter = 06h UTC ter (dia 2) -> dispara, ref = ONTEM (seg)
-    #  21h BRT ter = 00h UTC qua (dia 3) -> dispara, ref = HOJE  (ter)
-    #  00h BRT qua = 03h UTC qua (dia 3) -> dispara, ref = ONTEM (ter)
-    #  ... (mesmo padrao ate sex 21h BRT = 00h UTC sab)
-    #  03h BRT sab = 06h UTC sab (dia 6) -> dispara, ref = ONTEM (sex)
-    #  21h BRT sab = 00h UTC dom (dia 0) -> BLOQUEIA (0 nao esta em 2-6)
-    #  21h BRT dom = 00h UTC seg (dia 1) -> BLOQUEIA (1 nao esta em 2-6)
+    # Validacao de bordas:
+    #   23h UTC dia D    = 20h BRT dia D   -> ref = HOJE (hour=20 >= 19) = D
+    #   03h UTC dia D+1  = 00h BRT dia D+1 -> ref = ONTEM (hour=0  < 19) = D
+    #   07h UTC dia D+1  = 04h BRT dia D+1 -> ref = ONTEM (hour=4  < 19) = D
     #
-    # day-of-week 2-6 cobre 21h BRT seg-sex (=00h UTC ter-sab) e
-    # 00h/03h BRT ter-sab (=03h/06h UTC ter-sab). Bloqueia 21h BRT
-    # sab/dom (que mapeariam ref=fds). Guard B3 corta feriados moveis.
-    - cron: '0 0,3,6 * * 2-6'   # 21h/00h/03h BRT -> ref segue regra hora>=19
+    # Guard B3 bloqueia FdS/feriados (target_date derivado cai em
+    # sab/dom/feriado quando D nao eh dia util).
+    - cron: '0 23 * * *'  # 20:00 BRT do dia D (logo apos fechamento B3)
+    - cron: '0 3 * * *'   # 00:00 BRT do dia D+1 (D + 4h)
+    - cron: '0 7 * * *'   # 04:00 BRT do dia D+1 (D + 8h)
   workflow_dispatch:
     inputs:
       target_date:
