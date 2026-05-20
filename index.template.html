@@ -1497,10 +1497,12 @@ function vg_renderVolumeChart(byDate, dateLo, dateHi) {
   const xs = dates.map(brDate);
   // Regra B3 ponta dupla: divide por 2 só na camada de apresentação.
   const ysIntra = dates.map(d => (byDate[d].volume_intra_brl || 0) / 2);
-  const ysExtra = dates.map(d => (byDate[d].volume_extra_brl || 0) / 2);
-  const ysTotal = dates.map((_, i) => ysIntra[i] + ysExtra[i]);
+  const ysExtra = dates.map(d => (byDate[d].volume_extragrupo_brl || 0) / 2);
+  const ysSem = dates.map(d => (byDate[d].volume_sem_classif_brl || 0) / 2);
+  const ysTotal = dates.map((_, i) => ysIntra[i] + ysExtra[i] + ysSem[i]);
   const colorIntra = cssVar("--accent");
   const colorExtra = cssVar("--warn");
+  const colorSem = cssVar("--muted");
   const traces = [
     {
       type: "bar", name: "Intragrupo",
@@ -1515,6 +1517,13 @@ function vg_renderVolumeChart(byDate, dateLo, dateHi) {
       marker: { color: colorExtra },
       customdata: ysExtra.map(v => trd_fmtMoneyFull(v)),
       hovertemplate: "%{x}<br>Extragrupo: %{customdata}<extra></extra>",
+    },
+    {
+      type: "bar", name: "Sem Classificação",
+      x: xs, y: ysSem,
+      marker: { color: colorSem },
+      customdata: ysSem.map(v => trd_fmtMoneyFull(v)),
+      hovertemplate: "%{x}<br>Sem Classificação: %{customdata}<extra></extra>",
     },
   ];
   const annotations = xs.map((x, i) => ({
