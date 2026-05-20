@@ -5500,6 +5500,13 @@ let MKB_RECALC_TIMER = null;
 let MKB_INDEX = null;
 const MKB_SELECTED = new Map();
 const MKB_SELECTED_ISSUERS = new Set();
+// Cache da taxa marcação ANBIMA do último dia disponível, por código.
+// codigo -> taxa_indicativa (em %). Lê uma única vez do dispersion/_index.json
+// + dispersion/<latest>.json (mesma fonte das abas Visão Geral e Papéis).
+let MKB_ANBIMA = null;
+// Conjunto de tickers visíveis após filtro do cabeçalho (Tabulator
+// dataFiltered). null = sem restrição secundária — usa só MKB_SELECTED.
+let MKB_VISIBLE_TICKERS = null;
 
 function mkb_setStatus(msg) {
   const el = document.getElementById("mkb-status");
@@ -5975,11 +5982,37 @@ async function mkb_fetchTradeDay(entry) {
   return j;
 }
 
+// Carrega taxa marcação ANBIMA do último dia disponível (dispersion/<latest>).
+// Idempotente: na 1ª chamada popula MKB_ANBIMA; nas seguintes é no-op. Papéis
+// sem cobertura ANBIMA (CRI/CRA/menos líquidos) simplesmente não aparecem no
+// Map — o formatter da coluna renderiza "—" nesse caso.
+async function mkb_loadAnbima() {
+  if (MKB_ANBIMA) return;
+  try {
+    const idx = await loadJSON("data/dispersion/_index.json");
+    const dates = (idx && idx.dates) || [];
+    if (!dates.length) { MKB_ANBIMA = new Map(); return; }
+    const latest = dates[dates.length - 1];
+    const data = await loadJSON("data/dispersion/" + latest + ".json");
+    const map = new Map();
+    for (const p of (data.papers || [])) {
+      if (typeof p.t === "number" && Number.isFinite(p.t)) {
+        map.set(p.c, p.t);
+      }
+    }
+    MKB_ANBIMA = map;
+  } catch (e) {
+    console.error("[marcacao-b3] anbima load", e);
+    MKB_ANBIMA = new Map();
+  }
+}
+
 async function mkb_load() {
   if (!MKB_MANIFEST || !MKB_DATE_ATUAL) return;
   const entries = mkb_datesInRange();
   const rangeKey = entries.map(e => e.date).join(",");
   if (rangeKey === MKB_RANGE_KEY && MKB_RANGE_ROWS != null) {
+    await mkb_loadAnbima();
     mkb_renderTable();
     return;
   }
@@ -5991,6 +6024,9 @@ async function mkb_load() {
   }
   mkb_setStatus(`Carregando ${entries.length} dia(s)…`);
   mkb_showEmpty(null);
+  // Dispara o load do snapshot ANBIMA em paralelo com os dias B3. A coluna
+  // "Taxa ANBIMA" da tabela precisa do mapa pronto antes do 1º render.
+  const anbimaPromise = mkb_loadAnbima();
   let payloads;
   try {
     payloads = await Promise.all(entries.map(e => mkb_fetchTradeDay(e)));
@@ -6020,6 +6056,7 @@ async function mkb_load() {
   // emissores selecionados explicitamente em MKB_SELECTED_ISSUERS pra
   // reincluir tickers do emissor que voltem na janela.
   mkb_reconcileSelectionWithIndex();
+  await anbimaPromise;
   mkb_setStatus("");
   mkb_renderTable();
 }
@@ -6106,6 +6143,14 @@ function mkb_aggregate() {
       flat.delta_from_label = null;
       flat.delta_to_label = null;
     }
+    // Taxa marcação ANBIMA do último dia disponível (mesma fonte das demais
+    // abas — dispersion/<latest>.json). Pode ser ausente para CRI/CRA/menos
+    // líquidos; nesse caso fica null e o formatter exibe "—".
+    if (MKB_ANBIMA && MKB_ANBIMA.has(row.ticker)) {
+      flat.anbima_taxa = MKB_ANBIMA.get(row.ticker);
+    } else {
+      flat.anbima_taxa = null;
+    }
     if (any) rows.push(flat);
   }
   rows.sort((a, b) => a.ticker.localeCompare(b.ticker, "pt-BR"));
@@ -6125,6 +6170,9 @@ function mkb_computeDeltaStats(rows) {
 }
 
 function mkb_renderTable() {
+  // Reset do filtro secundário do cabeçalho — a tabela vai ser recriada,
+  // headerFilters voltam pro estado inicial (vazio).
+  MKB_VISIBLE_TICKERS = null;
   const aggregated = mkb_aggregate();
   const periods = aggregated.periods;
   const allRows = aggregated.rows;
@@ -6206,6 +6254,23 @@ function mkb_renderTable() {
     const vb = (typeof b === "number" && Number.isFinite(b)) ? b : 0;
     return va - vb;
   };
+  // Coluna "Taxa ANBIMA" — taxa indicativa do último dia disponível no
+  // snapshot ANBIMA (mesma fonte de Visão Geral / Papéis). Posicionada
+  // entre a última coluna de período e o Δ Taxa, sem frozen, com largura
+  // moderada. Papéis sem cobertura ANBIMA (CRI/CRA/menos líquidos) ficam
+  // com "—". Sem destaque de cor — é só referência.
+  const anbimaCol = {
+    title: "Taxa ANBIMA",
+    field: "anbima_taxa",
+    hozAlign: "right",
+    width: 100, minWidth: 90, maxWidth: 110, widthGrow: 0, widthShrink: 0,
+    headerSort: true, sorter: "number",
+    formatter: c => {
+      const v = c.getValue();
+      if (v == null || !Number.isFinite(v)) return "—";
+      return fmtPp(v);
+    },
+  };
   const columns = [
     { title: "Ticker", field: "ticker", width: 110, widthGrow: 0, widthShrink: 0, frozen: true,
       headerFilter: "input", headerFilterFunc: trd_likeCI },
@@ -6215,6 +6280,7 @@ function mkb_renderTable() {
     { title: "Emissor", field: "issuer", minWidth: 220, widthGrow: 3,
       headerFilter: "input", headerFilterFunc: trd_likeCI },
     ...periodCols,
+    anbimaCol,
     // Delta Taxa: frozen a direita, largura travada (90..130) pra nao
     // ficar grotesca quando ha poucos periodos. Sorter custom trata
     // null/NaN como zero (papel sem delta no meio da ordenacao).
@@ -6249,6 +6315,29 @@ function mkb_renderTable() {
     initialSort: [{ column: "ticker", dir: "asc" }],
     columns,
   });
+
+  // Sincroniza os 2 gráficos com os headerFilters da própria tabela.
+  // Tabulator dispara dataFiltered após cada keystroke do filtro
+  // substring nos cabeçalhos (Ticker / Emissor); debounce de 200ms
+  // evita regerar Plotly a cada caractere. MKB_SELECTED continua
+  // sendo o filtro primário (vindo do picker); o filtro do cabeçalho
+  // age como filtro SECUNDÁRIO sobre esse subconjunto.
+  let mkbFilterTimer = null;
+  MKB_TABLE.on("dataFiltered", (_filters, visibleRows) => {
+    if (mkbFilterTimer) clearTimeout(mkbFilterTimer);
+    mkbFilterTimer = setTimeout(() => {
+      mkbFilterTimer = null;
+      const visibleSet = new Set(visibleRows.map(r => r.getData().ticker));
+      // Sem filtro do header ativo (visibleSet cobre tudo) -> null para
+      // reverter a restrição secundária; senão, passa o subconjunto.
+      const allVisible = visibleSet.size === rows.length;
+      MKB_VISIBLE_TICKERS = allVisible ? null : visibleSet;
+      const visibleRowData = allVisible
+        ? rows
+        : rows.filter(r => visibleSet.has(r.ticker));
+      mkb_renderCharts(visibleRowData, periods);
+    }, 200);
+  });
 }
 
 /* ------------------------------------------------------------
@@ -6258,15 +6347,15 @@ function mkb_renderTable() {
  *  menos 1 papel/emissor selecionado no picker (MKB_SELECTED).
  *  Caso contrário, oculta o container #mkb-charts.
  *
- *  Grafico 1: replica o "Volume Total por Dia" da aba Pesquisa
- *  de Trades modo Negocio a Negocio (single-series, ponta dupla
- *  /2 via _trd_volumeByDate). Filtra MKB_RANGE_ROWS pelos tickers
- *  presentes em MKB_SELECTED, preservando o filtro de apenas DEB
- *  já aplicado em mkb_load().
+ *  Grafico 1: barras EMPILHADAS por dia, mesma lógica da Pesquisa
+ *  de Trades modo Negocio a Negocio (tr2_renderUnifiedStackedBar
+ *  + _trd_colorForTrace): 1 emissor selecionado -> 1 cor por
+ *  TICKER; multi -> 1 cor por EMISSOR. Volume com ponta dupla /2
+ *  só na camada de apresentação (a tabela continua com vol bruto).
  *
- *  Grafico 2: bubble chart inédito. Eixo X = períodos conforme
- *  Periodicidade (mesmas labels da tabela); Eixo Y = taxa média
- *  ponderada (mesma célula da tabela); tamanho da bolha = volume;
+ *  Grafico 2: bubble chart. Eixo X = períodos conforme Periodicidade
+ *  (mesmas labels da tabela); Eixo Y = taxa média ponderada (mesma
+ *  célula da tabela); tamanho da bolha = volume /2 (ponta dupla);
  *  1 trace (cor) por ticker via PALETTE_QUAL.
  * ------------------------------------------------------------ */
 function mkb_renderCharts(filteredRows, periods) {
@@ -6281,34 +6370,160 @@ function mkb_renderCharts(filteredRows, periods) {
   mkb_renderBubbleChart(filteredRows, periods);
 }
 
+// Espelha _trd_colorForTrace da Pesquisa de Trades, mas sobre MKB_SELECTED:
+//  - 1 emissor distinto entre os selecionados -> 1 cor por TICKER (stack por
+//    ticker, legenda = ticker).
+//  - 2+ emissores -> 1 cor por EMISSOR (stack por emissor, legenda = emissor;
+//    cada ticker continua sendo 1 trace pra preservar o tooltip individual).
+function _mkb_colorForTrace() {
+  const distinctIssuers = new Set();
+  for (const v of MKB_SELECTED.values()) {
+    distinctIssuers.add(v.issuer || "(sem emissor)");
+  }
+  const singleIssuerMode = distinctIssuers.size <= 1;
+
+  const orderedSelected = [];
+  if (singleIssuerMode) {
+    const all = [...MKB_SELECTED.values()]
+      .slice().sort((a, b) => a.ticker.localeCompare(b.ticker));
+    for (const v of all) orderedSelected.push(v);
+  } else {
+    const issuerOrder = [];
+    const byIssuer = new Map();
+    for (const v of MKB_SELECTED.values()) {
+      const k = v.issuer || "(sem emissor)";
+      if (!byIssuer.has(k)) { byIssuer.set(k, []); issuerOrder.push(k); }
+      byIssuer.get(k).push(v);
+    }
+    for (const iss of issuerOrder) {
+      const arr = byIssuer.get(iss).slice().sort((a, b) => a.ticker.localeCompare(b.ticker));
+      for (const v of arr) orderedSelected.push(v);
+    }
+  }
+
+  const tickerColor = new Map();
+  const issuerColor = new Map();
+  if (singleIssuerMode) {
+    let cIdx = 0;
+    for (const sel of orderedSelected) {
+      tickerColor.set(sel.ticker, PALETTE_QUAL[cIdx % PALETTE_QUAL.length]);
+      cIdx += 1;
+    }
+  } else {
+    let cIdx = 0;
+    for (const sel of orderedSelected) {
+      const k = sel.issuer || "(sem emissor)";
+      if (!issuerColor.has(k)) {
+        issuerColor.set(k, PALETTE_QUAL[cIdx % PALETTE_QUAL.length]);
+        cIdx += 1;
+      }
+    }
+  }
+  const colorFor = (sel) => singleIssuerMode
+    ? tickerColor.get(sel.ticker)
+    : issuerColor.get(sel.issuer || "(sem emissor)");
+  return { singleIssuerMode, orderedSelected, colorFor };
+}
+
 function mkb_renderVolumeChart() {
   const div = "mkb-volume-chart";
   const el = document.getElementById(div);
   if (!el) return;
   const base = PLOTLY_LAYOUT();
-  const src = (MKB_RANGE_ROWS || []).filter(r =>
-    MKB_SELECTED.has(r.ticker)
-  );
-  const { xs, ys } = _trd_volumeByDate(src);
-  const traces = [{
-    type: "bar",
-    x: xs, y: ys,
-    marker: { color: cssVar("--accent") },
-    hovertemplate: "%{x}<br>Volume: R$ %{y:,.0f}<extra></extra>",
-  }];
-  const annotations = xs.map((x, i) => ({
-    text: _trd_fmtVolPerBar(ys[i] || 0),
-    x: x,
-    y: ys[i] || 0,
-    yshift: 12,
-    showarrow: false,
+  const { singleIssuerMode, orderedSelected, colorFor } = _mkb_colorForTrace();
+
+  // Filtro secundário pelos headerFilters da tabela (dataFiltered).
+  const allowed = MKB_VISIBLE_TICKERS;
+  const useful = allowed
+    ? orderedSelected.filter(sel => allowed.has(sel.ticker))
+    : orderedSelected;
+
+  // Agrega volume por (ticker, data) com /2 (ponta dupla B3). A tabela usa
+  // r.vol cru — só os gráficos passam por aqui.
+  const dateSet = new Set();
+  const byTickerDate = new Map();   // ticker -> Map(date -> vol/2)
+  for (const r of (MKB_RANGE_ROWS || [])) {
+    if (!r || !r.date || typeof r.vol !== "number") continue;
+    if (!MKB_SELECTED.has(r.ticker)) continue;
+    if (allowed && !allowed.has(r.ticker)) continue;
+    dateSet.add(r.date);
+    let m = byTickerDate.get(r.ticker);
+    if (!m) { m = new Map(); byTickerDate.set(r.ticker, m); }
+    m.set(r.date, (m.get(r.date) || 0) + r.vol / 2);
+  }
+  const dates = [...dateSet].sort();
+  const xs = dates.map(brDate);
+
+  // Um trace por ticker — em multi-issuer mode, tickers do mesmo emissor
+  // compartilham legendgroup/cor (showlegend só no 1º trace do grupo) pra
+  // a legenda mostrar 1 entrada por emissor mas o tooltip continuar
+  // distinguindo cada papel.
+  const issuerLegendDone = new Set();
+  const traces = [];
+  for (const sel of useful) {
+    const m = byTickerDate.get(sel.ticker);
+    if (!m || !m.size) continue;
+    const ys = dates.map(d => m.get(d) || 0);
+    const issuer = sel.issuer || "(sem emissor)";
+    let name, legendgroup, showlegend;
+    if (singleIssuerMode) {
+      name = sel.ticker; legendgroup = sel.ticker; showlegend = true;
+    } else {
+      name = issuer; legendgroup = issuer;
+      showlegend = !issuerLegendDone.has(issuer);
+      if (showlegend) issuerLegendDone.add(issuer);
+    }
+    const color = colorFor(sel);
+    traces.push({
+      type: "bar",
+      name, legendgroup, showlegend,
+      x: xs, y: ys,
+      marker: { color },
+      customdata: ys.map(v => trd_fmtMoneyFull(v)),
+      hovertemplate: singleIssuerMode
+        ? `<b>${sel.ticker}</b><br>%{x}<br>Vol: %{customdata}<extra></extra>`
+        : `<b>${sel.ticker}</b><br>${escapeHtml(issuer)}<br>%{x}<br>Vol: %{customdata}<extra></extra>`,
+    });
+  }
+
+  // Totais por bucket (soma vertical do stack) — annotations no topo da barra.
+  const totalByCat = new Map();
+  for (const t of traces) {
+    for (let i = 0; i < t.x.length; i++) {
+      const cat = t.x[i];
+      const v = typeof t.y[i] === "number" ? t.y[i] : 0;
+      totalByCat.set(cat, (totalByCat.get(cat) || 0) + v);
+    }
+  }
+  const annotations = xs.map(x => ({
+    text: _trd_fmtVolPerBar(totalByCat.get(x) || 0),
+    x: x, y: totalByCat.get(x) || 0,
+    yshift: 12, showarrow: false,
     font: { color: "#d6dde7", size: 11 },
   }));
-  const maxVal = ys.length ? Math.max(...ys) : 0;
+  const totals = xs.map(x => totalByCat.get(x) || 0);
+  const maxVal = totals.length ? Math.max(...totals) : 0;
+
+  // Filtro do header zerou todos os papéis -> mostra placeholder no lugar
+  // do bar chart vazio (mesma estética da bubble vazia logo abaixo).
+  if (!traces.length) {
+    Plotly.react(div, [], Object.assign({}, base, {
+      annotations: [{
+        text: "Sem volume para os papéis filtrados.",
+        showarrow: false, x: 0.5, y: 0.5, xref: "paper", yref: "paper",
+        font: { color: cssVar("--muted"), size: 13 },
+      }],
+      xaxis: { visible: false }, yaxis: { visible: false },
+    }), Object.assign({}, PLOTLY_CONFIG, { displayModeBar: false }));
+    return;
+  }
+
   const { tickvals, ticktext } = _trd_axisTicksFromMax(maxVal);
   const layout = Object.assign({}, base, {
     margin: { t: 30, r: 18, b: 60, l: 60 },
-    showlegend: false,
+    barmode: "stack",
+    showlegend: true,
+    legend: { orientation: "h", x: 0, y: 1.12, font: { size: 11 } },
     annotations: annotations,
     xaxis: Object.assign({}, base.xaxis, {
       type: "category",
@@ -6337,11 +6552,15 @@ function mkb_renderBubbleChart(filteredRows, periods) {
   const xCategory = periods.map(p => p.label);
 
   // Volume max global pra calcular sizeref único (consistente entre tickers).
+  // Aplica /2 (ponta dupla B3) — o cálculo de tamanho e o tooltip mostram
+  // volume líquido. A tabela continua usando vol bruto (vol__ direto).
   let volMax = 0;
   for (const r of filteredRows) {
     for (const p of periods) {
       const v = r[`vol__${p.key}`];
-      if (typeof v === "number" && Number.isFinite(v) && v > volMax) volMax = v;
+      if (typeof v === "number" && Number.isFinite(v) && (v / 2) > volMax) {
+        volMax = v / 2;
+      }
     }
   }
   // Plotly: sizemode "area" => area da bolha ∝ size. sizeref normaliza
@@ -6364,8 +6583,9 @@ function mkb_renderBubbleChart(filteredRows, periods) {
       if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) continue;
       xs.push(p.label);
       ys.push(t);
-      sizes.push(v);
-      vols.push(v);
+      // /2 aqui também: size e tooltip mostram volume líquido (ponta dupla).
+      sizes.push(v / 2);
+      vols.push(v / 2);
       labels.push(p.label);
     }
     if (!xs.length) return;
