@@ -452,13 +452,20 @@ def build_vg_b3_consolidated() -> dict:
         deb_rows = [r for r in rows if r[_CONS_COL_INSTR] == "DEB"]
         vol_intra = 0.0
         vol_extra = 0.0
+        vol_extragrupo_strict = 0.0
+        vol_sem_classif = 0.0
         n_trades = 0
         for r in deb_rows:
             v = r[_CONS_COL_VOLUME] or 0.0
-            if _is_intragrupo(r[_CONS_COL_GRUPO]):
+            g = str(r[_CONS_COL_GRUPO] or "").strip().upper()
+            if g == "INTRAGRUPO":
                 vol_intra += v
             else:
                 vol_extra += v
+                if g == "EXTRAGRUPO":
+                    vol_extragrupo_strict += v
+                else:
+                    vol_sem_classif += v
             n = r[_CONS_COL_N_NEG]
             if isinstance(n, (int, float)):
                 n_trades += int(n)
@@ -466,6 +473,8 @@ def build_vg_b3_consolidated() -> dict:
             "volume_total_brl": round(vol_intra + vol_extra, 2),
             "volume_intra_brl": round(vol_intra, 2),
             "volume_extra_brl": round(vol_extra, 2),
+            "volume_extragrupo_brl": round(vol_extragrupo_strict, 2),
+            "volume_sem_classif_brl": round(vol_sem_classif, 2),
             "n_trades": n_trades,
             "n_instrumentos": len(deb_rows),
             "top_emissores": _top_n_aggregate(deb_rows, _CONS_COL_EMISSOR),
