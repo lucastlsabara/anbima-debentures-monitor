@@ -3185,6 +3185,10 @@ function _fmtBpsContrib(deltaPp) {
 // barra "Outros", imediatamente antes do Total. Universo de emissores eh
 // grande (>100); 15 captura os principais drivers sem poluir o grafico.
 const HEAT_WF_EMISSOR_TOP_N = 15;
+// Piso de |contribuicao| para entrar como barra individual. 0.0005pp = 0.05 bps,
+// que arredondaria para "0.0 bps" no display (1 casa decimal). Itens abaixo
+// disso vao para "Outros" mesmo que estejam no TOP por magnitude.
+const HEAT_WF_EMISSOR_MIN_ABS_PP = 0.0005;
 
 function drawHeatWaterfallEmissor() {
   // Mesma decomposicao dos outros waterfalls, agora por emissor:
@@ -3217,13 +3221,24 @@ function drawHeatWaterfallEmissor() {
     const b = atu[e] ? (atu[e].avg * atu[e].n / nAtu) : 0;
     return { e, delta: b - a };
   });
-  // Seleciona TOP N por magnitude (|delta|): captura maiores impactos sejam
-  // positivos ou negativos. Cauda restante eh agregada em "Outros".
+  // Seleciona TOP N por |delta| decrescente (sem balancear por sinal: pode
+  // sair 15 positivos, 15 negativos ou qualquer mistura). Itens cujo |delta|
+  // arredonda para 0.0 bps no display sao descartados para "Outros" mesmo
+  // que caibam no TOP por magnitude, evitando poluir o grafico com barras
+  // "+0.0 bps" / "-0.0 bps".
   const sortedByMag = allRows.slice().sort(
     (x, y) => Math.abs(y.delta) - Math.abs(x.delta)
   );
-  const topRows = sortedByMag.slice(0, HEAT_WF_EMISSOR_TOP_N);
-  const restRows = sortedByMag.slice(HEAT_WF_EMISSOR_TOP_N);
+  const topRows = [];
+  const restRows = [];
+  for (const r of sortedByMag) {
+    if (topRows.length < HEAT_WF_EMISSOR_TOP_N
+        && Math.abs(r.delta) >= HEAT_WF_EMISSOR_MIN_ABS_PP) {
+      topRows.push(r);
+    } else {
+      restRows.push(r);
+    }
+  }
   const outrosDelta = restRows.reduce((a, r) => a + r.delta, 0);
   // Visualmente: do mais positivo (alargou spread) ao mais negativo (fechou).
   topRows.sort((x, y) => y.delta - x.delta);
