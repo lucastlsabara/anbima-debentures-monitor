@@ -42,14 +42,44 @@
   header.top h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.01em; }
   nav.tabs {
     display:flex; gap:2px; padding:0 24px; background:var(--surface);
-    border-bottom:1px solid var(--border); overflow-x:auto;
+    border-bottom:1px solid var(--border); overflow:visible; position:relative;
   }
-  nav.tabs a {
+  nav.tabs a,
+  nav.tabs .tab-group-label {
     padding:11px 16px; color:var(--muted); text-decoration:none;
     font-size:12.5px; border-bottom:2px solid transparent; white-space:nowrap;
+    background:transparent; border-top:0; border-left:0; border-right:0;
+    font-family:inherit; cursor:pointer; line-height:1.45;
   }
-  nav.tabs a:hover { color:var(--fg); }
-  nav.tabs a.active { color:var(--fg); border-bottom-color:var(--accent); }
+  nav.tabs a:hover,
+  nav.tabs .tab-group-label:hover { color:var(--fg); }
+  nav.tabs a.active,
+  nav.tabs .tab-group-label.active { color:var(--fg); border-bottom-color:var(--accent); }
+  nav.tabs .tab-group { position:relative; display:flex; }
+  nav.tabs .tab-group-label::after {
+    content:""; display:inline-block; margin-left:6px;
+    border-left:4px solid transparent; border-right:4px solid transparent;
+    border-top:4px solid currentColor; transform:translateY(-1px);
+    opacity:.7;
+  }
+  nav.tabs .tab-group-menu {
+    position:absolute; top:100%; left:0; min-width:170px;
+    background:var(--surface2); border:1px solid var(--border);
+    border-top:0; border-radius:0 0 4px 4px;
+    display:none; flex-direction:column; z-index:50;
+    box-shadow:0 6px 14px rgba(0,0,0,0.35);
+    padding:4px 0;
+  }
+  nav.tabs .tab-group:hover .tab-group-menu,
+  nav.tabs .tab-group.open .tab-group-menu { display:flex; }
+  nav.tabs .tab-group-menu a {
+    padding:8px 14px; border-bottom:0;
+    border-left:2px solid transparent;
+  }
+  nav.tabs .tab-group-menu a:hover { background:var(--surface); color:var(--fg); }
+  nav.tabs .tab-group-menu a.active {
+    color:var(--fg); border-left-color:var(--accent); background:var(--surface);
+  }
   main { padding:18px 24px 32px; }
   .panel {
     background:var(--surface); border:1px solid var(--border);
@@ -540,14 +570,24 @@
 </header>
 
 <nav class="tabs" id="tabs">
-  <a href="#/visao" data-tab="visao">Visão Geral</a>
-  <a href="#/movimentacoes" data-tab="movimentacoes">Debêntures: Papéis</a>
-  <a href="#/heatmap" data-tab="heatmap">Debêntures: Setor × Prazo</a>
-  <a href="#/dispersao" data-tab="dispersao">Debêntures: Gráfico</a>
-  <a href="#/trades" data-tab="trades">Pesquisa de Trades</a>
-  <a href="#/marcacao-b3" data-tab="marcacao-b3">Marcação B3</a>
+  <a href="#/visao" data-tab="visao">Início</a>
+  <div class="tab-group" data-group="anbima">
+    <button type="button" class="tab-group-label" aria-haspopup="true" aria-expanded="false">Anbima</button>
+    <div class="tab-group-menu" role="menu">
+      <a href="#/movimentacoes" data-tab="movimentacoes" role="menuitem">Marcação</a>
+      <a href="#/heatmap" data-tab="heatmap" role="menuitem">Matriz</a>
+      <a href="#/dispersao" data-tab="dispersao" role="menuitem">Dispersão</a>
+    </div>
+  </div>
+  <div class="tab-group" data-group="trades-b3">
+    <button type="button" class="tab-group-label" aria-haspopup="true" aria-expanded="false">Trades B3</button>
+    <div class="tab-group-menu" role="menu">
+      <a href="#/trades" data-tab="trades" role="menuitem">Trades</a>
+      <a href="#/marcacao-b3" data-tab="marcacao-b3" role="menuitem">Comparativo</a>
+    </div>
+  </div>
+  <a href="#/indices-anbima" data-tab="indices-anbima">Índices Anbima</a>
   <a href="#/titulos-publicos" data-tab="titulos-publicos">Títulos Públicos</a>
-  <a href="#/indices-anbima" data-tab="indices-anbima">Índices ANBIMA</a>
 </nav>
 
 <main>
@@ -1142,8 +1182,15 @@ function activateTab(name) {
     return;
   }
   name = resolved;
-  document.querySelectorAll("#tabs a").forEach(a =>
+  document.querySelectorAll("#tabs a[data-tab]").forEach(a =>
     a.classList.toggle("active", a.dataset.tab === name));
+  // Marca o rotulo do dropdown pai como ativo quando uma sub-aba do grupo
+  // esta selecionada (mesmo realce visual dos itens diretos).
+  document.querySelectorAll("#tabs .tab-group").forEach(g => {
+    const lbl = g.querySelector(".tab-group-label");
+    if (!lbl) return;
+    lbl.classList.toggle("active", !!g.querySelector("a.active"));
+  });
   document.querySelectorAll("section.tab").forEach(s =>
     s.classList.toggle("hide", s.id !== "tab-" + name));
   if (!loaded.has(name)) {
@@ -7228,11 +7275,46 @@ async function renderIndicesAnbima() {
   _idxRedraw();
 }
 
+// Wiring dos dropdowns da barra de navegacao (Anbima / Trades B3). Hover
+// abre via CSS; aqui tratamos toggle por click/touch e fechamento ao
+// clicar fora ou ao escolher uma sub-aba.
+function _wireNavDropdowns() {
+  const groups = document.querySelectorAll("#tabs .tab-group");
+  if (!groups.length) return;
+  function closeAll(except) {
+    groups.forEach(g => {
+      if (g === except) return;
+      g.classList.remove("open");
+      const lb = g.querySelector(".tab-group-label");
+      if (lb) lb.setAttribute("aria-expanded", "false");
+    });
+  }
+  groups.forEach(g => {
+    const lbl = g.querySelector(".tab-group-label");
+    if (lbl) {
+      lbl.addEventListener("click", (e) => {
+        e.preventDefault();
+        const willOpen = !g.classList.contains("open");
+        closeAll(g);
+        g.classList.toggle("open", willOpen);
+        lbl.setAttribute("aria-expanded", String(willOpen));
+      });
+    }
+    g.querySelectorAll(".tab-group-menu a").forEach(a => {
+      a.addEventListener("click", () => closeAll(null));
+    });
+  });
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest("#tabs .tab-group")) closeAll(null);
+  });
+}
+
 // DOMContentLoaded garante que os scripts <head defer> (Tabulator, Plotly,
 // flatpickr) já executaram. Sem isso, defer + script inline no final do
 // body podia chamar Plotly/Tabulator antes do load — defer só executa
 // após o parsing, mas antes do DOMContentLoaded.
 function _bootstrap() {
+  _wireNavDropdowns();
   init().catch(err => {
     console.error(err);
     document.getElementById("hdr-sub").textContent =
