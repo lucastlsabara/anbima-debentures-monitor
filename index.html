@@ -3185,22 +3185,23 @@ function drawHeatWaterfall() {
   const totalDeltaSetor = rows.reduce((a, r) => a + r.delta, 0);
   const xsSetor = [...rows.map(r => r.s), "Total"];
   const ysSetor = [...rows.map(r => r.delta * 100), totalDeltaSetor * 100];
-  const colorsSetor = [
-    ...rows.map(r => r.delta >= 0 ? "#dc5752" : "#3aa66c"),
-    HEAT_WF_TOTAL_COLOR,
-  ];
+  const measureSetor = [...rows.map(() => "relative"), "total"];
   const textsSetor = [
     ...rows.map(r => _fmtBpsContrib(r.delta)),
     _fmtBpsContrib(totalDeltaSetor),
   ];
   const deltaTrace = {
-    type: "bar",
+    type: "waterfall",
     name: "Variação",
     x: xsSetor,
     y: ysSetor,
-    marker: { color: colorsSetor },
+    measure: measureSetor,
     text: textsSetor,
     textposition: "outside",
+    increasing: { marker: { color: "#dc5752" } },
+    decreasing: { marker: { color: "#3aa66c" } },
+    totals:     { marker: { color: HEAT_WF_TOTAL_COLOR } },
+    connector:  { line: { color: "rgba(140,150,170,0.45)", dash: "dot", width: 1 } },
     showlegend: false,
     hovertemplate:
       "<b>%{x}</b><br>" +
@@ -3210,7 +3211,8 @@ function drawHeatWaterfall() {
   // Folga no eixo Y: as labels "outside" das barras ficam coladas no topo
   // (ou no fundo) do plot area; sem padding o texto encosta na borda e fica
   // sobreposto pelos rotulos do eixo X. 25% do range em cada lado resolve.
-  const yRangeSetor = _waterfallYRange(ysSetor);
+  // Em waterfall, o range eh definido pelos niveis cumulativos, nao pelos deltas.
+  const yRangeSetor = _waterfallYRange(_waterfallCumLevels(ysSetor, measureSetor));
 
   const layout = Object.assign(PLOTLY_LAYOUT(), {
     margin: { l: 60, r: 18, t: 20, b: 110 },
@@ -3233,6 +3235,26 @@ function _waterfallYRange(ys) {
   const span = hi - lo || Math.max(Math.abs(hi), Math.abs(lo), 1);
   const pad = span * 0.25;
   return [lo - pad, hi + pad];
+}
+
+// Converte uma serie (ys, measure) de waterfall em todos os niveis verticais
+// "tocados" pelas barras (topos + bases + zero), para que _waterfallYRange
+// dimensione o eixo Y a partir dos cumulativos reais — nao dos deltas.
+function _waterfallCumLevels(ys, measure) {
+  const levels = [0];
+  let cum = 0;
+  for (let i = 0; i < ys.length; i++) {
+    const v = +ys[i] || 0;
+    if (measure[i] === "total" || measure[i] === "absolute") {
+      levels.push(0, v);
+      cum = v;
+    } else {
+      const next = cum + v;
+      levels.push(cum, next);
+      cum = next;
+    }
+  }
+  return levels;
 }
 
 // Mesma decomposicao do waterfall por setor, mas decomposto pelos buckets
@@ -3287,29 +3309,30 @@ function drawHeatWaterfallDuration() {
   const totalDeltaDur = rows.reduce((a, r) => a + r.delta, 0);
   const xsDur = [...rows.map(r => r.label), "Total"];
   const ysDur = [...rows.map(r => r.delta * 100), totalDeltaDur * 100];
-  const colorsDur = [
-    ...rows.map(r => r.delta >= 0 ? "#dc5752" : "#3aa66c"),
-    HEAT_WF_TOTAL_COLOR,
-  ];
+  const measureDur = [...rows.map(() => "relative"), "total"];
   const textsDur = [
     ...rows.map(r => _fmtBpsContrib(r.delta)),
     _fmtBpsContrib(totalDeltaDur),
   ];
   const deltaTrace = {
-    type: "bar",
+    type: "waterfall",
     name: "Variação",
     x: xsDur,
     y: ysDur,
-    marker: { color: colorsDur },
+    measure: measureDur,
     text: textsDur,
     textposition: "outside",
+    increasing: { marker: { color: "#dc5752" } },
+    decreasing: { marker: { color: "#3aa66c" } },
+    totals:     { marker: { color: HEAT_WF_TOTAL_COLOR } },
+    connector:  { line: { color: "rgba(140,150,170,0.45)", dash: "dot", width: 1 } },
     showlegend: false,
     hovertemplate:
       "<b>%{x}</b><br>" +
       "Δ contribuição: %{y:.2f} bps" +
       "<extra></extra>",
   };
-  const yRangeDur = _waterfallYRange(ysDur);
+  const yRangeDur = _waterfallYRange(_waterfallCumLevels(ysDur, measureDur));
 
   const layout = Object.assign(PLOTLY_LAYOUT(), {
     margin: { l: 60, r: 18, t: 20, b: 60 },
