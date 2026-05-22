@@ -776,12 +776,17 @@
       <div class="exclusion-chips" id="heat-exclude-chips"></div>
     </div>
   </div>
-  <div class="panel">
+  <div class="panel" id="hm-wf-emi-panel">
+    <h2>Waterfall — variação do spread médio por emissor</h2>
+    <div id="hm-wf-emi-sub" class="muted" style="font-size:11px;margin:-4px 0 8px"></div>
+    <div id="chart-heat-waterfall-emi" class="chart"></div>
+  </div>
+  <div class="panel" id="hm-wf-set-panel">
     <h2>Waterfall — variação do spread médio por setor</h2>
     <div id="hm-wf-sub" class="muted" style="font-size:11px;margin:-4px 0 8px"></div>
     <div id="chart-heat-waterfall" class="chart"></div>
   </div>
-  <div class="panel">
+  <div class="panel" id="hm-wf-dur-panel">
     <h2>Waterfall — variação do spread médio por duration</h2>
     <div id="hm-wf-dur-sub" class="muted" style="font-size:11px;margin:-4px 0 8px"></div>
     <div id="chart-heat-waterfall-dur" class="chart"></div>
@@ -3092,7 +3097,17 @@ function drawHeatmap() {
     yaxis: Object.assign(PLOTLY_LAYOUT().yaxis, { autorange:"reversed" }),
   });
   Plotly.newPlot("chart-heatmap", [trace], layout, PLOTLY_CONFIG);
-  drawHeatWaterfall();
+  // Waterfalls so fazem sentido em modo Delta: em "Spread atual" nao ha
+  // diferenca para decompor. Ocultamos os 3 paineis para evitar ruido visual.
+  const _wfShow = (HEAT_MODE !== "current");
+  for (const id of ["hm-wf-emi-panel", "hm-wf-set-panel", "hm-wf-dur-panel"]) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle("hide", !_wfShow);
+  }
+  if (_wfShow) {
+    drawHeatWaterfallEmissor();
+    drawHeatWaterfall();
+  }
   drawHeatComposicao();
 }
 
@@ -3141,11 +3156,129 @@ function _heatGlobalAvgForDate(date) {
   return arr.reduce((a, b) => a + b, 0) / arr.length;
 }
 
+function _heatEmissorAvgsForDate(date) {
+  // emissor -> { avg, n } para a data, depois de filtros de indexador e
+  // exclusao. Agrupa pelo nome-base (normEmissor) para nao quebrar emissor
+  // entre marcadores "(*)"/"(**)" usados pela ANBIMA.
+  const acc = {};
+  for (const p of _heatFilteredPapers(HEAT.by_date[date])) {
+    const k = normEmissor(p.e) || "(sem emissor)";
+    if (!acc[k]) acc[k] = [];
+    acc[k].push(p.sp);
+  }
+  const out = {};
+  for (const k in acc) {
+    const arr = acc[k];
+    out[k] = { avg: arr.reduce((a, b) => a + b, 0) / arr.length, n: arr.length };
+  }
+  return out;
+}
+
 // Formata um delta de contribuicao (em pp/percentage points) como bps.
 // 1pp = 100 bps, entao multiplicamos por 100. Ex: 0.001pp -> "+0.1 bps".
 function _fmtBpsContrib(deltaPp) {
   const bps = deltaPp * 100;
   return (bps >= 0 ? "+" : "") + bps.toFixed(1) + " bps";
+}
+
+// Quantos emissores mostrar como barras individuais. O resto vai para a
+// barra "Outros", imediatamente antes do Total. Universo de emissores eh
+// grande (>100); 15 captura os principais drivers sem poluir o grafico.
+const HEAT_WF_EMISSOR_TOP_N = 15;
+
+function drawHeatWaterfallEmissor() {
+  // Mesma decomposicao dos outros waterfalls, agora por emissor:
+  // contrib_e(t) = avg_e(t) * n_e(t) / n_total(t). delta_e = contrib_e(atual)
+  // - contrib_e(anterior). Soma de todas as contribuicoes (incluindo Outros)
+  // fecha com avgAtu - avgAnt do pool global filtrado.
+  const root = document.getElementById("chart-heat-waterfall-emi");
+  const sub = document.getElementById("hm-wf-emi-sub");
+  if (!HM_DATE_ANTERIOR || !HM_DATE_ATUAL) {
+    if (sub) sub.textContent = "Selecione Data Anterior e Data Atual.";
+    Plotly.purge(root);
+    root.innerHTML = '<div class="empty">Selecione Data Anterior e Data Atual.</div>';
+    return;
+  }
+  if (sub) sub.textContent = `De ${brDate(HM_DATE_ANTERIOR)} para ${brDate(HM_DATE_ATUAL)}`;
+
+  const ant = _heatEmissorAvgsForDate(HM_DATE_ANTERIOR);
+  const atu = _heatEmissorAvgsForDate(HM_DATE_ATUAL);
+  const nAnt = Object.values(ant).reduce((a, x) => a + x.n, 0);
+  const nAtu = Object.values(atu).reduce((a, x) => a + x.n, 0);
+  if (!nAnt || !nAtu) {
+    Plotly.purge(root);
+    root.innerHTML = '<div class="empty">Snapshot ausente em uma das datas.</div>';
+    return;
+  }
+
+  const emissoresUnion = Array.from(new Set([...Object.keys(ant), ...Object.keys(atu)]));
+  const allRows = emissoresUnion.map(e => {
+    const a = ant[e] ? (ant[e].avg * ant[e].n / nAnt) : 0;
+    const b = atu[e] ? (atu[e].avg * atu[e].n / nAtu) : 0;
+    return { e, delta: b - a };
+  });
+  // Seleciona TOP N por magnitude (|delta|): captura maiores impactos sejam
+  // positivos ou negativos. Cauda restante eh agregada em "Outros".
+  const sortedByMag = allRows.slice().sort(
+    (x, y) => Math.abs(y.delta) - Math.abs(x.delta)
+  );
+  const topRows = sortedByMag.slice(0, HEAT_WF_EMISSOR_TOP_N);
+  const restRows = sortedByMag.slice(HEAT_WF_EMISSOR_TOP_N);
+  const outrosDelta = restRows.reduce((a, r) => a + r.delta, 0);
+  // Visualmente: do mais positivo (alargou spread) ao mais negativo (fechou).
+  topRows.sort((x, y) => y.delta - x.delta);
+
+  const totalDeltaEmi = allRows.reduce((a, r) => a + r.delta, 0);
+  const hasOutros = restRows.length > 0;
+  const xsEmi = [
+    ...topRows.map(r => r.e),
+    ...(hasOutros ? ["Outros"] : []),
+    "Total",
+  ];
+  const ysEmi = [
+    ...topRows.map(r => r.delta * 100),
+    ...(hasOutros ? [outrosDelta * 100] : []),
+    totalDeltaEmi * 100,
+  ];
+  const measureEmi = [
+    ...topRows.map(() => "relative"),
+    ...(hasOutros ? ["relative"] : []),
+    "total",
+  ];
+  const textsEmi = [
+    ...topRows.map(r => _fmtBpsContrib(r.delta)),
+    ...(hasOutros ? [_fmtBpsContrib(outrosDelta)] : []),
+    _fmtBpsContrib(totalDeltaEmi),
+  ];
+  const deltaTrace = {
+    type: "waterfall",
+    name: "Variação",
+    x: xsEmi,
+    y: ysEmi,
+    measure: measureEmi,
+    text: textsEmi,
+    textposition: "outside",
+    increasing: { marker: { color: "#dc5752" } },
+    decreasing: { marker: { color: "#3aa66c" } },
+    totals:     { marker: { color: HEAT_WF_TOTAL_COLOR } },
+    connector:  { line: { color: "rgba(140,150,170,0.45)", dash: "dot", width: 1 } },
+    showlegend: false,
+    hovertemplate:
+      "<b>%{x}</b><br>" +
+      "Δ contribuição: %{y:.2f} bps" +
+      "<extra></extra>",
+  };
+  const yRangeEmi = _waterfallYRange(_waterfallCumLevels(ysEmi, measureEmi));
+
+  const layout = Object.assign(PLOTLY_LAYOUT(), {
+    margin: { l: 60, r: 18, t: 20, b: 140 },
+    xaxis: Object.assign(PLOTLY_LAYOUT().xaxis, { tickangle: -35 }),
+    yaxis: Object.assign(PLOTLY_LAYOUT().yaxis,
+      { title: "Δ contribuição (bps)", ticksuffix: " bps", range: yRangeEmi }),
+    showlegend: false,
+    hovermode: "closest",
+  });
+  Plotly.newPlot(root, [deltaTrace], layout, PLOTLY_CONFIG);
 }
 
 function drawHeatWaterfall() {
