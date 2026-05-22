@@ -3080,7 +3080,7 @@ function drawHeatmap() {
   const trace = {
     z, x: buckets, y: setores, type:"heatmap",
     colorscale, zmin, zmax,
-    text: z.map(row => row.map(v => v == null ? "" : v.toFixed(HEAT_MODE==="current"?2:0))),
+    text: z.map(row => row.map(v => v == null ? "" : v.toFixed(HEAT_MODE==="current"?2:1))),
     texttemplate: "%{text}",
     textfont: { size: 11, color: textColors },
     colorbar: { title, thickness: 12, len: 0.8 },
@@ -3095,6 +3095,11 @@ function drawHeatmap() {
   drawHeatWaterfall();
   drawHeatComposicao();
 }
+
+// Cor neutra para a barra "Total" dos waterfalls — distinta do vermelho
+// (delta positivo = spread alargou) e verde (delta negativo = spread fechou)
+// das barras de contribuicao, para indicar que e uma agregacao.
+const HEAT_WF_TOTAL_COLOR = "#5b8def";
 
 // Paleta estavel por setor — reusa PALETTE_QUAL da aba Dispersao para garantir
 // consistencia visual entre scatter e waterfall.
@@ -3177,14 +3182,24 @@ function drawHeatWaterfall() {
   // Maior magnitude primeiro: leitor identifica drivers a olho.
   rows.sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
 
-  const ysSetor = rows.map(r => r.delta * 100);
+  const totalDeltaSetor = rows.reduce((a, r) => a + r.delta, 0);
+  const xsSetor = [...rows.map(r => r.s), "Total"];
+  const ysSetor = [...rows.map(r => r.delta * 100), totalDeltaSetor * 100];
+  const colorsSetor = [
+    ...rows.map(r => r.delta >= 0 ? "#dc5752" : "#3aa66c"),
+    HEAT_WF_TOTAL_COLOR,
+  ];
+  const textsSetor = [
+    ...rows.map(r => _fmtBpsContrib(r.delta)),
+    _fmtBpsContrib(totalDeltaSetor),
+  ];
   const deltaTrace = {
     type: "bar",
     name: "Variação",
-    x: rows.map(r => r.s),
+    x: xsSetor,
     y: ysSetor,
-    marker: { color: rows.map(r => r.delta >= 0 ? "#dc5752" : "#3aa66c") },
-    text: rows.map(r => _fmtBpsContrib(r.delta)),
+    marker: { color: colorsSetor },
+    text: textsSetor,
     textposition: "outside",
     showlegend: false,
     hovertemplate:
@@ -3269,14 +3284,24 @@ function drawHeatWaterfallDuration() {
     return { label: a.label, delta: cAtu - cAnt };
   });
 
-  const ysDur = rows.map(r => r.delta * 100);
+  const totalDeltaDur = rows.reduce((a, r) => a + r.delta, 0);
+  const xsDur = [...rows.map(r => r.label), "Total"];
+  const ysDur = [...rows.map(r => r.delta * 100), totalDeltaDur * 100];
+  const colorsDur = [
+    ...rows.map(r => r.delta >= 0 ? "#dc5752" : "#3aa66c"),
+    HEAT_WF_TOTAL_COLOR,
+  ];
+  const textsDur = [
+    ...rows.map(r => _fmtBpsContrib(r.delta)),
+    _fmtBpsContrib(totalDeltaDur),
+  ];
   const deltaTrace = {
     type: "bar",
     name: "Variação",
-    x: rows.map(r => r.label),
+    x: xsDur,
     y: ysDur,
-    marker: { color: rows.map(r => r.delta >= 0 ? "#dc5752" : "#3aa66c") },
-    text: rows.map(r => _fmtBpsContrib(r.delta)),
+    marker: { color: colorsDur },
+    text: textsDur,
     textposition: "outside",
     showlegend: false,
     hovertemplate:
