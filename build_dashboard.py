@@ -33,6 +33,7 @@ import math
 import re
 import sys
 from collections import defaultdict
+from datetime import date
 from pathlib import Path
 
 from compute_spreads import indexador_group as _indexador_group
@@ -44,6 +45,7 @@ ROOT = Path(__file__).parent
 HIST_DIR = ROOT / "history"
 DATA_DIR = ROOT / "data"
 B3_CONS_DIR = DATA_DIR / "b3_trades_consolidated"
+B3_TRADES_DIR = DATA_DIR / "b3_trades"
 ANBIMA_INDICES_DIR = DATA_DIR / "anbima_indices"
 BENCHMARKS_DIR = DATA_DIR / "benchmarks"
 B3_INSTRUMENTS_PATH = DATA_DIR / "b3_instruments.json"
@@ -937,6 +939,145 @@ def build_ticker_indexador() -> dict:
 
 
 # ----------------------------------------------------------------------------
+# ticker -> duration (ANBIMA primário, prazo até vencimento B3 fallback)
+# ----------------------------------------------------------------------------
+# Aba Trades B3 > Trades exibe coluna "Duration" enriquecida no frontend a
+# partir deste arquivo. Estrutura:
+#   {"source_date": "YYYY-MM-DD", "tickers": {TICKER: {"d": float, "f": "anbima"|"b3"}}}
+# Papéis sem match em nenhuma fonte são omitidos do dict (frontend exibe '—').
+
+def _collect_trade_tickers() -> tuple[set[str], str | None]:
+    """Coleta tickers únicos em data/b3_trades/*.json + data mais recente.
+
+    Retorna ``(set(), None)`` em ambiente sem snapshots de trades (primeira
+    execução de sandbox). A data mais recente vem do manifest.json e é usada
+    como referência para o fallback de prazo até vencimento.
+    """
+    if not B3_TRADES_DIR.exists():
+        return set(), None
+    latest_date: str | None = None
+    manifest = B3_TRADES_DIR / "manifest.json"
+    if manifest.exists():
+        try:
+            mf = json.loads(manifest.read_text(encoding="utf-8"))
+            latest_date = mf.get("latest_date")
+        except json.JSONDecodeError:
+            pass
+    tickers: set[str] = set()
+    for p in B3_TRADES_DIR.glob("*.json"):
+        if p.name == "manifest.json":
+            continue
+        try:
+            payload = json.loads(p.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        cols = payload.get("columns") or []
+        try:
+            i_ticker = cols.index("ticker")
+        except ValueError:
+            continue
+        for r in payload.get("rows") or []:
+            if i_ticker < len(r):
+                t = r[i_ticker]
+                if t:
+                    tickers.add(t)
+    return tickers, latest_date
+
+
+def _anbima_duration_by_ticker(snaps: list[dict]) -> dict[str, float]:
+    """ticker -> duration_anos do snapshot ANBIMA mais recente que conhece o papel.
+
+    snaps já vem ordenado por data crescente; sobrescrever a chave a cada
+    iteração equivale a manter o valor mais recente.
+    """
+    out: dict[str, float] = {}
+    for s in snaps:
+        for p in s.get("debentures") or []:
+            dur = p.get("duration_anos")
+            cod = p.get("codigo")
+            if cod and dur is not None:
+                out[cod] = dur
+    return out
+
+
+def _b3_vencimento_by_ticker() -> dict[str, str]:
+    """ticker -> vencimento (DD/MM/YYYY) a partir de b3_instruments.json."""
+    if not B3_INSTRUMENTS_PATH.exists():
+        return {}
+    try:
+        payload = json.loads(B3_INSTRUMENTS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    cols = payload.get("columns") or []
+    rows = payload.get("rows") or []
+    try:
+        i_codigo = cols.index("codigo_if")
+        i_venc = cols.index("vencimento")
+    except ValueError:
+        return {}
+    out: dict[str, str] = {}
+    for r in rows:
+        if i_codigo >= len(r) or i_venc >= len(r):
+            continue
+        t = r[i_codigo]
+        v = r[i_venc]
+        if t and v and v not in ("", "-"):
+            out[t] = v
+    return out
+
+
+def _parse_br_date(s: str | None) -> date | None:
+    if not s or not isinstance(s, str):
+        return None
+    try:
+        d, m, y = s.split("/")
+        return date(int(y), int(m), int(d))
+    except ValueError:
+        return None
+
+
+def _parse_iso_date(s: str | None) -> date | None:
+    if not s or not isinstance(s, str):
+        return None
+    try:
+        y, m, d = s.split("-")
+        return date(int(y), int(m), int(d))
+    except ValueError:
+        return None
+
+
+def build_ticker_duration(snaps: list[dict]) -> dict:
+    """Lookup ticker → duration (anos) para a aba Trades B3 > Trades.
+
+    Fonte primária: duration_anos do snapshot ANBIMA mais recente que conhece
+    o papel. Fallback: (vencimento_B3 - data_alvo) / 365.25, onde data_alvo é
+    a data mais recente em data/b3_trades/manifest.json. Papéis sem match em
+    nenhuma fonte são omitidos.
+    """
+    trade_tickers, latest_trade_date = _collect_trade_tickers()
+    if not trade_tickers:
+        return {"source_date": latest_trade_date, "tickers": {}}
+    anbima_dur = _anbima_duration_by_ticker(snaps)
+    b3_venc = _b3_vencimento_by_ticker()
+    data_alvo = _parse_iso_date(latest_trade_date)
+    tickers: dict[str, dict] = {}
+    for t in trade_tickers:
+        dur = anbima_dur.get(t)
+        if dur is not None:
+            tickers[t] = {"d": round(float(dur), 2), "f": "anbima"}
+            continue
+        if data_alvo is None:
+            continue
+        venc_br = b3_venc.get(t)
+        venc = _parse_br_date(venc_br)
+        if venc is None:
+            continue
+        prazo = max(0.0, (venc - data_alvo).days / 365.25)
+        tickers[t] = {"d": round(prazo, 2), "f": "b3"}
+    return {"source_date": latest_trade_date, "tickers": tickers}
+
+
+# ----------------------------------------------------------------------------
 # HTML
 # ----------------------------------------------------------------------------
 
@@ -1011,6 +1152,8 @@ def main() -> int:
         _write_json(DATA_DIR / "indices_anbima.json", build_anbima_indices())))
     sizes.append(("ticker_indexador.json",
         _write_json(DATA_DIR / "ticker_indexador.json", build_ticker_indexador())))
+    sizes.append(("ticker_duration.json",
+        _write_json(DATA_DIR / "ticker_duration.json", build_ticker_duration(snaps))))
 
     disp_index = build_dispersion(snaps, disp_dir)
     sizes.append(("dispersion/_index.json",

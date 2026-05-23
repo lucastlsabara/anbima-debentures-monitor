@@ -4031,6 +4031,34 @@ function trd_indexadorFor(ticker) {
   return (v == null || v === "") ? TRD_INDEXADOR_FALLBACK : v;
 }
 
+// Lookup ticker -> duration em anos (data/ticker_duration.json). Fonte primaria
+// e duration_anos da ANBIMA; fallback e prazo ate vencimento via cadastro B3,
+// computado no build. Tickers ausentes retornam null e a celula exibe '—'. A
+// origem (anbima vs b3) nao e exposta na UI.
+let TRD_DURATION_MAP = null;
+let _TRD_DURATION_LOAD = null;
+async function trd_loadDurationLookup() {
+  if (TRD_DURATION_MAP !== null) return TRD_DURATION_MAP;
+  if (_TRD_DURATION_LOAD) return _TRD_DURATION_LOAD;
+  _TRD_DURATION_LOAD = (async () => {
+    try {
+      const payload = await loadJSON("data/ticker_duration.json");
+      TRD_DURATION_MAP = (payload && payload.tickers) || {};
+    } catch (e) {
+      console.warn("[trades] ticker_duration.json indisponivel; coluna Duration exibira '—'", e);
+      TRD_DURATION_MAP = {};
+    }
+    return TRD_DURATION_MAP;
+  })();
+  return _TRD_DURATION_LOAD;
+}
+function trd_durationFor(ticker) {
+  if (!ticker || !TRD_DURATION_MAP) return null;
+  const entry = TRD_DURATION_MAP[ticker];
+  if (entry == null || typeof entry.d !== "number") return null;
+  return entry.d;
+}
+
 // Filtro de trades cancelados (M2). Match prefixo "Cancelado" cobre
 // "Cancelado", "Cancelado B3" e "Cancelado Parcial B3". Aplicado apos load,
 // antes de qualquer agregacao/render.
@@ -4251,6 +4279,16 @@ function _trd_buildTradesTable(containerId, rows) {
           clearable: true,
         },
         headerFilterFunc: "=" },
+      { title: "Duration", field: "duration", width: 100, hozAlign: "right",
+        sorter: "number",
+        formatter: c => {
+          const v = c.getValue();
+          if (v == null || typeof v !== "number" || !Number.isFinite(v)) return "—";
+          return v.toLocaleString("pt-BR",
+            { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+        },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: "ex: 3 ou >3" },
       { title: "Qtd", field: "qtd", width: 90, hozAlign: "right",
         formatter: c => trd_fmtIntBR(c.getValue()),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
@@ -4801,13 +4839,15 @@ async function tr2_load() {
 
   let payloads;
   try {
-    // Lookup ticker -> indexador (data/ticker_indexador.json) carrega em
-    // paralelo com os dias de trades; cache em TRD_INDEXADOR_MAP evita
-    // re-fetches em loads subsequentes. Falha de carregamento nao bloqueia
-    // a tabela — trd_loadIndexadorLookup degrada silenciosamente para {}.
+    // Lookups ticker -> indexador / duration (data/ticker_indexador.json e
+    // data/ticker_duration.json) carregam em paralelo com os dias de trades;
+    // cache em TRD_INDEXADOR_MAP / TRD_DURATION_MAP evita re-fetches em loads
+    // subsequentes. Falha de carregamento nao bloqueia a tabela — os helpers
+    // degradam silenciosamente para {}.
     [payloads] = await Promise.all([
       Promise.all(dateEntries.map(e => tr2_fetchDayCurrent(e))),
       trd_loadIndexadorLookup(),
+      trd_loadDurationLookup(),
     ]);
   } catch (err) {
     console.error("[trades] fetch", err);
@@ -4830,6 +4870,7 @@ async function tr2_load() {
           : _tr2_rowToObj(r, p.date, p.columns);
         if (_trd_isCancelled(obj.situation)) continue;
         obj.indexador = trd_indexadorFor(obj.ticker);
+        obj.duration = trd_durationFor(obj.ticker);
       }
       allRows.push(obj);
     }
