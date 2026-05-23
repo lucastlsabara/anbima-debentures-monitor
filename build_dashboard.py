@@ -46,6 +46,11 @@ DATA_DIR = ROOT / "data"
 B3_CONS_DIR = DATA_DIR / "b3_trades_consolidated"
 ANBIMA_INDICES_DIR = DATA_DIR / "anbima_indices"
 BENCHMARKS_DIR = DATA_DIR / "benchmarks"
+B3_INSTRUMENTS_PATH = DATA_DIR / "b3_instruments.json"
+
+# Tickers ausentes do cadastro B3 cobrem ~0,6% das negociações; o frontend
+# renderiza esta string no lugar da categoria.
+INDEXADOR_FALLBACK = "—"  # em dash
 
 # Indexadores efetivamente exibidos no dashboard. Para reincluir % do DI ou
 # IGP-M+ no futuro, basta acrescentá-los aqui — os snapshots em history/
@@ -842,6 +847,96 @@ def build_anbima_indices() -> dict:
 
 
 # ----------------------------------------------------------------------------
+# ticker -> indexador normalizado (cadastro B3 InstrumentRegistration)
+# ----------------------------------------------------------------------------
+# Lê data/b3_instruments.json (fetch_b3_instruments.py) e emite um mapa
+# ticker -> categoria normalizada para a coluna "Indexador" da aba Trades B3 >
+# Trades. Cinco categorias: IPCA, Prefixado, CDI, %CDI, Outros. Tickers sem
+# entrada no cadastro caem para INDEXADOR_FALLBACK no frontend.
+
+def _parse_pct_indexador(raw) -> float | None:
+    """Converte pct_indexador (string CSV com vírgula decimal) em float.
+
+    Aceita '-', '', None como vazio → retorna None. Útil só para o branch DI
+    da normalização (decidir CDI vs %CDI).
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if s in ("", "-"):
+        return None
+    try:
+        return float(s.replace(",", "."))
+    except ValueError:
+        return None
+
+
+def normaliza_indexador(indexador_raw, pct_indexador_raw) -> str:
+    """Reduz (indexador, pct) do cadastro B3 às 5 categorias do dashboard.
+
+    Regras (briefing do PR):
+      - "IPCA"             → "IPCA"
+      - "PRE" / "PREFIXADO"→ "Prefixado"
+      - "DI" + pct vazio/100 → "CDI"
+      - "DI" + pct ≠ 100   → "%CDI"
+      - tudo o mais (SEM REMUNERACAO, IGP-M, IPCA VCP, etc) → "Outros"
+    """
+    idx = (indexador_raw or "").strip().upper()
+    if idx == "IPCA":
+        return "IPCA"
+    if idx in ("PRE", "PREFIXADO"):
+        return "Prefixado"
+    if idx == "DI":
+        pct = _parse_pct_indexador(pct_indexador_raw)
+        if pct is None or pct == 100:
+            return "CDI"
+        return "%CDI"
+    return "Outros"
+
+
+def build_ticker_indexador() -> dict:
+    """Lookup ticker → indexador normalizado a partir de b3_instruments.json.
+
+    Falha silenciosa quando o cadastro ainda não foi gerado (sandbox em
+    primeira execução): retorna mapa vazio, o frontend exibe '—' para todos.
+    """
+    if not B3_INSTRUMENTS_PATH.exists():
+        return {"fallback": INDEXADOR_FALLBACK, "tickers": {}}
+    try:
+        payload = json.loads(B3_INSTRUMENTS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        print(f"[warn ] {B3_INSTRUMENTS_PATH} inválido, lookup vazio", file=sys.stderr)
+        return {"fallback": INDEXADOR_FALLBACK, "tickers": {}}
+    rows = payload.get("rows") or []
+    cols = payload.get("columns") or []
+    if not rows or not cols:
+        return {"fallback": INDEXADOR_FALLBACK, "tickers": {}}
+    try:
+        i_codigo = cols.index("codigo_if")
+        i_idx = cols.index("indexador")
+        i_pct = cols.index("pct_indexador")
+    except ValueError:
+        print(f"[warn ] {B3_INSTRUMENTS_PATH} sem colunas esperadas, lookup vazio",
+              file=sys.stderr)
+        return {"fallback": INDEXADOR_FALLBACK, "tickers": {}}
+    tickers: dict[str, str] = {}
+    for r in rows:
+        if i_codigo >= len(r):
+            continue
+        ticker = r[i_codigo]
+        if not ticker:
+            continue
+        idx_raw = r[i_idx] if i_idx < len(r) else None
+        pct_raw = r[i_pct] if i_pct < len(r) else None
+        tickers[ticker] = normaliza_indexador(idx_raw, pct_raw)
+    return {
+        "fallback": INDEXADOR_FALLBACK,
+        "source_date": payload.get("date"),
+        "tickers": tickers,
+    }
+
+
+# ----------------------------------------------------------------------------
 # HTML
 # ----------------------------------------------------------------------------
 
@@ -914,6 +1009,8 @@ def main() -> int:
         _write_json(DATA_DIR / "titpub_history.json", build_titpub_history(snaps))))
     sizes.append(("indices_anbima.json",
         _write_json(DATA_DIR / "indices_anbima.json", build_anbima_indices())))
+    sizes.append(("ticker_indexador.json",
+        _write_json(DATA_DIR / "ticker_indexador.json", build_ticker_indexador())))
 
     disp_index = build_dispersion(snaps, disp_dir)
     sizes.append(("dispersion/_index.json",
