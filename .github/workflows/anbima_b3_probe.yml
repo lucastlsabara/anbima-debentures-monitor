@@ -246,6 +246,21 @@ jobs:
             done < "$B3_TRADES_CACHE_SUMMARY"
           fi
 
+      - name: Fetch B3 InstrumentRegistration (cadastro publico, sem cache check)
+        # Cadastro publico cumulativo da B3 (~292k linhas, ~30 MB CSV ->
+        # data/b3_instruments.json). Cobre 99,4% dos tickers negociados
+        # com indexador, vencimento, %indexador e taxa adicional. Sera
+        # consumido por build_dashboard/UI em PR futuro -- este PR so
+        # adiciona o fetcher. Beta: continue-on-error preserva o resto
+        # do pipeline se a B3 estiver indisponivel; arquivo anterior
+        # continua valido (cadastro nao muda diariamente).
+        if: steps.guard.outputs.is_business_day == 'true' && steps.probe.outputs.all_available == 'true'
+        continue-on-error: true
+        env:
+          TARGET_DATE: ${{ steps.target.outputs.target_date }}
+        run: |
+          python3 fetch_b3_instruments.py "$TARGET_DATE"
+
       - name: Import B3 ConsolidatedRecords (cache check 3 indicadores na janela 5 du B3)
         id: import_consolidated
         # continue-on-error: se exit 1 (parcial), steps downstream (commit & push)
