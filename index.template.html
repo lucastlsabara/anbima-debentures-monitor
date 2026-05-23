@@ -4102,6 +4102,94 @@ function trd_resolveDurationTrade(ticker, dataTrade) {
   return null;
 }
 
+// Curvas IPCA (NTN-B) e Prefixado (LTN/NTN-F) por data, consumidas para
+// calcular spread por trade. Reusa o cache global OVERVIEW carregado pela
+// aba "Inicio" quando disponivel; caso contrario faz fetch dedicado na 1a
+// abertura da aba Trades. Falha de fetch degrada silenciosamente.
+let _TRD_OVERVIEW_LOAD = null;
+async function trd_loadOverviewCurves() {
+  if (OVERVIEW && OVERVIEW.by_date) return OVERVIEW;
+  if (_TRD_OVERVIEW_LOAD) return _TRD_OVERVIEW_LOAD;
+  _TRD_OVERVIEW_LOAD = (async () => {
+    try {
+      OVERVIEW = await loadJSON("data/overview.json");
+    } catch (e) {
+      console.warn("[trades] overview.json indisponivel; coluna Spread exibira '—'", e);
+      if (!OVERVIEW) OVERVIEW = { by_date: {} };
+    }
+    return OVERVIEW;
+  })();
+  return _TRD_OVERVIEW_LOAD;
+}
+
+// Cache (ticker|data_trade -> vertice_taxa_pp). Vertice nao depende da rate
+// do trade, so de (data_trade, indexador, duration). Como (ticker, data_trade)
+// fixa indexador e duration via trd_resolveDurationTrade, a chave reduzida
+// basta. Valor null significa "sem curva/vertice valido para essa chave".
+const _TRD_SPREAD_VERTEX_CACHE = new Map();
+const _TRD_SPREAD_NEAREST_DAYS = 5;
+
+function _trd_nearestCurveDate(byDate, dataTrade) {
+  if (!byDate || !dataTrade) return null;
+  if (byDate[dataTrade]) return dataTrade;
+  const tradeMs = Date.parse(dataTrade);
+  if (Number.isNaN(tradeMs)) return null;
+  let bestDate = null, bestDist = Infinity;
+  for (const d in byDate) {
+    const dist = Math.abs((Date.parse(d) - tradeMs) / 86400000);
+    if (dist <= _TRD_SPREAD_NEAREST_DAYS && dist < bestDist) {
+      bestDist = dist; bestDate = d;
+    }
+  }
+  return bestDate;
+}
+
+function _trd_nearestVertex(curve, duration) {
+  if (!curve || !curve.length) return null;
+  let best = curve[0];
+  let bestDist = Math.abs(best.a - duration);
+  for (let i = 1; i < curve.length; i++) {
+    const dist = Math.abs(curve[i].a - duration);
+    if (dist < bestDist) { best = curve[i]; bestDist = dist; }
+  }
+  return best;
+}
+
+function _trd_lookupVertexRate(dataTrade, indexador, duration) {
+  const byDate = OVERVIEW && OVERVIEW.by_date;
+  if (!byDate) return null;
+  const curveDate = _trd_nearestCurveDate(byDate, dataTrade);
+  if (!curveDate) return null;
+  const snap = byDate[curveDate];
+  if (!snap) return null;
+  const curve = indexador === "IPCA" ? snap.curve_ipca : snap.curve_pre;
+  const vertex = _trd_nearestVertex(curve, duration);
+  if (!vertex || typeof vertex.t !== "number") return null;
+  return vertex.t;
+}
+
+// Spread em bps do trade vs benchmark do indexador no vertice mais proximo
+// da duration, na curva ANBIMA da data do trade (fallback +/-5 dias).
+// CDI: rate ja eh spread sobre CDI -> retorna rate * 100. %CDI / Outros /
+// fallback retornam null (categoria sem comparativo com Tesouro).
+function trd_resolveSpreadTrade(ticker, dataTrade, rate, indexador, duration) {
+  if (rate == null || typeof rate !== "number" || !Number.isFinite(rate)) return null;
+  if (indexador === "CDI") return rate * 100;
+  if (indexador !== "IPCA" && indexador !== "Prefixado") return null;
+  if (duration == null || typeof duration !== "number" || !Number.isFinite(duration)) return null;
+
+  const key = (ticker || "") + "|" + (dataTrade || "");
+  let vertexT;
+  if (_TRD_SPREAD_VERTEX_CACHE.has(key)) {
+    vertexT = _TRD_SPREAD_VERTEX_CACHE.get(key);
+  } else {
+    vertexT = _trd_lookupVertexRate(dataTrade, indexador, duration);
+    _TRD_SPREAD_VERTEX_CACHE.set(key, vertexT);
+  }
+  if (vertexT == null) return null;
+  return (rate - vertexT) * 100;
+}
+
 // Filtro de trades cancelados (M2). Match prefixo "Cancelado" cobre
 // "Cancelado", "Cancelado B3" e "Cancelado Parcial B3". Aplicado apos load,
 // antes de qualquer agregacao/render.
@@ -4135,6 +4223,16 @@ function trd_fmtRate(v) {
   return v.toLocaleString("pt-BR", {
     minimumFractionDigits: 4, maximumFractionDigits: 4,
   }) + "%";
+}
+
+// Spread em bps inteiro, com sinal explicito quando positivo. pt-BR usa "."
+// como separador de milhares (ex: "+1.250"). Zero exibe sem sinal.
+function trd_fmtSpreadBps(v) {
+  if (v == null || typeof v !== "number" || !Number.isFinite(v)) return "—";
+  const rounded = Math.round(v);
+  if (rounded === 0) return "0";
+  const abs = Math.abs(rounded).toLocaleString("pt-BR");
+  return (rounded > 0 ? "+" : "-") + abs;
 }
 
 // headerFilter helpers (substring case-insensitive, e numerico com
@@ -4332,6 +4430,11 @@ function _trd_buildTradesTable(containerId, rows) {
         },
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
         headerFilterPlaceholder: "ex: 3 ou >3" },
+      { title: "Spread (bps)", field: "spread", width: 110, hozAlign: "right",
+        sorter: "number",
+        formatter: c => trd_fmtSpreadBps(c.getValue()),
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: "ex: 100 ou >100" },
       { title: "Qtd", field: "qtd", width: 90, hozAlign: "right",
         formatter: c => trd_fmtIntBR(c.getValue()),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
@@ -4885,12 +4988,15 @@ async function tr2_load() {
     // Lookups ticker -> indexador / duration (data/ticker_indexador.json e
     // data/ticker_duration.json) carregam em paralelo com os dias de trades;
     // cache em TRD_INDEXADOR_MAP / TRD_DURATION_MAP evita re-fetches em loads
-    // subsequentes. Falha de carregamento nao bloqueia a tabela — os helpers
-    // degradam silenciosamente para {}.
+    // subsequentes. overview.json (curve_ipca/curve_pre por data) alimenta
+    // a coluna Spread; reusa cache global se a aba Inicio ja carregou.
+    // Falha de carregamento nao bloqueia a tabela — os helpers degradam
+    // silenciosamente para {}.
     [payloads] = await Promise.all([
       Promise.all(dateEntries.map(e => tr2_fetchDayCurrent(e))),
       trd_loadIndexadorLookup(),
       trd_loadDurationLookup(),
+      trd_loadOverviewCurves(),
     ]);
   } catch (err) {
     console.error("[trades] fetch", err);
@@ -4921,6 +5027,8 @@ async function tr2_load() {
         if (_trd_isCancelled(obj.situation)) continue;
         obj.indexador = trd_indexadorFor(obj.ticker);
         obj.duration = trd_resolveDurationTrade(obj.ticker, obj.date);
+        obj.spread = trd_resolveSpreadTrade(
+          obj.ticker, obj.date, obj.rate, obj.indexador, obj.duration);
       }
       allRows.push(obj);
     }
