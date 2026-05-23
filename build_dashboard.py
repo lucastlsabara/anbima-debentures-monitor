@@ -939,22 +939,32 @@ def build_ticker_indexador() -> dict:
 
 
 # ----------------------------------------------------------------------------
-# ticker -> duration (ANBIMA primário, prazo até vencimento B3 fallback)
+# ticker -> duration (ANBIMA por data + vencimento B3 para fallback)
 # ----------------------------------------------------------------------------
 # Aba Trades B3 > Trades exibe coluna "Duration" enriquecida no frontend a
-# partir deste arquivo. Estrutura:
-#   {"source_date": "YYYY-MM-DD", "tickers": {TICKER: {"d": float, "f": "anbima"|"b3"}}}
-# Papéis sem match em nenhuma fonte são omitidos do dict (frontend exibe '—').
+# partir deste arquivo. Cada trade resolve sua duration NA DATA DO TRADE:
+#   1) ANBIMA snapshot na data exata (ou ±5 dias corridos).
+#   2) Fallback: (vencimento - data_trade) / 365.25.
+#
+# Estrutura:
+#   {
+#     "source_date": "YYYY-MM-DD",
+#     "tickers": {
+#       TICKER: {
+#         "venc": "YYYY-MM-DD" | (ausente),
+#         "anbima_by_date": { "YYYY-MM-DD": float, ... } | (ausente)
+#       }
+#     }
+#   }
+# Papéis sem nenhuma fonte (sem venc e sem anbima_by_date) são omitidos.
 
 def _collect_trade_tickers() -> tuple[set[str], str | None]:
-    """Coleta tickers únicos em data/b3_trades/*.json + data mais recente.
+    """Coleta tickers únicos em data/b3_trades/*.json + data/b3_trades_consolidated/*.json.
 
-    Retorna ``(set(), None)`` em ambiente sem snapshots de trades (primeira
-    execução de sandbox). A data mais recente vem do manifest.json e é usada
-    como referência para o fallback de prazo até vencimento.
+    Retorna ``(set(), None)`` em ambiente sem snapshots de trades. A data mais
+    recente é a do manifest de b3_trades quando disponível; caso contrário, a
+    do manifest de b3_trades_consolidated.
     """
-    if not B3_TRADES_DIR.exists():
-        return set(), None
     latest_date: str | None = None
     manifest = B3_TRADES_DIR / "manifest.json"
     if manifest.exists():
@@ -963,40 +973,73 @@ def _collect_trade_tickers() -> tuple[set[str], str | None]:
             latest_date = mf.get("latest_date")
         except json.JSONDecodeError:
             pass
+    if latest_date is None:
+        cons_manifest = B3_CONS_DIR / "manifest.json"
+        if cons_manifest.exists():
+            try:
+                mf = json.loads(cons_manifest.read_text(encoding="utf-8"))
+                latest_date = mf.get("latest_date")
+            except json.JSONDecodeError:
+                pass
+
     tickers: set[str] = set()
-    for p in B3_TRADES_DIR.glob("*.json"):
-        if p.name == "manifest.json":
-            continue
-        try:
-            payload = json.loads(p.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            continue
-        cols = payload.get("columns") or []
-        try:
-            i_ticker = cols.index("ticker")
-        except ValueError:
-            continue
-        for r in payload.get("rows") or []:
-            if i_ticker < len(r):
-                t = r[i_ticker]
-                if t:
-                    tickers.add(t)
+    # b3_trades/ (trade-by-trade): schema com coluna "ticker"
+    if B3_TRADES_DIR.exists():
+        for p in B3_TRADES_DIR.glob("*.json"):
+            if p.name == "manifest.json":
+                continue
+            try:
+                payload = json.loads(p.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            cols = payload.get("columns") or []
+            try:
+                i_ticker = cols.index("ticker")
+            except ValueError:
+                continue
+            for r in payload.get("rows") or []:
+                if i_ticker < len(r):
+                    t = r[i_ticker]
+                    if t:
+                        tickers.add(t)
+    # b3_trades_consolidated/: schema com coluna "codigo_if"
+    if B3_CONS_DIR.exists():
+        for p in B3_CONS_DIR.glob("*.json"):
+            if p.name == "manifest.json":
+                continue
+            try:
+                payload = json.loads(p.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            cols = payload.get("columns") or []
+            try:
+                i_ticker = cols.index("codigo_if")
+            except ValueError:
+                continue
+            for r in payload.get("rows") or []:
+                if i_ticker < len(r):
+                    t = r[i_ticker]
+                    if t:
+                        tickers.add(t)
     return tickers, latest_date
 
 
-def _anbima_duration_by_ticker(snaps: list[dict]) -> dict[str, float]:
-    """ticker -> duration_anos do snapshot ANBIMA mais recente que conhece o papel.
+def _anbima_duration_by_ticker_by_date(snaps: list[dict]) -> dict[str, dict[str, float]]:
+    """ticker -> {data_iso: duration_anos}.
 
-    snaps já vem ordenado por data crescente; sobrescrever a chave a cada
-    iteração equivale a manter o valor mais recente.
+    Mantém 1 entrada por (ticker, data) onde duration_anos não é null.
     """
-    out: dict[str, float] = {}
+    out: dict[str, dict[str, float]] = {}
     for s in snaps:
+        data = s.get("data_referencia")
+        if not data:
+            continue
         for p in s.get("debentures") or []:
             dur = p.get("duration_anos")
             cod = p.get("codigo")
-            if cod and dur is not None:
-                out[cod] = dur
+            if not cod or dur is None:
+                continue
+            out.setdefault(cod, {})[data] = round(float(dur), 3)
     return out
 
 
@@ -1047,33 +1090,40 @@ def _parse_iso_date(s: str | None) -> date | None:
 
 
 def build_ticker_duration(snaps: list[dict]) -> dict:
-    """Lookup ticker → duration (anos) para a aba Trades B3 > Trades.
+    """Lookup ticker → duration por data do trade para a aba Trades B3.
 
-    Fonte primária: duration_anos do snapshot ANBIMA mais recente que conhece
-    o papel. Fallback: (vencimento_B3 - data_alvo) / 365.25, onde data_alvo é
-    a data mais recente em data/b3_trades/manifest.json. Papéis sem match em
-    nenhuma fonte são omitidos.
+    Cada ticker exposto carrega:
+      - ``venc`` (ISO ``YYYY-MM-DD``): vencimento do cadastro B3, usado pelo
+        frontend como fallback ``(venc - data_trade)/365.25`` quando não há
+        snapshot ANBIMA próximo.
+      - ``anbima_by_date``: map ``YYYY-MM-DD → duration_anos`` para cada
+        snapshot ANBIMA em que o papel aparece com duration preenchida.
+
+    Tickers sem ``venc`` *e* sem ``anbima_by_date`` (papel desconhecido em
+    ambas as fontes) são omitidos do dicionário — frontend exibe '—'.
     """
     trade_tickers, latest_trade_date = _collect_trade_tickers()
-    if not trade_tickers:
-        return {"source_date": latest_trade_date, "tickers": {}}
-    anbima_dur = _anbima_duration_by_ticker(snaps)
+    anbima_by_date = _anbima_duration_by_ticker_by_date(snaps)
     b3_venc = _b3_vencimento_by_ticker()
-    data_alvo = _parse_iso_date(latest_trade_date)
+
+    # Tickers candidatos: união dos tickers vistos em trades + tickers ANBIMA
+    # (cobre o caso em que um papel ANBIMA ainda não negociou no período mas
+    # queremos manter a curva). Frontend só consulta o lookup quando renderiza
+    # uma row de trade, então sobra é inofensiva e barata.
+    candidates = set(trade_tickers) | set(anbima_by_date.keys())
+
     tickers: dict[str, dict] = {}
-    for t in trade_tickers:
-        dur = anbima_dur.get(t)
-        if dur is not None:
-            tickers[t] = {"d": round(float(dur), 2), "f": "anbima"}
-            continue
-        if data_alvo is None:
-            continue
+    for t in candidates:
+        entry: dict = {}
         venc_br = b3_venc.get(t)
         venc = _parse_br_date(venc_br)
-        if venc is None:
-            continue
-        prazo = max(0.0, (venc - data_alvo).days / 365.25)
-        tickers[t] = {"d": round(prazo, 2), "f": "b3"}
+        if venc is not None:
+            entry["venc"] = venc.isoformat()
+        dates = anbima_by_date.get(t)
+        if dates:
+            entry["anbima_by_date"] = dict(sorted(dates.items()))
+        if entry:
+            tickers[t] = entry
     return {"source_date": latest_trade_date, "tickers": tickers}
 
 

@@ -1049,7 +1049,7 @@ const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
 // Substituído pelo build com hash dos JSONs em data/. Em dev (template puro)
 // fica vazio e o cache do browser dita a frescor. Em produção, ?v=<hash>
 // invalida o cache do GitHub Pages quando snapshots novos chegam.
-const BUILD_VERSION = "397511641370";
+const BUILD_VERSION = "1e804858f3b4";
 
 const cache = new Map();
 async function loadJSON(path) {
@@ -4031,10 +4031,10 @@ function trd_indexadorFor(ticker) {
   return (v == null || v === "") ? TRD_INDEXADOR_FALLBACK : v;
 }
 
-// Lookup ticker -> duration em anos (data/ticker_duration.json). Fonte primaria
-// e duration_anos da ANBIMA; fallback e prazo ate vencimento via cadastro B3,
-// computado no build. Tickers ausentes retornam null e a celula exibe '—'. A
-// origem (anbima vs b3) nao e exposta na UI.
+// Lookup ticker -> duration em anos (data/ticker_duration.json). Cada ticker
+// carrega `venc` (ISO) e/ou `anbima_by_date` (map data->duration_anos).
+// O resolver abaixo escolhe a duration NA DATA DO TRADE, com fallback de prazo
+// ate vencimento. Tickers ausentes do lookup retornam null (celula '—').
 let TRD_DURATION_MAP = null;
 let _TRD_DURATION_LOAD = null;
 async function trd_loadDurationLookup() {
@@ -4052,11 +4052,54 @@ async function trd_loadDurationLookup() {
   })();
   return _TRD_DURATION_LOAD;
 }
-function trd_durationFor(ticker) {
-  if (!ticker || !TRD_DURATION_MAP) return null;
-  const entry = TRD_DURATION_MAP[ticker];
-  if (entry == null || typeof entry.d !== "number") return null;
-  return entry.d;
+
+// Cache (ticker|data_trade -> duration) — trades duplicados em mesmo dia
+// resolvem em O(1) apos a 1a chamada. Limpo junto com TRD_DURATION_MAP nao
+// e necessario: o map e singleton no ciclo da pagina.
+const _TRD_DURATION_CACHE = new Map();
+
+// Janela em dias corridos para snapshot ANBIMA "proximo" da data do trade.
+const _TRD_DURATION_NEAREST_DAYS = 5;
+
+function trd_resolveDurationTrade(ticker, dataTrade) {
+  if (!ticker || !dataTrade || !TRD_DURATION_MAP) return null;
+  const key = ticker + "|" + dataTrade;
+  if (_TRD_DURATION_CACHE.has(key)) return _TRD_DURATION_CACHE.get(key);
+  const t = TRD_DURATION_MAP[ticker];
+  if (!t) { _TRD_DURATION_CACHE.set(key, null); return null; }
+  // 1) snapshot ANBIMA exato na data do trade.
+  if (t.anbima_by_date) {
+    const exact = t.anbima_by_date[dataTrade];
+    if (typeof exact === "number") {
+      _TRD_DURATION_CACHE.set(key, exact); return exact;
+    }
+    // 2) snapshot ANBIMA mais proximo dentro de +/-5 dias corridos.
+    const tradeMs = Date.parse(dataTrade);
+    if (!Number.isNaN(tradeMs)) {
+      let best = null, bestDist = Infinity;
+      for (const d in t.anbima_by_date) {
+        const dist = Math.abs((Date.parse(d) - tradeMs) / 86400000);
+        if (dist <= _TRD_DURATION_NEAREST_DAYS && dist < bestDist) {
+          bestDist = dist; best = t.anbima_by_date[d];
+        }
+      }
+      if (best != null) { _TRD_DURATION_CACHE.set(key, best); return best; }
+    }
+  }
+  // 3) fallback: (venc - data_trade) / 365.25.
+  if (typeof t.venc === "string") {
+    const vMs = Date.parse(t.venc);
+    const tMs = Date.parse(dataTrade);
+    if (!Number.isNaN(vMs) && !Number.isNaN(tMs)) {
+      const dias = (vMs - tMs) / 86400000;
+      if (dias > 0) {
+        const out = dias / 365.25;
+        _TRD_DURATION_CACHE.set(key, out); return out;
+      }
+    }
+  }
+  _TRD_DURATION_CACHE.set(key, null);
+  return null;
 }
 
 // Filtro de trades cancelados (M2). Match prefixo "Cancelado" cobre
@@ -4864,13 +4907,20 @@ async function tr2_load() {
       let obj;
       if (isCons) {
         obj = _tr2_consRowToObj(r, p.date);
+        // Enriquecimento: Indexador (lookup por ticker) + Duration na data
+        // do trade. data_negocio vem como ISO datetime ("...T00:00:00");
+        // truncar para YYYY-MM-DD antes de resolver.
+        obj.indexador = trd_indexadorFor(obj.ticker);
+        const dtNeg = obj.data_negocio
+          ? String(obj.data_negocio).slice(0, 10) : p.date;
+        obj.duration = trd_resolveDurationTrade(obj.ticker, dtNeg);
       } else {
         obj = (typeof trd_rowToObj !== "undefined")
           ? trd_rowToObj(r, p.date)
           : _tr2_rowToObj(r, p.date, p.columns);
         if (_trd_isCancelled(obj.situation)) continue;
         obj.indexador = trd_indexadorFor(obj.ticker);
-        obj.duration = trd_durationFor(obj.ticker);
+        obj.duration = trd_resolveDurationTrade(obj.ticker, obj.date);
       }
       allRows.push(obj);
     }
@@ -5462,6 +5512,23 @@ function _tr2_buildConsTable(containerId, rows) {
         headerFilterParams: { values: instrumentoOpts, clearable: true },
         headerFilterFunc: "=" },
       { title: "Emissor", field: "emissor", minWidth: 200, headerFilter: "input" },
+      { title: "Indexador", field: "indexador", width: 110,
+        headerFilter: "list",
+        headerFilterParams: {
+          values: ["", "IPCA", "Prefixado", "CDI", "%CDI", "Outros", TRD_INDEXADOR_FALLBACK],
+          clearable: true,
+        },
+        headerFilterFunc: "=" },
+      { title: "Duration", field: "duration", width: 100, hozAlign: "right",
+        sorter: "number",
+        formatter: c => {
+          const v = c.getValue();
+          if (v == null || typeof v !== "number" || !Number.isFinite(v)) return "—";
+          return v.toLocaleString("pt-BR",
+            { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+        },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: "ex: 3 ou >3" },
       { title: "ISIN", field: "isin", width: 140,
         formatter: fmtText, headerFilter: "input" },
       { title: "Liquidação", field: "data_liquidacao", width: 110,
