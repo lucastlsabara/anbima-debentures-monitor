@@ -4000,6 +4000,37 @@ const TRD_COLUMNS = [
   "rate","origin","time","trade_code","isin","settlement_dt","situation",
 ];
 
+// Lookup ticker -> indexador normalizado (IPCA / Prefixado / CDI / %CDI /
+// Outros). Carregado uma vez de data/ticker_indexador.json (gerado pelo
+// build a partir do cadastro B3 InstrumentRegistration). Tickers ausentes do
+// cadastro caem para TRD_INDEXADOR_FALLBACK ('—').
+let TRD_INDEXADOR_MAP = null;
+let TRD_INDEXADOR_FALLBACK = "—";
+let _TRD_INDEXADOR_LOAD = null;
+async function trd_loadIndexadorLookup() {
+  if (TRD_INDEXADOR_MAP !== null) return TRD_INDEXADOR_MAP;
+  if (_TRD_INDEXADOR_LOAD) return _TRD_INDEXADOR_LOAD;
+  _TRD_INDEXADOR_LOAD = (async () => {
+    try {
+      const payload = await loadJSON("data/ticker_indexador.json");
+      if (payload && typeof payload.fallback === "string") {
+        TRD_INDEXADOR_FALLBACK = payload.fallback;
+      }
+      TRD_INDEXADOR_MAP = (payload && payload.tickers) || {};
+    } catch (e) {
+      console.warn("[trades] ticker_indexador.json indisponivel; coluna Indexador exibira '—'", e);
+      TRD_INDEXADOR_MAP = {};
+    }
+    return TRD_INDEXADOR_MAP;
+  })();
+  return _TRD_INDEXADOR_LOAD;
+}
+function trd_indexadorFor(ticker) {
+  if (!ticker || !TRD_INDEXADOR_MAP) return TRD_INDEXADOR_FALLBACK;
+  const v = TRD_INDEXADOR_MAP[ticker];
+  return (v == null || v === "") ? TRD_INDEXADOR_FALLBACK : v;
+}
+
 // Filtro de trades cancelados (M2). Match prefixo "Cancelado" cobre
 // "Cancelado", "Cancelado B3" e "Cancelado Parcial B3". Aplicado apos load,
 // antes de qualquer agregacao/render.
@@ -4212,6 +4243,13 @@ function _trd_buildTradesTable(containerId, rows) {
       { title: "Setor", field: "setor", width: 160,
         headerFilter: "list",
         headerFilterParams: { values: setorOpts, clearable: true },
+        headerFilterFunc: "=" },
+      { title: "Indexador", field: "indexador", width: 110,
+        headerFilter: "list",
+        headerFilterParams: {
+          values: ["", "IPCA", "Prefixado", "CDI", "%CDI", "Outros", TRD_INDEXADOR_FALLBACK],
+          clearable: true,
+        },
         headerFilterFunc: "=" },
       { title: "Qtd", field: "qtd", width: 90, hozAlign: "right",
         formatter: c => trd_fmtIntBR(c.getValue()),
@@ -4763,7 +4801,14 @@ async function tr2_load() {
 
   let payloads;
   try {
-    payloads = await Promise.all(dateEntries.map(e => tr2_fetchDayCurrent(e)));
+    // Lookup ticker -> indexador (data/ticker_indexador.json) carrega em
+    // paralelo com os dias de trades; cache em TRD_INDEXADOR_MAP evita
+    // re-fetches em loads subsequentes. Falha de carregamento nao bloqueia
+    // a tabela — trd_loadIndexadorLookup degrada silenciosamente para {}.
+    [payloads] = await Promise.all([
+      Promise.all(dateEntries.map(e => tr2_fetchDayCurrent(e))),
+      trd_loadIndexadorLookup(),
+    ]);
   } catch (err) {
     console.error("[trades] fetch", err);
     tr2_setStatus("");
@@ -4784,6 +4829,7 @@ async function tr2_load() {
           ? trd_rowToObj(r, p.date)
           : _tr2_rowToObj(r, p.date, p.columns);
         if (_trd_isCancelled(obj.situation)) continue;
+        obj.indexador = trd_indexadorFor(obj.ticker);
       }
       allRows.push(obj);
     }
