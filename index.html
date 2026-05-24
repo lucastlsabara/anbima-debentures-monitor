@@ -6026,7 +6026,7 @@ let MKB_MIN_VOLUME = null;          // null = sem filtro. Valor já em R$ (input
 let MKB_PERIOD = "daily";           // daily | weekly | monthly | annual
 let MKB_SHOW_VOLUME = false;        // checkbox "Exibir Volume" (default oculto)
 let MKB_INTRADAY = false;           // checkbox "Intraday" (default desmarcado)
-// Set de tickers que passam pelo filtro Intraday (taxa válida no ULTIMO
+// Set de tickers que passam pelo filtro Intraday (spread válido no ÚLTIMO
 // período da janela atual). null = filtro desligado (mostra todos).
 let MKB_INTRADAY_VISIBLE = null;
 let MKB_RANGE_ROWS = null;          // cache dos trades carregados na última janela
@@ -6042,10 +6042,13 @@ let MKB_RECALC_TIMER = null;
 let MKB_INDEX = null;
 const MKB_SELECTED = new Map();
 const MKB_SELECTED_ISSUERS = new Set();
-// Cache da taxa marcação ANBIMA do último dia disponível, por código.
-// codigo -> taxa_indicativa (em %). Lê uma única vez do dispersion/_index.json
-// + dispersion/<latest>.json (mesma fonte das abas Visão Geral e Papéis).
+// Cache do spread ANBIMA por código (codigo -> spread em bps). Carregado do
+// dispersion/<data>.json escolhido conforme MKB_DATE_ATUAL (último snapshot
+// <= Data Atual; fallback para o mais antigo se Data Atual anterior à série).
+// MKB_ANBIMA_KEY guarda a data carregada — se mudar (ex: Data Atual passa pra
+// outro dia), mkb_loadAnbima recarrega.
 let MKB_ANBIMA = null;
+let MKB_ANBIMA_KEY = null;
 // Conjunto de tickers visíveis após filtro do cabeçalho (Tabulator
 // dataFiltered). null = sem restrição secundária — usa só MKB_SELECTED.
 let MKB_VISIBLE_TICKERS = null;
@@ -6531,27 +6534,43 @@ async function mkb_fetchTradeDay(entry) {
 }
 
 // Carrega taxa marcação ANBIMA do último dia disponível (dispersion/<latest>).
-// Idempotente: na 1ª chamada popula MKB_ANBIMA; nas seguintes é no-op. Papéis
-// sem cobertura ANBIMA (CRI/CRA/menos líquidos) simplesmente não aparecem no
-// Map — o formatter da coluna renderiza "—" nesse caso.
+// Carrega o spread ANBIMA por código a partir do snapshot dispersion da Data
+// Atual selecionada (último <= MKB_DATE_ATUAL — cobre trade intraday do dia
+// em andamento caindo em D-1; fallback para a primeira data se Data Atual
+// anterior à série). MKB_ANBIMA_KEY evita reload quando a data escolhida não
+// mudou. Papéis sem cobertura ANBIMA (Prefixado/CRI/CRA/LIG/menos líquidos)
+// não entram no Map — o formatter da coluna renderiza "—" nesse caso.
 async function mkb_loadAnbima() {
-  if (MKB_ANBIMA) return;
   try {
     const idx = await loadJSON("data/dispersion/_index.json");
     const dates = (idx && idx.dates) || [];
-    if (!dates.length) { MKB_ANBIMA = new Map(); return; }
-    const latest = dates[dates.length - 1];
-    const data = await loadJSON("data/dispersion/" + latest + ".json");
+    if (!dates.length) {
+      MKB_ANBIMA = new Map();
+      MKB_ANBIMA_KEY = null;
+      return;
+    }
+    let chosen = null;
+    for (const d of dates) {
+      if (MKB_DATE_ATUAL && d <= MKB_DATE_ATUAL) chosen = d;
+    }
+    if (!chosen) chosen = dates[0];
+    if (MKB_ANBIMA && MKB_ANBIMA_KEY === chosen) return;
+    const data = await loadJSON("data/dispersion/" + chosen + ".json");
     const map = new Map();
     for (const p of (data.papers || [])) {
-      if (typeof p.t === "number" && Number.isFinite(p.t)) {
-        map.set(p.c, p.t);
+      // sp vem em pontos percentuais (pp); converte para bps pra ficar
+      // consistente com o spread por trade (PR #197) e com o formatter
+      // trd_fmtSpreadBps usado na coluna.
+      if (typeof p.sp === "number" && Number.isFinite(p.sp)) {
+        map.set(p.c, p.sp * 100);
       }
     }
     MKB_ANBIMA = map;
+    MKB_ANBIMA_KEY = chosen;
   } catch (e) {
     console.error("[marcacao-b3] anbima load", e);
     MKB_ANBIMA = new Map();
+    MKB_ANBIMA_KEY = null;
   }
 }
 
@@ -6573,7 +6592,7 @@ async function mkb_load() {
   mkb_setStatus(`Carregando ${entries.length} dia(s)…`);
   mkb_showEmpty(null);
   // Dispara o load do snapshot ANBIMA em paralelo com os dias B3. A coluna
-  // "Taxa ANBIMA" da tabela precisa do mapa pronto antes do 1º render.
+  // "Spread ANBIMA" da tabela precisa do mapa pronto antes do 1º render.
   const anbimaPromise = mkb_loadAnbima();
   let payloads;
   try {
@@ -6591,6 +6610,15 @@ async function mkb_load() {
       if (_trd_isCancelled(obj.situation)) continue;
       // Apenas debêntures (instrument = "DEB"). Descarta CRI/CRA/CFF/LF/etc.
       if (obj.instrument !== "DEB") continue;
+      // Enriquecimento idêntico ao da aba Pesquisa de Trades: indexador +
+      // duration (data do trade) habilitam o cálculo de spread por trade
+      // via trd_resolveSpreadTrade (PR #197). Spread é precomputado aqui pra
+      // que mkb_aggregate possa simplesmente somar — fallback dentro do
+      // resolve cobre snapshots ausentes (±5d corridos).
+      obj.indexador = trd_indexadorFor(obj.ticker);
+      obj.duration = trd_resolveDurationTrade(obj.ticker, obj.date);
+      obj.spread = trd_resolveSpreadTrade(
+        obj.ticker, obj.date, obj.rate, obj.indexador, obj.duration);
       all.push(obj);
     }
   }
@@ -6629,12 +6657,13 @@ function mkb_reconcileSelectionWithIndex() {
   mkb_renderChips();
 }
 
-// Agrega MKB_RANGE_ROWS aplicando filtros (taxa válida, volume mínimo)
+// Agrega MKB_RANGE_ROWS aplicando filtros (taxa+spread válidos, volume mínimo)
 // e bucketizando por (ticker, período). Devolve:
 //   { rows: [...], columns: [{key,label,sortKey}, ...] }
+// PMP por período é spread weighted (sumWS/sumV); taxa__ também é exposta
+// (não-quebra dos charts do Comparativo, que continuam plotando taxa).
 function mkb_aggregate() {
   if (!MKB_RANGE_ROWS) return { rows: [], periods: [] };
-  // chave -> {ticker, issuer, perPeriod: Map(periodKey -> {sumWR, sumV})}
   const acc = new Map();
   const periodsMap = new Map(); // periodKey -> {label, sortKey}
   for (const r of MKB_RANGE_ROWS) {
@@ -6644,46 +6673,67 @@ function mkb_aggregate() {
     if (vol == null || !Number.isFinite(vol) || vol <= 0) continue;
     if (MKB_MIN_VOLUME != null && vol < MKB_MIN_VOLUME) continue;
     if (!r.ticker) continue;
+    // Spread por trade (PR #197). Cacheia em r.spread caso ainda não tenha
+    // sido populado (defensivo — mkb_load já preenche). null = indexador sem
+    // benchmark (Outros) ou snapshot titpub indisponível: trade é descartado
+    // da agregação de spread.
+    if (r.spread === undefined) {
+      r.spread = trd_resolveSpreadTrade(
+        r.ticker, r.date, r.rate, r.indexador, r.duration);
+    }
+    const spread = (typeof r.spread === "number" && Number.isFinite(r.spread))
+      ? r.spread : null;
+    if (spread == null) continue;
     const p = mkb_periodKey(r.date, MKB_PERIOD);
     if (!periodsMap.has(p.key)) periodsMap.set(p.key, p);
     let row = acc.get(r.ticker);
     if (!row) {
-      row = { ticker: r.ticker, issuer: r.issuer || "", per: new Map() };
+      row = { ticker: r.ticker, issuer: r.issuer || "",
+              indexador: r.indexador || null, per: new Map() };
       acc.set(r.ticker, row);
     }
     if (!row.issuer && r.issuer) row.issuer = r.issuer;
+    if (!row.indexador && r.indexador) row.indexador = r.indexador;
     let bucket = row.per.get(p.key);
-    if (!bucket) { bucket = { sumWR: 0, sumV: 0 }; row.per.set(p.key, bucket); }
+    if (!bucket) {
+      bucket = { sumWR: 0, sumWS: 0, sumV: 0 };
+      row.per.set(p.key, bucket);
+    }
     bucket.sumWR += rate * vol;
+    bucket.sumWS += spread * vol;
     bucket.sumV += vol;
   }
   const periods = [...periodsMap.values()]
     .sort((a, b) => a.sortKey < b.sortKey ? -1 : (a.sortKey > b.sortKey ? 1 : 0));
   const rows = [];
   for (const row of acc.values()) {
-    const flat = { ticker: row.ticker, issuer: row.issuer };
+    const flat = { ticker: row.ticker, issuer: row.issuer,
+                   indexador: row.indexador };
     let any = false;
     let firstPer = null, lastPer = null;
-    let firstTaxa = null, lastTaxa = null;
+    let firstSpread = null, lastSpread = null;
     for (const p of periods) {
       const b = row.per.get(p.key);
       if (b && b.sumV > 0) {
+        const s = b.sumWS / b.sumV;
         const t = b.sumWR / b.sumV;
+        flat[`spread__${p.key}`] = s;
         flat[`taxa__${p.key}`] = t;
         flat[`vol__${p.key}`] = b.sumV;
         any = true;
-        if (firstPer == null) { firstPer = p; firstTaxa = t; }
-        lastPer = p; lastTaxa = t;
+        if (firstPer == null) { firstPer = p; firstSpread = s; }
+        lastPer = p; lastSpread = s;
       } else {
+        flat[`spread__${p.key}`] = null;
         flat[`taxa__${p.key}`] = null;
         flat[`vol__${p.key}`] = null;
       }
     }
-    // delta = taxa(ultimo periodo com taxa) - taxa(primeiro periodo com taxa),
-    // convertido de pp para bps. Se papel tem taxa em apenas 1 periodo na
-    // janela (firstPer === lastPer), delta = null (sem variacao calculavel).
+    // delta = spread(último período c/ spread) − spread(primeiro c/ spread).
+    // Para IPCA/Prefixado/CDI já está em bps; %CDI fica em pp (cabeçalho da
+    // coluna privilegia o caso comum). 1 só período na janela ⇒ delta null.
     if (firstPer && lastPer && firstPer.key !== lastPer.key) {
-      flat.delta_bps = Math.round((lastTaxa - firstTaxa) * 100.0 * 10) / 10;
+      flat.delta_bps = Math.round((lastSpread - firstSpread) * 10) / 10;
       flat.delta_from_label = firstPer.label;
       flat.delta_to_label = lastPer.label;
     } else {
@@ -6691,13 +6741,13 @@ function mkb_aggregate() {
       flat.delta_from_label = null;
       flat.delta_to_label = null;
     }
-    // Taxa marcação ANBIMA do último dia disponível (mesma fonte das demais
-    // abas — dispersion/<latest>.json). Pode ser ausente para CRI/CRA/menos
+    // Spread ANBIMA da Data Atual selecionada (dispersion/<chosen>.json em
+    // bps — ver mkb_loadAnbima). Ausente para Prefixado/CRI/CRA/LIG/menos
     // líquidos; nesse caso fica null e o formatter exibe "—".
     if (MKB_ANBIMA && MKB_ANBIMA.has(row.ticker)) {
-      flat.anbima_taxa = MKB_ANBIMA.get(row.ticker);
+      flat.anbima_spread = MKB_ANBIMA.get(row.ticker);
     } else {
-      flat.anbima_taxa = null;
+      flat.anbima_spread = null;
     }
     if (any) rows.push(flat);
   }
@@ -6724,14 +6774,14 @@ function mkb_renderTable() {
   const aggregated = mkb_aggregate();
   const periods = aggregated.periods;
   let allRows = aggregated.rows;
-  // Filtro Intraday: mantém só papéis com taxa válida no ULTIMO período da
+  // Filtro Intraday: mantém só papéis com spread válido no ÚLTIMO período da
   // janela atual (o período que contém a Data Atual, baseado em MKB_PERIOD).
   // Recalcula a cada render — Data Atual / Periodicidade / Volume mínimo
-  // mudam o último período e/ou a presença de taxa nele.
+  // mudam o último período e/ou a presença de spread nele.
   if (MKB_INTRADAY && periods.length) {
     const lastKey = periods[periods.length - 1].key;
     allRows = allRows.filter(r => {
-      const v = r[`taxa__${lastKey}`];
+      const v = r[`spread__${lastKey}`];
       return v != null && Number.isFinite(v);
     });
     MKB_INTRADAY_VISIBLE = new Set(allRows.map(r => r.ticker));
@@ -6745,7 +6795,7 @@ function mkb_renderTable() {
 
   if (!allRows.length) {
     if (MKB_TABLE) { try { MKB_TABLE.destroy(); } catch (_) {} MKB_TABLE = null; }
-    mkb_showEmpty("Nenhum papel com taxa válida no período (aplicando filtros).");
+    mkb_showEmpty("Nenhum papel com spread válido no período (aplicando filtros).");
     return;
   }
   mkb_showEmpty(null);
@@ -6754,17 +6804,13 @@ function mkb_renderTable() {
   const periodCols = periods.map(p => {
     const subs = [
       {
-        title: "Taxa",
-        field: `taxa__${p.key}`,
+        title: "Spread",
+        field: `spread__${p.key}`,
         hozAlign: "right",
         width: 120,
         widthGrow: 0,
         widthShrink: 0,
-        formatter: c => {
-          const v = c.getValue();
-          if (v == null || !Number.isFinite(v)) return "—";
-          return fmtPp(v);
-        },
+        formatter: trd_fmtSpreadBps,
         sorter: "number",
       },
     ];
@@ -6792,9 +6838,9 @@ function mkb_renderTable() {
     return { title: p.label, columns: subs };
   });
 
-  // Delta = taxa(ultimo periodo) - taxa(primeiro periodo) com taxa valida na
-  // janela, em bps. Mesmas classes/cores que a coluna "Δ Spread (bps)" da
-  // aba Movimentacoes (vermelho = taxa subiu, verde = taxa caiu) reusando
+  // Delta = spread(último período) − spread(primeiro período) na janela, em
+  // bps. Mesmas classes/cores que a coluna "Δ Spread (bps)" da aba
+  // Movimentações (vermelho = spread subiu, verde = spread caiu) reusando
   // _bgForDelta para gradiente HSLA por p95 absoluto.
   const mkbDeltaStats = mkb_computeDeltaStats(rows);
   const fmtMkbDelta = c => {
@@ -6816,22 +6862,17 @@ function mkb_renderTable() {
     const vb = (typeof b === "number" && Number.isFinite(b)) ? b : 0;
     return va - vb;
   };
-  // Coluna "Taxa ANBIMA" — taxa indicativa do último dia disponível no
-  // snapshot ANBIMA (mesma fonte de Visão Geral / Papéis). Posicionada
-  // entre a última coluna de período e o Δ Taxa, sem frozen, com largura
-  // moderada. Papéis sem cobertura ANBIMA (CRI/CRA/menos líquidos) ficam
-  // com "—". Sem destaque de cor — é só referência.
+  // Coluna "Spread ANBIMA" — spread do snapshot dispersion ANBIMA da Data
+  // Atual selecionada (sp em pp convertido para bps em mkb_loadAnbima).
+  // Sem cobertura para Prefixado/CRI/CRA/LIG/menos líquidos: nesse caso
+  // fica "—". Sem destaque de cor — é só referência.
   const anbimaCol = {
-    title: "Taxa ANBIMA",
-    field: "anbima_taxa",
+    title: "Spread ANBIMA",
+    field: "anbima_spread",
     hozAlign: "right",
-    width: 100, minWidth: 90, maxWidth: 110, widthGrow: 0, widthShrink: 0,
+    width: 110, minWidth: 100, maxWidth: 120, widthGrow: 0, widthShrink: 0,
     headerSort: true, sorter: "number",
-    formatter: c => {
-      const v = c.getValue();
-      if (v == null || !Number.isFinite(v)) return "—";
-      return fmtPp(v);
-    },
+    formatter: trd_fmtSpreadBps,
   };
   const columns = [
     { title: "Ticker", field: "ticker", width: 110, widthGrow: 0, widthShrink: 0, frozen: true,
@@ -6843,10 +6884,10 @@ function mkb_renderTable() {
       headerFilter: "input", headerFilterFunc: trd_likeCI },
     ...periodCols,
     anbimaCol,
-    // Delta Taxa: frozen a direita, largura travada (90..130) pra nao
-    // ficar grotesca quando ha poucos periodos. Sorter custom trata
-    // null/NaN como zero (papel sem delta no meio da ordenacao).
-    { title: "Δ Taxa (bps)", field: "delta_bps",
+    // Delta Spread: frozen à direita, largura travada (90..130) pra não
+    // ficar grotesca quando há poucos períodos. Sorter custom trata
+    // null/NaN como zero (papel sem delta no meio da ordenação).
+    { title: "Δ Spread (bps)", field: "delta_bps",
       width: 110, minWidth: 90, maxWidth: 130, widthGrow: 0, widthShrink: 0, frozen: true,
       hozAlign: "right",
       headerSort: true, sorter: deltaSorterAsZero,
@@ -6867,7 +6908,7 @@ function mkb_renderTable() {
     // fitColumns + widthGrow=3 em Emissor faz a coluna do emissor
     // absorver espaco livre. Demais colunas tem widthGrow=0 e largura
     // fixa. Quando o total das colunas excede o container, Tabulator
-    // habilita scroll horizontal e Ticker / Δ Taxa permanecem fixas.
+    // habilita scroll horizontal e Ticker / Δ Spread permanecem fixas.
     layout: "fitColumns",
     resizableColumns: true,
     height: "70vh",
@@ -6995,7 +7036,7 @@ function mkb_renderVolumeChart() {
   const { singleIssuerMode, orderedSelected, colorFor } = _mkb_colorForTrace();
 
   // Filtro secundário pelos headerFilters da tabela (dataFiltered) +
-  // terceiro filtro Intraday (taxa válida no último período). Ambos
+  // terceiro filtro Intraday (spread válido no último período). Ambos
   // valem para tickers/traces e para a agregação por dia logo abaixo.
   const allowed = MKB_VISIBLE_TICKERS;
   const intraday = MKB_INTRADAY_VISIBLE;
