@@ -4170,11 +4170,13 @@ function _trd_lookupVertexRate(dataTrade, indexador, duration) {
 
 // Spread em bps do trade vs benchmark do indexador no vertice mais proximo
 // da duration, na curva ANBIMA da data do trade (fallback +/-5 dias).
-// CDI: rate ja eh spread sobre CDI -> retorna rate * 100. %CDI / Outros /
+// CDI: rate ja eh spread sobre CDI -> retorna rate * 100. %CDI retorna o
+// proprio rate (renderizado como percentual igual a coluna Taxa). Outros /
 // fallback retornam null (categoria sem comparativo com Tesouro).
 function trd_resolveSpreadTrade(ticker, dataTrade, rate, indexador, duration) {
   if (rate == null || typeof rate !== "number" || !Number.isFinite(rate)) return null;
   if (indexador === "CDI") return rate * 100;
+  if (indexador === "%CDI") return rate;
   if (indexador !== "IPCA" && indexador !== "Prefixado") return null;
   if (duration == null || typeof duration !== "number" || !Number.isFinite(duration)) return null;
 
@@ -4227,8 +4229,16 @@ function trd_fmtRate(v) {
 
 // Spread em bps inteiro, com sinal explicito quando positivo. pt-BR usa "."
 // como separador de milhares (ex: "+1.250"). Zero exibe sem sinal.
-function trd_fmtSpreadBps(v) {
+// Excecao: categoria %CDI renderiza como percentual pt-BR (4 casas + "%"),
+// igual a coluna Taxa, porque o valor armazenado eh o proprio rate do trade.
+function trd_fmtSpreadBps(cell) {
+  const v = cell.getValue();
   if (v == null || typeof v !== "number" || !Number.isFinite(v)) return "—";
+  const indexador = cell.getRow().getData().indexador;
+  if (indexador === "%CDI") {
+    return v.toLocaleString("pt-BR",
+      { minimumFractionDigits: 4, maximumFractionDigits: 4 }) + "%";
+  }
   const rounded = Math.round(v);
   if (rounded === 0) return "0";
   const abs = Math.abs(rounded).toLocaleString("pt-BR");
@@ -4432,7 +4442,7 @@ function _trd_buildTradesTable(containerId, rows) {
         headerFilterPlaceholder: "ex: 3 ou >3" },
       { title: "Spread (bps)", field: "spread", width: 110, hozAlign: "right",
         sorter: "number",
-        formatter: c => trd_fmtSpreadBps(c.getValue()),
+        formatter: trd_fmtSpreadBps,
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
         headerFilterPlaceholder: "ex: 100 ou >100" },
       { title: "Qtd", field: "qtd", width: 90, hozAlign: "right",
