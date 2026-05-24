@@ -5931,7 +5931,16 @@ function tr2_renderScatterSpreadChart(divId, rowsOverride) {
     const color = colorFor(sel);
     const xs = rs.map(r => `${r.date} ${r.time}`);
     const ys = rs.map(r => r.spread);
-    const sizes = rs.map(r => (typeof r.vol === "number" && r.vol > 0) ? r.vol / 2 : 0);
+    // Escala nao-linear (potencia p=1.5) normalizada para manter o maior
+    // trade no mesmo tamanho que a escala linear anterior. Para v = maxVol,
+    // size = maxVol; para v < maxVol, a bolha cai mais rapido que linear,
+    // aumentando o contraste entre trades grandes e pequenos.
+    const halfMax = maxVol;
+    const sizes = rs.map(r => {
+      const v = (typeof r.vol === "number" && r.vol > 0) ? r.vol / 2 : 0;
+      if (v <= 0 || halfMax <= 0) return 0;
+      return Math.pow(v, 1.5) / Math.pow(halfMax, 0.5);
+    });
     const customdata = rs.map(r => [
       sel.ticker,
       issuer,
@@ -5950,7 +5959,7 @@ function tr2_renderScatterSpreadChart(divId, rowsOverride) {
         size: sizes,
         sizemode: "area",
         sizeref,
-        sizemin: 6,
+        sizemin: 2,
         line: { width: 0 },
         opacity: 0.78,
       },
