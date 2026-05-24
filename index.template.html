@@ -6603,6 +6603,17 @@ async function mkb_load() {
     mkb_showEmpty("Falha ao carregar trades: " + e.message);
     return;
   }
+  // Garante que os lookups (indexador, duration, titpub) estejam carregados
+  // antes do enriquecimento. Sem isso, em primeira visita direta à aba
+  // Comparativo (sem passar pela aba Trades), os maps ficam null e o
+  // enriquecimento retorna fallback "—" -> spread null -> tabela vazia.
+  // Loaders sao idempotentes via singleton (_TRD_*_LOAD), entao chamadas
+  // repetidas em re-renders nao refazem fetch.
+  await Promise.all([
+    trd_loadIndexadorLookup(),
+    trd_loadDurationLookup(),
+    trd_loadTitpubHistory(),
+  ]);
   const all = [];
   for (const p of payloads) {
     for (const r of p.rows) {
