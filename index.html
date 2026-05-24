@@ -1049,7 +1049,7 @@ const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
 // Substituído pelo build com hash dos JSONs em data/. Em dev (template puro)
 // fica vazio e o cache do browser dita a frescor. Em produção, ?v=<hash>
 // invalida o cache do GitHub Pages quando snapshots novos chegam.
-const BUILD_VERSION = "96c1dc6f0a7c";
+const BUILD_VERSION = "c2ca3ab0ff86";
 
 const cache = new Map();
 async function loadJSON(path) {
@@ -4197,7 +4197,7 @@ function trd_resolveSpreadTrade(ticker, dataTrade, rate, indexador, duration) {
     _TRD_SPREAD_BENCH_CACHE.set(key, benchT);
   }
   if (benchT == null) return null;
-  return (rate - benchT) * 100;
+  return ((1 + rate / 100) / (1 + benchT / 100) - 1) * 10000;
 }
 
 // Filtro de trades cancelados (M2). Match prefixo "Cancelado" cobre

@@ -4197,7 +4197,7 @@ function trd_resolveSpreadTrade(ticker, dataTrade, rate, indexador, duration) {
     _TRD_SPREAD_BENCH_CACHE.set(key, benchT);
   }
   if (benchT == null) return null;
-  return (rate - benchT) * 100;
+  return ((1 + rate / 100) / (1 + benchT / 100) - 1) * 10000;
 }
 
 // Filtro de trades cancelados (M2). Match prefixo "Cancelado" cobre
