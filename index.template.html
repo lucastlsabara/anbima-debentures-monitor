@@ -4102,34 +4102,36 @@ function trd_resolveDurationTrade(ticker, dataTrade) {
   return null;
 }
 
-// Curvas IPCA (NTN-B) e Prefixado (LTN/NTN-F) por data, consumidas para
-// calcular spread por trade. Reusa o cache global OVERVIEW carregado pela
-// aba "Inicio" quando disponivel; caso contrario faz fetch dedicado na 1a
-// abertura da aba Trades. Falha de fetch degrada silenciosamente.
-let _TRD_OVERVIEW_LOAD = null;
-async function trd_loadOverviewCurves() {
-  if (OVERVIEW && OVERVIEW.by_date) return OVERVIEW;
-  if (_TRD_OVERVIEW_LOAD) return _TRD_OVERVIEW_LOAD;
-  _TRD_OVERVIEW_LOAD = (async () => {
+// Titulos publicos (LTN para Prefixado, NTN-B para IPCA) por data, consumidos
+// para calcular spread por trade contra a taxa indicativa do papel real de
+// duration mais proxima. Compartilha a global TITPUB com a aba "Titulos
+// Publicos"; o primeiro consumidor faz o fetch e o segundo reusa. Falha de
+// fetch degrada silenciosamente (spread exibira "—").
+let _TRD_TITPUB_LOAD = null;
+async function trd_loadTitpubHistory() {
+  if (TITPUB && TITPUB.rows_by_date) return TITPUB;
+  if (_TRD_TITPUB_LOAD) return _TRD_TITPUB_LOAD;
+  _TRD_TITPUB_LOAD = (async () => {
     try {
-      OVERVIEW = await loadJSON("data/overview.json");
+      TITPUB = await loadJSON("data/titpub_history.json");
     } catch (e) {
-      console.warn("[trades] overview.json indisponivel; coluna Spread exibira '—'", e);
-      if (!OVERVIEW) OVERVIEW = { by_date: {} };
+      console.warn("[trades] titpub_history.json indisponivel; coluna Spread exibira '—'", e);
+      if (!TITPUB) TITPUB = { datas: [], rows_by_date: {} };
     }
-    return OVERVIEW;
+    return TITPUB;
   })();
-  return _TRD_OVERVIEW_LOAD;
+  return _TRD_TITPUB_LOAD;
 }
 
-// Cache (ticker|data_trade -> vertice_taxa_pp). Vertice nao depende da rate
-// do trade, so de (data_trade, indexador, duration). Como (ticker, data_trade)
-// fixa indexador e duration via trd_resolveDurationTrade, a chave reduzida
-// basta. Valor null significa "sem curva/vertice valido para essa chave".
-const _TRD_SPREAD_VERTEX_CACHE = new Map();
+// Cache (ticker|data_trade -> taxa_indicativa_pp do papel mais proximo).
+// Taxa nao depende da rate do trade, so de (data_trade, indexador, duration).
+// Como (ticker, data_trade) fixa indexador e duration via trd_resolveDurationTrade,
+// a chave reduzida basta. Valor null = "sem papel valido para essa chave"
+// (data fora da janela do titpub_history ou duration sem match de tipo).
+const _TRD_SPREAD_BENCH_CACHE = new Map();
 const _TRD_SPREAD_NEAREST_DAYS = 5;
 
-function _trd_nearestCurveDate(byDate, dataTrade) {
+function _trd_nearestSnapDate(byDate, dataTrade) {
   if (!byDate || !dataTrade) return null;
   if (byDate[dataTrade]) return dataTrade;
   const tradeMs = Date.parse(dataTrade);
@@ -4144,35 +4146,44 @@ function _trd_nearestCurveDate(byDate, dataTrade) {
   return bestDate;
 }
 
-function _trd_nearestVertex(curve, duration) {
-  if (!curve || !curve.length) return null;
-  let best = curve[0];
-  let bestDist = Math.abs(best.a - duration);
-  for (let i = 1; i < curve.length; i++) {
-    const dist = Math.abs(curve[i].a - duration);
-    if (dist < bestDist) { best = curve[i]; bestDist = dist; }
+// Resolve a taxa_indicativa do titulo publico (LTN p/ Prefixado, NTN-B p/ IPCA)
+// com duration mais proxima da duration do trade, no snapshot da data do trade
+// (fallback +/-5 dias corridos). NAO mistura NTN-F com LTN. Trades cuja data
+// caia fora da janela do titpub_history retornam null -> "—" (sem fallback ETTJ).
+// Cap superior: se duration > max(duration_anos) dos candidatos, retorna null
+// (sem extrapolar alem do papel mais longo disponivel — "nao inventar dado").
+// Ex.: Pre com duration > 5,613 anos (max LTN em 2026-05-22) → "—".
+function _trd_lookupTitpubRate(dataTrade, indexador, duration) {
+  if (duration == null) return null;
+  if (!TITPUB || !TITPUB.rows_by_date) return null;
+  const snapDate = _trd_nearestSnapDate(TITPUB.rows_by_date, dataTrade);
+  if (!snapDate) return null;
+  const snap = TITPUB.rows_by_date[snapDate];
+  if (!snap || !snap.length) return null;
+
+  const tipoAlvo = indexador === "IPCA" ? "NTN-B"
+    : indexador === "Prefixado" ? "LTN" : null;
+  if (!tipoAlvo) return null;
+
+  let best = null, bestDist = Infinity, maxDur = -Infinity;
+  for (const p of snap) {
+    if (p.tipo !== tipoAlvo) continue;
+    if (typeof p.duration_anos !== "number") continue;
+    if (p.duration_anos > maxDur) maxDur = p.duration_anos;
+    const d = Math.abs(p.duration_anos - duration);
+    if (d < bestDist) { best = p; bestDist = d; }
   }
-  return best;
+  if (!best || typeof best.taxa_indicativa !== "number") return null;
+  if (duration > maxDur) return null;
+  return best.taxa_indicativa;
 }
 
-function _trd_lookupVertexRate(dataTrade, indexador, duration) {
-  const byDate = OVERVIEW && OVERVIEW.by_date;
-  if (!byDate) return null;
-  const curveDate = _trd_nearestCurveDate(byDate, dataTrade);
-  if (!curveDate) return null;
-  const snap = byDate[curveDate];
-  if (!snap) return null;
-  const curve = indexador === "IPCA" ? snap.curve_ipca : snap.curve_pre;
-  const vertex = _trd_nearestVertex(curve, duration);
-  if (!vertex || typeof vertex.t !== "number") return null;
-  return vertex.t;
-}
-
-// Spread em bps do trade vs benchmark do indexador no vertice mais proximo
-// da duration, na curva ANBIMA da data do trade (fallback +/-5 dias).
-// CDI: rate ja eh spread sobre CDI -> retorna rate * 100. %CDI retorna o
-// proprio rate (renderizado como percentual igual a coluna Taxa). Outros /
-// fallback retornam null (categoria sem comparativo com Tesouro).
+// Spread em bps do trade vs taxa_indicativa do titulo publico individual
+// (LTN/NTN-B) de duration mais proxima, no snapshot da data do trade
+// (fallback +/-5 dias corridos). CDI: rate ja eh spread sobre CDI -> retorna
+// rate * 100. %CDI retorna o proprio rate (renderizado como percentual igual
+// a coluna Taxa). Outros / fallback retornam null (categoria sem comparativo
+// com Tesouro).
 function trd_resolveSpreadTrade(ticker, dataTrade, rate, indexador, duration) {
   if (rate == null || typeof rate !== "number" || !Number.isFinite(rate)) return null;
   if (indexador === "CDI") return rate * 100;
@@ -4181,15 +4192,15 @@ function trd_resolveSpreadTrade(ticker, dataTrade, rate, indexador, duration) {
   if (duration == null || typeof duration !== "number" || !Number.isFinite(duration)) return null;
 
   const key = (ticker || "") + "|" + (dataTrade || "");
-  let vertexT;
-  if (_TRD_SPREAD_VERTEX_CACHE.has(key)) {
-    vertexT = _TRD_SPREAD_VERTEX_CACHE.get(key);
+  let benchT;
+  if (_TRD_SPREAD_BENCH_CACHE.has(key)) {
+    benchT = _TRD_SPREAD_BENCH_CACHE.get(key);
   } else {
-    vertexT = _trd_lookupVertexRate(dataTrade, indexador, duration);
-    _TRD_SPREAD_VERTEX_CACHE.set(key, vertexT);
+    benchT = _trd_lookupTitpubRate(dataTrade, indexador, duration);
+    _TRD_SPREAD_BENCH_CACHE.set(key, benchT);
   }
-  if (vertexT == null) return null;
-  return (rate - vertexT) * 100;
+  if (benchT == null) return null;
+  return (rate - benchT) * 100;
 }
 
 // Filtro de trades cancelados (M2). Match prefixo "Cancelado" cobre
@@ -4998,15 +5009,15 @@ async function tr2_load() {
     // Lookups ticker -> indexador / duration (data/ticker_indexador.json e
     // data/ticker_duration.json) carregam em paralelo com os dias de trades;
     // cache em TRD_INDEXADOR_MAP / TRD_DURATION_MAP evita re-fetches em loads
-    // subsequentes. overview.json (curve_ipca/curve_pre por data) alimenta
-    // a coluna Spread; reusa cache global se a aba Inicio ja carregou.
-    // Falha de carregamento nao bloqueia a tabela — os helpers degradam
-    // silenciosamente para {}.
+    // subsequentes. titpub_history.json (LTN/NTN-B por data) alimenta a
+    // coluna Spread; reusa global TITPUB se a aba Titulos Publicos ja
+    // carregou. Falha de carregamento nao bloqueia a tabela — os helpers
+    // degradam silenciosamente para {}.
     [payloads] = await Promise.all([
       Promise.all(dateEntries.map(e => tr2_fetchDayCurrent(e))),
       trd_loadIndexadorLookup(),
       trd_loadDurationLookup(),
-      trd_loadOverviewCurves(),
+      trd_loadTitpubHistory(),
     ]);
   } catch (err) {
     console.error("[trades] fetch", err);
