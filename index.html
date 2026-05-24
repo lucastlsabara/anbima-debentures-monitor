@@ -950,7 +950,7 @@
       <div id="mkb-volume-chart" class="chart" style="height:340px"></div>
     </div>
     <div class="panel">
-      <h2>Taxa × Tempo</h2>
+      <h2>Spread × Tempo</h2>
       <div id="mkb-bubble-chart" class="chart" style="height:380px"></div>
     </div>
   </div>
@@ -7195,17 +7195,25 @@ function mkb_renderBubbleChart(filteredRows, periods) {
     const sizes = [];
     const vols = [];
     const labels = [];
+    const spreadFmts = [];
     for (const p of periods) {
-      const t = r[`taxa__${p.key}`];
+      const s = r[`spread__${p.key}`];
       const v = r[`vol__${p.key}`];
-      if (typeof t !== "number" || !Number.isFinite(t)) continue;
+      if (typeof s !== "number" || !Number.isFinite(s)) continue;
       if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) continue;
       xs.push(p.label);
-      ys.push(t);
-      // /2 aqui também: size e tooltip mostram volume líquido (ponta dupla).
-      sizes.push(v / 2);
-      vols.push(v / 2);
+      ys.push(s);
+      // Escala não-linear (potência p=1.5) normalizada para manter o maior
+      // trade ~MAX_BUBBLE_PX e amplificar contraste com trades menores.
+      // Mesma fórmula do scatter Spread × Tempo da aba Trades (PR #199).
+      const half = v / 2;
+      const sized = (volMax > 0) ? (Math.pow(half, 1.5) / Math.pow(volMax, 0.5)) : 0;
+      sizes.push(sized);
+      // vols mantém o valor líquido cru para o tooltip (texto do volume).
+      vols.push(half);
       labels.push(p.label);
+      // Spread formatado por indexador (bps p/ IPCA/Prefixado/CDI, % p/ %CDI).
+      spreadFmts.push(_trd_fmtSpreadForTooltip(s, r.indexador));
     }
     if (!xs.length) return;
     const color = PALETTE_QUAL[idx % PALETTE_QUAL.length];
@@ -7215,20 +7223,20 @@ function mkb_renderBubbleChart(filteredRows, periods) {
       name: r.ticker,
       x: xs,
       y: ys,
-      customdata: vols.map((v, i) => [labels[i], v]),
+      customdata: vols.map((v, i) => [labels[i], v, spreadFmts[i]]),
       marker: {
         color: color,
         size: sizes,
         sizemode: "area",
         sizeref: sizeref,
-        sizemin: 4,
+        sizemin: 2,
         line: { color: color, width: 1 },
         opacity: 0.75,
       },
       hovertemplate:
         "<b>" + r.ticker + "</b><br>" +
         "Período: %{customdata[0]}<br>" +
-        "Taxa: %{y:.2f}%<br>" +
+        "Spread: %{customdata[2]}<br>" +
         "Volume: R$ %{customdata[1]:,.0f}<extra></extra>",
     });
   });
@@ -7236,7 +7244,7 @@ function mkb_renderBubbleChart(filteredRows, periods) {
   if (!traces.length) {
     Plotly.react(div, [], Object.assign({}, base, {
       annotations: [{
-        text: "Sem dados de taxa para os papéis filtrados.",
+        text: "Sem dados de spread para os papéis filtrados.",
         showarrow: false, x: 0.5, y: 0.5, xref: "paper", yref: "paper",
         font: { color: cssVar("--muted"), size: 13 },
       }],
@@ -7256,9 +7264,12 @@ function mkb_renderBubbleChart(filteredRows, periods) {
       tickangle: -25,
       title: "",
     }),
+    // Spread mistura escalas conforme indexador (bps para IPCA/Prefixado/CDI,
+    // percentual para %CDI), então o eixo Y não tem ticksuffix fixo. Plotly
+    // escolhe o formato com base no range de cada render. Mesma decisão do
+    // scatter Spread × Tempo da aba Trades.
     yaxis: Object.assign({}, base.yaxis, {
-      title: "Taxa (%)",
-      ticksuffix: "%",
+      separatethousands: true,
     }),
   });
   Plotly.react(div, traces, layout,
