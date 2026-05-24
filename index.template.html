@@ -4253,6 +4253,21 @@ function trd_fmtSpreadBps(cell) {
   return (rounded > 0 ? "+" : "-") + abs;
 }
 
+// Mesma regra de trd_fmtSpreadBps, mas para uso fora do Tabulator (ex:
+// hovertemplate do scatter Spread x Tempo). Recebe valor + indexador crus
+// em vez do `cell` do Tabulator.
+function _trd_fmtSpreadForTooltip(v, indexador) {
+  if (v == null || typeof v !== "number" || !Number.isFinite(v)) return "—";
+  if (indexador === "%CDI") {
+    return v.toLocaleString("pt-BR",
+      { minimumFractionDigits: 4, maximumFractionDigits: 4 }) + "%";
+  }
+  const rounded = Math.round(v);
+  if (rounded === 0) return "0";
+  const abs = Math.abs(rounded).toLocaleString("pt-BR");
+  return (rounded > 0 ? "+" : "-") + abs;
+}
+
 // headerFilter helpers (substring case-insensitive, e numerico com
 // operadores >, <, >=, <=). Definidos uma vez para reuso entre colunas.
 function trd_likeCI(term, value) {
@@ -5515,8 +5530,8 @@ function tr2_renderAllCharts() {
     (granularity === "day")  ? "por dia"  :
     (granularity === "week") ? "por semana" : "por mês";
   const barId = "tr2-bar-all";
-  const scatterId = "tr2-scatter-rate";
-  // Scatter Taxa x Tempo so faz sentido para trade-by-trade (consolidated
+  const scatterId = "tr2-scatter-spread";
+  // Scatter Spread x Tempo so faz sentido para trade-by-trade (consolidated
   // nao tem timestamp intraday nem campo `rate` 1:1 com trade).
   const showScatter = (TR2_SOURCE !== "consolidated");
   chartsBox.innerHTML =
@@ -5526,12 +5541,12 @@ function tr2_renderAllCharts() {
     `</div>` +
     (showScatter
       ? `<div class="panel tr2-cat-row">` +
-          `<h2>Taxa × Tempo (bolha = Volume R$)</h2>` +
+          `<h2>Spread × Tempo (bolha = Volume R$)</h2>` +
           `<div id="${scatterId}" class="chart"></div>` +
         `</div>`
       : "");
   tr2_renderUnifiedStackedBarChart(granularity, barId);
-  if (showScatter) tr2_renderScatterRateChart(scatterId);
+  if (showScatter) tr2_renderScatterSpreadChart(scatterId);
 
   tr2_renderTable();
 }
@@ -5546,7 +5561,7 @@ function tr2_renderTable() {
     ? _tr2_buildConsTable("#tr2-table", filtered)
     : _trd_buildTradesTable("#tr2-table", filtered);
 
-  // Sincroniza os 2 charts (bar de Volume R$ + scatter Taxa x Tempo) com os
+  // Sincroniza os 2 charts (bar de Volume R$ + scatter Spread x Tempo) com os
   // headerFilters da propria tabela. Tabulator dispara dataFiltered apos
   // cada keystroke do filtro substring/numerico — debounce de 200ms evita
   // regerar Plotly a cada caractere digitado. As funcoes de chart aceitam
@@ -5567,8 +5582,8 @@ function tr2_renderTable() {
         tr2_renderUnifiedStackedBarChart(granularity, "tr2-bar-all", data);
       }
       if (TR2_SOURCE !== "consolidated"
-          && document.getElementById("tr2-scatter-rate")) {
-        tr2_renderScatterRateChart("tr2-scatter-rate", data);
+          && document.getElementById("tr2-scatter-spread")) {
+        tr2_renderScatterSpreadChart("tr2-scatter-spread", data);
       }
     }, 200);
   });
@@ -5696,7 +5711,7 @@ function _tr2_buildConsTable(containerId, rows) {
 }
 
 // Modo/ordem/cores compartilhados entre o chart de Volume R$ (bar empilhada)
-// e o scatter Taxa x Tempo da Pesquisa de Trades:
+// e o scatter Spread x Tempo da Pesquisa de Trades:
 //  - singleIssuerMode = 1 emissor selecionado -> 1 cor por TICKER.
 //  - multi -> 1 cor por EMISSOR (ordem de 1a aparicao).
 // Ordem dos traces e' alfabetica por ticker (single) ou agrupada por
@@ -5868,23 +5883,24 @@ function tr2_renderUnifiedStackedBarChart(granularity, divId, rowsOverride) {
   Plotly.newPlot(divId, traces, layout, PLOTLY_CONFIG);
 }
 
-function tr2_renderScatterRateChart(divId, rowsOverride) {
-  // Scatter Taxa x Tempo: cada trade vira 1 bolinha em (datetime, rate).
+function tr2_renderScatterSpreadChart(divId, rowsOverride) {
+  // Scatter Spread x Tempo: cada trade vira 1 bolinha em (datetime, spread).
   // Tamanho proporcional ao Volume R$ (sizemode=area). Cor segue a mesma
   // logica do bar de Volume R$ (1 emissor -> cor por ticker; multi -> cor
-  // por emissor). Hovertemplate com ticker, emissor, data/hora, taxa e
+  // por emissor). Hovertemplate com ticker, emissor, data/hora, spread e
   // volume formatado em pt-BR.
   const { singleIssuerMode, orderedSelected, colorFor } = _trd_colorForTrace();
   const rowsAll = rowsOverride || _tr2_filteredRows();
 
-  // Agrupa rows por ticker, preservando so' o que tem rate + date + time.
-  // Regra B3 ponta dupla: bolha (size) e tooltip de Vol usam r.vol / 2.
-  // A tabela continua mostrando r.vol cru — ela lê direto da row.
+  // Agrupa rows por ticker, preservando so' o que tem spread + date + time.
+  // Trades sem spread (Registro/Cancelado/fora da janela titpub_history)
+  // ficam de fora do scatter. Regra B3 ponta dupla: bolha (size) e tooltip
+  // de Vol usam r.vol / 2. A tabela continua mostrando r.vol cru.
   const byTicker = new Map();
   let maxVol = 0;
   for (const r of rowsAll) {
     if (!r || !TR2_SELECTED.has(r.ticker)) continue;
-    if (typeof r.rate !== "number") continue;
+    if (r.spread == null || typeof r.spread !== "number") continue;
     if (!r.date || !r.time) continue;
     if (!byTicker.has(r.ticker)) byTicker.set(r.ticker, []);
     byTicker.get(r.ticker).push(r);
@@ -5914,14 +5930,14 @@ function tr2_renderScatterRateChart(divId, rowsOverride) {
     }
     const color = colorFor(sel);
     const xs = rs.map(r => `${r.date} ${r.time}`);
-    const ys = rs.map(r => r.rate);
+    const ys = rs.map(r => r.spread);
     const sizes = rs.map(r => (typeof r.vol === "number" && r.vol > 0) ? r.vol / 2 : 0);
     const customdata = rs.map(r => [
       sel.ticker,
       issuer,
       brDate(r.date),
       r.time,
-      r.rate.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%",
+      _trd_fmtSpreadForTooltip(r.spread, r.indexador),
       trd_fmtMoneyFull(typeof r.vol === "number" ? r.vol / 2 : r.vol),
     ]);
     traces.push({
@@ -5942,13 +5958,13 @@ function tr2_renderScatterRateChart(divId, rowsOverride) {
       hovertemplate:
         "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>" +
         "%{customdata[2]} %{customdata[3]}<br>" +
-        "Taxa: %{customdata[4]}<br>" +
+        "Spread: %{customdata[4]}<br>" +
         "Vol: %{customdata[5]}<extra></extra>",
     });
   }
 
   if (!traces.length) {
-    tr2_renderEmptyState(divId, "Sem trades com taxa no período selecionado.");
+    tr2_renderEmptyState(divId, "Sem trades com spread no período selecionado.");
     return;
   }
 
@@ -5966,9 +5982,10 @@ function tr2_renderScatterRateChart(divId, rowsOverride) {
       tickangle: -25,
       rangebreaks: [{ bounds: ["sat", "mon"] }],
     }),
+    // Spread mistura escalas conforme indexador (bps para IPCA/Prefixado/CDI,
+    // percentual para %CDI), entao o eixo Y nao tem ticksuffix fixo. Plotly
+    // escolhe o formato com base no range de cada render.
     yaxis: Object.assign({}, base.yaxis, {
-      ticksuffix: "%",
-      tickformat: ".2f",
       separatethousands: true,
     }),
     hoverlabel: { namelength: -1 },
