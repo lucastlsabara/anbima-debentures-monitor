@@ -849,6 +849,9 @@
           <option value="consolidated">Negócio Consolidado</option>
         </select>
       </label>
+      <label id="tr2-show-cancelled-label">
+        <input type="checkbox" id="tr2-show-cancelled"> Exibir Cancelados
+      </label>
       <label id="tr2-group-label" class="hide">Grupo:
         <select id="tr2-group">
           <option value="all" selected>Todos</option>
@@ -1049,7 +1052,7 @@ const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
 // Substituído pelo build com hash dos JSONs em data/. Em dev (template puro)
 // fica vazio e o cache do browser dita a frescor. Em produção, ?v=<hash>
 // invalida o cache do GitHub Pages quando snapshots novos chegam.
-const BUILD_VERSION = "c2ca3ab0ff86";
+const BUILD_VERSION = "bcf6457fd9d3";
 
 const cache = new Map();
 async function loadJSON(path) {
@@ -4403,7 +4406,6 @@ function _trd_buildTradesTable(containerId, rows) {
     return ["", ...[...s].sort()];
   };
   const instrumentOpts = _set("instrument");
-  const setorOpts = _set("setor");
 
   return new Tabulator(containerId, {
     data: rows,
@@ -4413,8 +4415,6 @@ function _trd_buildTradesTable(containerId, rows) {
     pagination: true,
     paginationSize: 50,
     paginationSizeSelector: [25, 50, 100, 250],
-    // Ordem default: trade mais recente primeiro. Sorter custom da coluna
-    // "Data" compoe date + time num timestamp ISO para ordenacao estavel.
     initialSort: [{ column: "date", dir: "desc" }],
     rowFormatter: row => {
       const v = row.getData().vol;
@@ -4434,7 +4434,7 @@ function _trd_buildTradesTable(containerId, rows) {
         headerFilterPlaceholder: "AAAA-MM" },
       { title: "Hora", field: "time", width: 70,
         headerFilter: "input", headerFilterFunc: trd_likeCI },
-      { title: "Inst.", field: "instrument", width: 70,
+      { title: "Instrumento", field: "instrument", width: 70,
         headerFilter: "list",
         headerFilterParams: { values: instrumentOpts, clearable: true },
         headerFilterFunc: "=" },
@@ -4442,10 +4442,6 @@ function _trd_buildTradesTable(containerId, rows) {
         headerFilter: "input" },
       { title: "Emissor", field: "issuer", minWidth: 200,
         headerFilter: "input" },
-      { title: "Setor", field: "setor", width: 160,
-        headerFilter: "list",
-        headerFilterParams: { values: setorOpts, clearable: true },
-        headerFilterFunc: "=" },
       { title: "Indexador", field: "indexador", width: 110,
         headerFilter: "list",
         headerFilterParams: {
@@ -4453,6 +4449,24 @@ function _trd_buildTradesTable(containerId, rows) {
           clearable: true,
         },
         headerFilterFunc: "=" },
+      { title: "Volume", field: "vol", width: 130, hozAlign: "right",
+        formatter: c => {
+          const v = c.getValue();
+          if (v == null) return "—";
+          return v.toLocaleString("pt-BR",
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        },
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: "ex: 1000000 ou >1000000" },
+      { title: "Spread", field: "spread", width: 110, hozAlign: "right",
+        sorter: "number",
+        formatter: trd_fmtSpreadBps,
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: "ex: 100 ou >100" },
+      { title: "Taxa", field: "rate", width: 110, hozAlign: "right",
+        formatter: c => trd_fmtRate(c.getValue()),
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: "ex: 5 ou >5" },
       { title: "Duration", field: "duration", width: 100, hozAlign: "right",
         sorter: "number",
         formatter: c => {
@@ -4463,15 +4477,6 @@ function _trd_buildTradesTable(containerId, rows) {
         },
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
         headerFilterPlaceholder: "ex: 3 ou >3" },
-      { title: "Spread (bps)", field: "spread", width: 110, hozAlign: "right",
-        sorter: "number",
-        formatter: trd_fmtSpreadBps,
-        headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "ex: 100 ou >100" },
-      { title: "Qtd", field: "qtd", width: 90, hozAlign: "right",
-        formatter: c => trd_fmtIntBR(c.getValue()),
-        headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "ex: 100 ou >100" },
       { title: "Preço", field: "price", width: 110, hozAlign: "right",
         formatter: c => {
           const v = c.getValue();
@@ -4481,31 +4486,22 @@ function _trd_buildTradesTable(containerId, rows) {
         },
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
         headerFilterPlaceholder: "ex: 1000 ou >1000" },
-      { title: "Vol (R$)", field: "vol", width: 130, hozAlign: "right",
-        formatter: c => {
-          const v = c.getValue();
-          if (v == null) return "—";
-          return v.toLocaleString("pt-BR",
-            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        },
+      { title: "Quantidade", field: "qtd", width: 90, hozAlign: "right",
+        formatter: c => trd_fmtIntBR(c.getValue()),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "ex: 1000000 ou >1000000" },
-      { title: "Taxa", field: "rate", width: 110, hozAlign: "right",
-        formatter: c => trd_fmtRate(c.getValue()),
-        headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "ex: 5 ou >5" },
+        headerFilterPlaceholder: "ex: 100 ou >100" },
+      { title: "ISIN", field: "isin", width: 130,
+        headerFilter: "input", headerFilterFunc: trd_likeCI },
+      { title: "CodTrade", field: "trade_code", width: 120,
+        headerFilter: "input", headerFilterFunc: trd_likeCI },
       { title: "Origem", field: "origin", width: 170,
         headerFilter: "input", headerFilterFunc: trd_likeCI },
-      { title: "Cód. Trade", field: "trade_code", width: 120,
-        headerFilter: "input", headerFilterFunc: trd_likeCI },
-      { title: "ISIN", field: "isin", width: 130,
+      { title: "Situação", field: "situation", width: 110,
         headerFilter: "input", headerFilterFunc: trd_likeCI },
       { title: "Liquidação", field: "settlement_dt", width: 110,
         formatter: c => c.getValue() ? brDate(c.getValue()) : "—",
         headerFilter: "input", headerFilterFunc: trd_likeCI,
         headerFilterPlaceholder: "AAAA-MM" },
-      { title: "Situação", field: "situation", width: 110,
-        headerFilter: "input", headerFilterFunc: trd_likeCI },
     ],
   });
 }
@@ -4708,6 +4704,7 @@ let TR2_SOURCE = "trade-by-trade";
 // Filtro de grupo para a fonte consolidated. So tem efeito quando
 // TR2_SOURCE === "consolidated". "all" preserva todas as linhas.
 let TR2_GROUP = "all";
+let TR2_SHOW_CANCELLED = false;
 
 function tr2_setStatus(text, busy) {
   const el = document.getElementById("tr2-status");
@@ -4788,6 +4785,10 @@ async function renderTrades() {
       }
       tr2_renderAllCharts();
     });
+    document.getElementById("tr2-show-cancelled").addEventListener("change", (e) => {
+      TR2_SHOW_CANCELLED = e.target.checked;
+      tr2_onSourceChange();
+    });
     TR2_INITED = true;
   }
   await tr2_initDatesAndLoad();
@@ -4795,8 +4796,14 @@ async function renderTrades() {
 
 async function tr2_onSourceChange() {
   const gLabel = document.getElementById("tr2-group-label");
-  if (TR2_SOURCE === "consolidated") gLabel.classList.remove("hide");
-  else gLabel.classList.add("hide");
+  const cLabel = document.getElementById("tr2-show-cancelled-label");
+  if (TR2_SOURCE === "consolidated") {
+    gLabel.classList.remove("hide");
+    cLabel.classList.add("hide");
+  } else {
+    gLabel.classList.add("hide");
+    cLabel.classList.remove("hide");
+  }
   // Ao trocar fonte, reseta grupo para "Todos" (default). Chips de tickers
   // e emissores selecionados sao PRESERVADOS — so a fonte muda.
   TR2_GROUP = "all";
@@ -5057,7 +5064,7 @@ async function tr2_load() {
         obj = (typeof trd_rowToObj !== "undefined")
           ? trd_rowToObj(r, p.date)
           : _tr2_rowToObj(r, p.date, p.columns);
-        if (_trd_isCancelled(obj.situation)) continue;
+        if (!TR2_SHOW_CANCELLED && _trd_isCancelled(obj.situation)) continue;
         obj.indexador = trd_indexadorFor(obj.ticker);
         obj.duration = trd_resolveDurationTrade(obj.ticker, obj.date);
         obj.spread = trd_resolveSpreadTrade(
@@ -5647,11 +5654,11 @@ function _tr2_buildConsTable(containerId, rows) {
       { title: "Data Negócio", field: "data_negocio", width: 120,
         formatter: fmtDate,
         headerFilter: "input", headerFilterFunc: trd_likeCI },
-      { title: "Código IF", field: "codigo_if", width: 130, headerFilter: "input" },
       { title: "Instrumento", field: "instrumento", width: 130,
         headerFilter: "list",
         headerFilterParams: { values: instrumentoOpts, clearable: true },
         headerFilterFunc: "=" },
+      { title: "Código IF", field: "codigo_if", width: 130, headerFilter: "input" },
       { title: "Emissor", field: "emissor", minWidth: 200, headerFilter: "input" },
       { title: "Indexador", field: "indexador", width: 110,
         headerFilter: "list",
@@ -5660,6 +5667,10 @@ function _tr2_buildConsTable(containerId, rows) {
           clearable: true,
         },
         headerFilterFunc: "=" },
+      { title: "Volume Total", field: "volume_total", width: 160, hozAlign: "right",
+        formatter: fmtNum(2),
+        headerFilter: "input", headerFilterFunc: trd_numericFilter,
+        headerFilterPlaceholder: "ex: 1000000 ou >1000000" },
       { title: "Duration", field: "duration", width: 100, hozAlign: "right",
         sorter: "number",
         formatter: c => {
@@ -5670,16 +5681,11 @@ function _tr2_buildConsTable(containerId, rows) {
         },
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
         headerFilterPlaceholder: "ex: 3 ou >3" },
-      { title: "ISIN", field: "isin", width: 140,
-        formatter: fmtText, headerFilter: "input" },
-      { title: "Liquidação", field: "data_liquidacao", width: 110,
-        formatter: fmtDate,
-        headerFilter: "input", headerFilterFunc: trd_likeCI },
       { title: "Quantidade", field: "quantidade", width: 120, hozAlign: "right",
         formatter: fmtInt,
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
         headerFilterPlaceholder: "ex: 100 ou >100" },
-      { title: "Nº Negócios", field: "n_negocios", width: 110, hozAlign: "right",
+      { title: "N Negócios", field: "n_negocios", width: 110, hozAlign: "right",
         formatter: fmtInt,
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
         headerFilterPlaceholder: "ex: 10 ou >10" },
@@ -5699,10 +5705,11 @@ function _tr2_buildConsTable(containerId, rows) {
         formatter: fmtNum(6),
         headerFilter: "input", headerFilterFunc: trd_numericFilter,
         headerFilterPlaceholder: "ex: 1000 ou >1000" },
-      { title: "Volume Total (R$)", field: "volume_total", width: 160, hozAlign: "right",
-        formatter: fmtNum(2),
-        headerFilter: "input", headerFilterFunc: trd_numericFilter,
-        headerFilterPlaceholder: "ex: 1000000 ou >1000000" },
+      { title: "Liquidação", field: "data_liquidacao", width: 110,
+        formatter: fmtDate,
+        headerFilter: "input", headerFilterFunc: trd_likeCI },
+      { title: "ISIN", field: "isin", width: 140,
+        formatter: fmtText, headerFilter: "input" },
       { title: "Grupo", field: "grupo", width: 120,
         formatter: fmtGrupo,
         headerFilter: "input", headerFilterFunc: trd_likeCI },
