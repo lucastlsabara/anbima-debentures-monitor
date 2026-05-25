@@ -1580,11 +1580,8 @@ function vg_renderB3Section(dateLo, dateHi) {
 }
 
 function vg_renderKpis(atual, anterior) {
-  // Regra B3 ponta dupla: arquivos publicam compradora+vendedora, então o
-  // volume bruto está duplicado. Dividimos por 2 só na camada de apresentação
-  // (cards/charts) — agregados crus e tabela de trades permanecem intactos.
-  const volTotal = atual ? (atual.volume_total_brl || 0) / 2 : 0;
-  const volExtragrupo = atual ? (atual.volume_extragrupo_brl || 0) / 2 : 0;
+  const volTotal = atual ? (atual.volume_total_brl || 0) : 0;
+  const volExtragrupo = atual ? (atual.volume_extragrupo_brl || 0) : 0;
   const volDelta = (atual && anterior)
     ? _vg_pctDelta(atual.volume_total_brl, anterior.volume_total_brl) : null;
   const volExtraDelta = (atual && anterior)
@@ -1640,10 +1637,9 @@ function vg_renderVolumeChart(byDate, dateLo, dateHi) {
     return;
   }
   const xs = dates.map(brDate);
-  // Regra B3 ponta dupla: divide por 2 só na camada de apresentação.
-  const ysIntra = dates.map(d => (byDate[d].volume_intra_brl || 0) / 2);
-  const ysExtra = dates.map(d => (byDate[d].volume_extragrupo_brl || 0) / 2);
-  const ysSem = dates.map(d => (byDate[d].volume_sem_classif_brl || 0) / 2);
+  const ysIntra = dates.map(d => (byDate[d].volume_intra_brl || 0));
+  const ysExtra = dates.map(d => (byDate[d].volume_extragrupo_brl || 0));
+  const ysSem = dates.map(d => (byDate[d].volume_sem_classif_brl || 0));
   const ysTotal = dates.map((_, i) => ysIntra[i] + ysExtra[i] + ysSem[i]);
   const colorIntra = cssVar("--accent");
   const colorExtra = cssVar("--warn");
@@ -1726,7 +1722,7 @@ function vg_renderTopPapeis(atual) {
     <tr>
       <td>${escapeHtml(r.ticker)}</td>
       <td>${escapeHtml(r.emissor || "")}</td>
-      <td class="num">${escapeHtml(_vg_fmtMoneyShort0d((r.volume_total || 0) / 2))}</td>
+      <td class="num">${escapeHtml(_vg_fmtMoneyShort0d((r.volume_total || 0)))}</td>
       <td class="num">${escapeHtml(trd_fmtIntBR(r.n_trades))}</td>
     </tr>`).join("");
   document.getElementById("vg-top-papeis").innerHTML =
@@ -1744,7 +1740,7 @@ function vg_renderTopEmissores(atual) {
   const body = top.map(r => `
     <tr>
       <td>${escapeHtml(r.emissor || "(sem emissor)")}</td>
-      <td class="num">${escapeHtml(_vg_fmtMoneyShort0d((r.volume_total || 0) / 2))}</td>
+      <td class="num">${escapeHtml(_vg_fmtMoneyShort0d((r.volume_total || 0)))}</td>
       <td class="num">${escapeHtml(trd_fmtIntBR(r.n_trades))}</td>
     </tr>`).join("");
   document.getElementById("vg-top-emissores").innerHTML =
@@ -4507,12 +4503,10 @@ function _trd_buildTradesTable(containerId, rows) {
 }
 
 function _trd_volumeByDate(rows) {
-  // Regra B3 ponta dupla: divide por 2 só na camada de apresentação. A tabela
-  // continua usando r.vol cru — nunca passa por este agregador.
   const byDate = new Map();
   for (const r of rows) {
     if (!r || !r.date || typeof r.vol !== "number") continue;
-    byDate.set(r.date, (byDate.get(r.date) || 0) + r.vol / 2);
+    byDate.set(r.date, (byDate.get(r.date) || 0) + r.vol);
   }
   const dates = [...byDate.keys()].sort();
   return { dates, xs: dates.map(brDate), ys: dates.map(d => byDate.get(d)) };
@@ -4520,7 +4514,6 @@ function _trd_volumeByDate(rows) {
 
 // Agrega volume por (data, classificação) — usado só pela fonte Consolidado
 // no MODO A para o chart default empilhado por Intra/Extra/Sem Classificação.
-// Aplica a regra B3 ponta dupla (/2) — tabela permanece intacta.
 function _trd_volumeByDateGroup(rows) {
   const byDate = new Map();   // date -> {INTRAGRUPO, EXTRAGRUPO, SEM}
   for (const r of rows) {
@@ -4529,7 +4522,7 @@ function _trd_volumeByDateGroup(rows) {
     const key = g === "" ? "SEM" : g;
     let cur = byDate.get(r.date);
     if (!cur) { cur = { INTRAGRUPO: 0, EXTRAGRUPO: 0, SEM: 0 }; byDate.set(r.date, cur); }
-    cur[key] += r.vol / 2;
+    cur[key] += r.vol;
   }
   const dates = [...byDate.keys()].sort();
   return {
@@ -5494,9 +5487,7 @@ function tr2_calcVolByBucket(rows, ticker, granularity) {
     const key = bucketTs.getTime();
     let cur = acc.get(key);
     if (!cur) { cur = { ts: bucketTs, vol: 0, n: 0, nTrades: 0 }; acc.set(key, cur); }
-    // Regra B3 ponta dupla: /2 só na agregação para o chart. A tabela usa
-    // r.vol cru direto da row, sem passar por aqui.
-    cur.vol += r.vol / 2;
+    cur.vol += r.vol;
     cur.n += 1;
     if (typeof r.n_trades === "number") cur.nTrades += r.n_trades;
   }
@@ -5901,8 +5892,7 @@ function tr2_renderScatterSpreadChart(divId, rowsOverride) {
 
   // Agrupa rows por ticker, preservando so' o que tem spread + date + time.
   // Trades sem spread (Registro/Cancelado/fora da janela titpub_history)
-  // ficam de fora do scatter. Regra B3 ponta dupla: bolha (size) e tooltip
-  // de Vol usam r.vol / 2. A tabela continua mostrando r.vol cru.
+  // ficam de fora do scatter.
   const byTicker = new Map();
   let maxVol = 0;
   for (const r of rowsAll) {
@@ -5911,7 +5901,7 @@ function tr2_renderScatterSpreadChart(divId, rowsOverride) {
     if (!r.date || !r.time) continue;
     if (!byTicker.has(r.ticker)) byTicker.set(r.ticker, []);
     byTicker.get(r.ticker).push(r);
-    if (typeof r.vol === "number" && r.vol / 2 > maxVol) maxVol = r.vol / 2;
+    if (typeof r.vol === "number" && r.vol > maxVol) maxVol = r.vol;
   }
 
   // sizeref convencional de Plotly bubbles: 2*max/(desired^2). Calibrado
@@ -5942,11 +5932,10 @@ function tr2_renderScatterSpreadChart(divId, rowsOverride) {
     // trade no mesmo tamanho que a escala linear anterior. Para v = maxVol,
     // size = maxVol; para v < maxVol, a bolha cai mais rapido que linear,
     // aumentando o contraste entre trades grandes e pequenos.
-    const halfMax = maxVol;
     const sizes = rs.map(r => {
-      const v = (typeof r.vol === "number" && r.vol > 0) ? r.vol / 2 : 0;
-      if (v <= 0 || halfMax <= 0) return 0;
-      return Math.pow(v, 1.5) / Math.pow(halfMax, 0.5);
+      const v = (typeof r.vol === "number" && r.vol > 0) ? r.vol : 0;
+      if (v <= 0 || maxVol <= 0) return 0;
+      return Math.pow(v, 1.5) / Math.pow(maxVol, 0.5);
     });
     const customdata = rs.map(r => [
       sel.ticker,
@@ -5954,7 +5943,7 @@ function tr2_renderScatterSpreadChart(divId, rowsOverride) {
       brDate(r.date),
       r.time,
       _trd_fmtSpreadForTooltip(r.spread, r.indexador),
-      trd_fmtMoneyFull(typeof r.vol === "number" ? r.vol / 2 : r.vol),
+      trd_fmtMoneyFull(r.vol),
     ]);
     traces.push({
       type: "scatter",
@@ -6971,12 +6960,11 @@ function mkb_renderTable() {
  *  Grafico 1: barras EMPILHADAS por dia, mesma lógica da Pesquisa
  *  de Trades modo Negocio a Negocio (tr2_renderUnifiedStackedBar
  *  + _trd_colorForTrace): 1 emissor selecionado -> 1 cor por
- *  TICKER; multi -> 1 cor por EMISSOR. Volume com ponta dupla /2
- *  só na camada de apresentação (a tabela continua com vol bruto).
+ *  TICKER; multi -> 1 cor por EMISSOR. Volume bruto direto do JSON.
  *
  *  Grafico 2: bubble chart. Eixo X = períodos conforme Periodicidade
  *  (mesmas labels da tabela); Eixo Y = taxa média ponderada (mesma
- *  célula da tabela); tamanho da bolha = volume /2 (ponta dupla);
+ *  célula da tabela); tamanho da bolha = volume bruto;
  *  1 trace (cor) por ticker via PALETTE_QUAL.
  * ------------------------------------------------------------ */
 function mkb_renderCharts(filteredRows, periods) {
@@ -7063,10 +7051,8 @@ function mkb_renderVolumeChart() {
     : orderedSelected;
   if (intraday) useful = useful.filter(sel => intraday.has(sel.ticker));
 
-  // Agrega volume por (ticker, data) com /2 (ponta dupla B3). A tabela usa
-  // r.vol cru — só os gráficos passam por aqui.
   const dateSet = new Set();
-  const byTickerDate = new Map();   // ticker -> Map(date -> vol/2)
+  const byTickerDate = new Map();   // ticker -> Map(date -> vol)
   for (const r of (MKB_RANGE_ROWS || [])) {
     if (!r || !r.date || typeof r.vol !== "number") continue;
     if (!MKB_SELECTED.has(r.ticker)) continue;
@@ -7075,7 +7061,7 @@ function mkb_renderVolumeChart() {
     dateSet.add(r.date);
     let m = byTickerDate.get(r.ticker);
     if (!m) { m = new Map(); byTickerDate.set(r.ticker, m); }
-    m.set(r.date, (m.get(r.date) || 0) + r.vol / 2);
+    m.set(r.date, (m.get(r.date) || 0) + r.vol);
   }
   const dates = [...dateSet].sort();
   const xs = dates.map(brDate);
@@ -7178,14 +7164,12 @@ function mkb_renderBubbleChart(filteredRows, periods) {
   const xCategory = periods.map(p => p.label);
 
   // Volume max global pra calcular sizeref único (consistente entre tickers).
-  // Aplica /2 (ponta dupla B3) — o cálculo de tamanho e o tooltip mostram
-  // volume líquido. A tabela continua usando vol bruto (vol__ direto).
   let volMax = 0;
   for (const r of filteredRows) {
     for (const p of periods) {
       const v = r[`vol__${p.key}`];
-      if (typeof v === "number" && Number.isFinite(v) && (v / 2) > volMax) {
-        volMax = v / 2;
+      if (typeof v === "number" && Number.isFinite(v) && v > volMax) {
+        volMax = v;
       }
     }
   }
@@ -7213,11 +7197,9 @@ function mkb_renderBubbleChart(filteredRows, periods) {
       // Escala não-linear (potência p=1.5) normalizada para manter o maior
       // trade ~MAX_BUBBLE_PX e amplificar contraste com trades menores.
       // Mesma fórmula do scatter Spread × Tempo da aba Trades (PR #199).
-      const half = v / 2;
-      const sized = (volMax > 0) ? (Math.pow(half, 1.5) / Math.pow(volMax, 0.5)) : 0;
+      const sized = (volMax > 0) ? (Math.pow(v, 1.5) / Math.pow(volMax, 0.5)) : 0;
       sizes.push(sized);
-      // vols mantém o valor líquido cru para o tooltip (texto do volume).
-      vols.push(half);
+      vols.push(v);
       labels.push(p.label);
       // Spread formatado por indexador (bps p/ IPCA/Prefixado/CDI, % p/ %CDI).
       spreadFmts.push(_trd_fmtSpreadForTooltip(s, r.indexador));
