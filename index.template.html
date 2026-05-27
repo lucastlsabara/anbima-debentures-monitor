@@ -1352,7 +1352,7 @@ async function _loadExtragrupoVolumes(dateLo, dateHi) {
   if (_extVolCache[cacheKey]) return _extVolCache[cacheKey];
   const consDates = (OVERVIEW && OVERVIEW.vg_b3_consolidated
     && OVERVIEW.vg_b3_consolidated.dates) || [];
-  const rangeDates = consDates.filter(d => d >= dateLo && d <= dateHi);
+  const rangeDates = consDates.filter(d => d > dateLo && d <= dateHi);
   const volByTicker = {};
   const payloads = await Promise.all(
     rangeDates.map(d =>
