@@ -886,6 +886,24 @@
       <h2>Volume Total por Dia</h2>
       <div id="trd-volume-chart" class="chart" style="height:340px"></div>
     </div>
+    <div class="panel" id="trd-topn-card">
+      <h2 id="trd-topn-title">Top 20 Emissores Mais Negociados</h2>
+      <div class="controls filter-row" style="margin-bottom:8px;gap:12px;align-items:center;">
+        <label style="display:inline-flex;align-items:center;gap:6px;">
+          Agrupar por:
+          <select id="trd-topn-groupby" style="width:auto;">
+            <option value="issuer" selected>Emissor</option>
+            <option value="ticker" id="trd-topn-ticker-opt">Ticker</option>
+          </select>
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:6px;">
+          Top N:
+          <input type="number" id="trd-topn-n" value="20" min="5" max="100" step="5"
+                 style="width:70px;">
+        </label>
+      </div>
+      <div id="trd-topn-chart" class="chart" style="height:500px"></div>
+    </div>
     <div class="panel">
       <h2>Trades</h2>
       <div id="trd-table"></div>
@@ -4722,6 +4740,95 @@ function redrawTrdVolumeChart(rows) {
     Object.assign({}, PLOTLY_CONFIG, { displayModeBar: false }));
 }
 
+function trd_rerenderTopNFromTable() {
+  if (TRD_TABLE) {
+    trd_renderTopNChart(TRD_TABLE.getData("active"));
+  } else {
+    trd_renderTopNChart(_tr2_filteredRows());
+  }
+}
+
+function trd_renderTopNChart(rows) {
+  const div = "trd-topn-chart";
+  const el = document.getElementById(div);
+  if (!el) return;
+
+  const groupBy = document.getElementById("trd-topn-groupby").value;
+  const topN = Math.max(5, Math.min(100,
+    parseInt(document.getElementById("trd-topn-n").value, 10) || 20));
+
+  const field = (groupBy === "ticker") ? "ticker" : "issuer";
+
+  const agg = new Map();
+  for (const r of rows) {
+    const key = r[field];
+    if (!key) continue;
+    const v = (typeof r.vol === "number") ? r.vol : 0;
+    if (v <= 0) continue;
+    agg.set(key, (agg.get(key) || 0) + v);
+  }
+
+  const sorted = [...agg.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topN);
+
+  const labels = sorted.map(e => e[0]).reverse();
+  const values = sorted.map(e => e[1]).reverse();
+
+  const isCons = (TR2_SOURCE === "consolidated");
+  const groupLabel = (groupBy === "ticker")
+    ? (isCons ? "Código IF" : "Ticker")
+    : "Emissor";
+  const titleEl = document.getElementById("trd-topn-title");
+  if (titleEl) titleEl.textContent = `Top ${topN} ${groupLabel}s Mais Negociados`;
+
+  const optEl = document.getElementById("trd-topn-ticker-opt");
+  if (optEl) optEl.textContent = isCons ? "Código IF" : "Ticker";
+
+  if (!sorted.length) {
+    Plotly.purge(div);
+    el.innerHTML = '<div class="empty">Sem dados para exibir.</div>';
+    return;
+  }
+
+  const maxVal = Math.max(...values);
+  const { tickvals, ticktext } = _trd_axisTicksFromMax(maxVal);
+  const base = PLOTLY_LAYOUT();
+
+  const traces = [{
+    type: "bar",
+    orientation: "h",
+    y: labels,
+    x: values,
+    marker: { color: cssVar("--accent") },
+    customdata: values.map(v => trd_fmtMoneyFull(v)),
+    hovertemplate: "%{y}<br>Volume: %{customdata}<extra></extra>",
+  }];
+
+  const dynamicH = Math.max(340, sorted.length * 22 + 80);
+  el.style.height = dynamicH + "px";
+
+  const layout = Object.assign({}, base, {
+    margin: { t: 10, r: 18, b: 40, l: Math.min(260, Math.max(120,
+      Math.max(...labels.map(l => l.length)) * 7)) },
+    xaxis: Object.assign({}, base.xaxis, {
+      title: "",
+      tickvals: tickvals,
+      ticktext: ticktext,
+    }),
+    yaxis: Object.assign({}, base.yaxis, {
+      title: "",
+      type: "category",
+      categoryorder: "array",
+      categoryarray: labels,
+      automargin: true,
+    }),
+  });
+
+  Plotly.react(div, traces, layout,
+    Object.assign({}, PLOTLY_CONFIG, { displayModeBar: false }));
+}
+
 /* ============================================================
  *  Tab — Pesquisa de Trades
  * ============================================================ */
@@ -4793,6 +4900,7 @@ function tr2_renderModeA() {
 
   // Volume por dia funciona em ambas as fontes (rows trazem .date e .vol).
   redrawTrdVolumeChart(rows);
+  trd_renderTopNChart(rows);
 
   // Tabela completa: schema canonico TRD_COLUMNS para trade-by-trade, schema
   // ConsolidatedRecords (B3) para consolidated. Reusa os factories ja
@@ -4802,11 +4910,12 @@ function tr2_renderModeA() {
     ? _tr2_buildConsTable("#trd-table", rows)
     : _trd_buildTradesTable("#trd-table", rows);
 
-  // Volume chart segue os headerFilters da tabela (idem antiga aba "Todos
-  // Trades").
+  // Volume chart + top-N seguem os headerFilters da tabela (idem antiga aba
+  // "Todos Trades").
   TRD_TABLE.on("dataFiltered", (_filters, visibleRows) => {
     const data = visibleRows.map(r => r.getData());
     redrawTrdVolumeChart(data);
+    trd_renderTopNChart(data);
   });
 }
 
@@ -4829,6 +4938,12 @@ async function renderTrades() {
     document.getElementById("tr2-show-cancelled").addEventListener("change", (e) => {
       TR2_SHOW_CANCELLED = e.target.checked;
       tr2_onSourceChange();
+    });
+    document.getElementById("trd-topn-groupby").addEventListener("change", () => {
+      trd_rerenderTopNFromTable();
+    });
+    document.getElementById("trd-topn-n").addEventListener("change", () => {
+      trd_rerenderTopNFromTable();
     });
     TR2_INITED = true;
   }
