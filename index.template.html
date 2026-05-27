@@ -1345,6 +1345,38 @@ function onVisDateChange(which, d) {
   _syncDatesFrom("vis", VIS_DATE_ATUAL, VIS_DATE_ANTERIOR);
 }
 
+const _extVolCache = {};
+async function _loadExtragrupoVolumes(dateLo, dateHi) {
+  const cacheKey = dateLo + "|" + dateHi;
+  if (_extVolCache[cacheKey]) return _extVolCache[cacheKey];
+  const consDates = (OVERVIEW && OVERVIEW.vg_b3_consolidated
+    && OVERVIEW.vg_b3_consolidated.dates) || [];
+  const rangeDates = consDates.filter(d => d >= dateLo && d <= dateHi);
+  const volByTicker = {};
+  const payloads = await Promise.all(
+    rangeDates.map(d =>
+      loadJSON("data/b3_trades_consolidated/" + d + ".json").catch(() => null))
+  );
+  for (const payload of payloads) {
+    if (!payload || !payload.rows) continue;
+    const cols = payload.columns || [];
+    const iCod = cols.indexOf("codigo_if");
+    const iInstr = cols.indexOf("instrumento");
+    const iGrupo = cols.indexOf("grupo");
+    const iVol = cols.indexOf("volume_total");
+    if (iCod < 0 || iGrupo < 0 || iVol < 0) continue;
+    for (const r of payload.rows) {
+      if (r[iGrupo] !== "EXTRAGRUPO") continue;
+      if (iInstr >= 0 && r[iInstr] !== "DEB") continue;
+      const tk = r[iCod];
+      if (!tk) continue;
+      volByTicker[tk] = (volByTicker[tk] || 0) + (r[iVol] || 0);
+    }
+  }
+  _extVolCache[cacheKey] = volByTicker;
+  return volByTicker;
+}
+
 function drawVisao() {
   const pair = OVERVIEW.by_pair[VIS_DATE_ATUAL];
   if (!pair) return;
@@ -1358,8 +1390,19 @@ function drawVisao() {
   renderKpis(kpis);
   renderHistogram(pair.histogram["IPCA+"] || null, "IPCA+", "chart-histogram-ipca");
   renderHistogram(pair.histogram["DI+"]   || null, "CDI+",  "chart-histogram-cdi");
-  renderTopMovers(topm["IPCA+"] || null, "IPCA+", "top-movers-ipca");
-  renderTopMovers(topm["DI+"]   || null, "CDI+",  "top-movers-cdi");
+  const dateLo = VIS_DATE_ANTERIOR || VIS_DATE_ATUAL;
+  const dateHi = VIS_DATE_ATUAL;
+  const cachedVol = _extVolCache[dateLo + "|" + dateHi] || null;
+  renderTopMovers(topm["IPCA+"] || null, "IPCA+", "top-movers-ipca", cachedVol);
+  renderTopMovers(topm["DI+"]   || null, "CDI+",  "top-movers-cdi", cachedVol);
+  if (!cachedVol) {
+    _loadExtragrupoVolumes(dateLo, dateHi).then(volMap => {
+      const curLo = VIS_DATE_ANTERIOR || VIS_DATE_ATUAL;
+      if (curLo !== dateLo || VIS_DATE_ATUAL !== dateHi) return;
+      renderTopMovers(topm["IPCA+"] || null, "IPCA+", "top-movers-ipca", volMap);
+      renderTopMovers(topm["DI+"]   || null, "CDI+",  "top-movers-cdi", volMap);
+    });
+  }
   // Mesma cor dos histogramas (--accent) para consistência visual entre
   // os 4 cards principais de cada indexador.
   renderDailySpreadBars("IPCA+", "chart-vis-spread-ipca", cssVar("--accent"));
@@ -1516,7 +1559,7 @@ function renderHistogram(h, displayLabel, containerId) {
   Plotly.newPlot(containerId, [trace], layout, PLOTLY_CONFIG);
 }
 
-function renderTopMovers(tm, displayLabel, containerId) {
+function renderTopMovers(tm, displayLabel, containerId, extVolMap) {
   const root = document.getElementById(containerId);
   if (!tm || tm.n_com_d1 === 0) {
     root.innerHTML = '<div class="empty">Sem snapshot anterior — Δ indisponível.</div>';
@@ -1529,14 +1572,18 @@ function renderTopMovers(tm, displayLabel, containerId) {
     const emissor = m.emissor || '';
     const dur = m.duration_anos;
     const durStr = dur == null ? "—" : dur.toFixed(1) + "a";
+    const vol = extVolMap ? extVolMap[m.codigo] : undefined;
+    const volStr = extVolMap == null ? "…"
+      : (vol ? _vg_fmtMoneyShort0d(vol) : "—");
     return `<tr><td>${m.codigo}</td><td title="${escapeAttr(emissor)}">${escapeHtml(emissor)}</td>` +
       `<td class="num">${durStr}</td>` +
       `<td class="num">${fmtPp(m.spread_pp)}</td>` +
-      `<td class="num ${dCls}">${fmtBps(m.delta_spread_bps)}</td></tr>`;
+      `<td class="num ${dCls}">${fmtBps(m.delta_spread_bps)}</td>` +
+      `<td class="num">${escapeHtml(volStr)}</td></tr>`;
   };
   const head = `<thead><tr><th>Código</th><th>Emissor</th>` +
     `<th class="num">Dur.</th><th class="num">Spread</th>` +
-    `<th class="num">Δ</th></tr></thead>`;
+    `<th class="num">Δ</th><th class="num">Volume Extra-Grupo</th></tr></thead>`;
   root.innerHTML =
     '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Abrindo (spread ↑)</div>' +
     `<table class="mini">${head}<tbody>${tm.abrindo.map(row).join("")}</tbody></table>` +
