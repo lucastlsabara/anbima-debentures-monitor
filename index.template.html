@@ -1575,7 +1575,7 @@ function renderTopMovers(tm, displayLabel, containerId, extVolMap) {
     const durStr = dur == null ? "—" : dur.toFixed(1) + "a";
     const vol = extVolMap ? extVolMap[m.codigo] : undefined;
     const volStr = extVolMap == null ? "…"
-      : (vol ? _vg_fmtMoneyShort0d(vol) : "—");
+      : (vol ? (vol / 1e6).toLocaleString("pt-BR", {minimumFractionDigits:1, maximumFractionDigits:1}) + " MM" : "—");
     return `<tr><td>${m.codigo}</td><td title="${escapeAttr(emissor)}">${escapeHtml(emissor)}</td>` +
       `<td class="num">${durStr}</td>` +
       `<td class="num">${fmtPp(m.spread_pp)}</td>` +
