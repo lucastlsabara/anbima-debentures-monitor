@@ -153,12 +153,12 @@
   table.mini td.num, table.mini th.num { text-align:right; font-variant-numeric:tabular-nums; }
   table.mini .pos { color:var(--pos); }
   table.mini .neg { color:var(--neg); }
-  table.mini th:nth-child(1), table.mini td:nth-child(1) { width:12%; }
-  table.mini th:nth-child(2), table.mini td:nth-child(2) { width:30%; }
-  table.mini th:nth-child(3), table.mini td:nth-child(3) { width:10%; }
-  table.mini th:nth-child(4), table.mini td:nth-child(4) { width:12%; }
-  table.mini th:nth-child(5), table.mini td:nth-child(5) { width:14%; }
-  table.mini th:nth-child(6), table.mini td:nth-child(6) { width:22%; }
+  table.mini th:nth-child(1), table.mini td:nth-child(1) { width:10%; }
+  table.mini th:nth-child(2), table.mini td:nth-child(2) { width:42%; }
+  table.mini th:nth-child(3), table.mini td:nth-child(3) { width:8%; }
+  table.mini th:nth-child(4), table.mini td:nth-child(4) { width:10%; }
+  table.mini th:nth-child(5), table.mini td:nth-child(5) { width:10%; }
+  table.mini th:nth-child(6), table.mini td:nth-child(6) { width:20%; }
   .hide { display:none !important; }
   .empty {
     color:var(--muted); font-style:italic; font-size:12.5px;
@@ -1053,7 +1053,7 @@ const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
 // Substituído pelo build com hash dos JSONs em data/. Em dev (template puro)
 // fica vazio e o cache do browser dita a frescor. Em produção, ?v=<hash>
 // invalida o cache do GitHub Pages quando snapshots novos chegam.
-const BUILD_VERSION = "44c178c81482";
+const BUILD_VERSION = "0e650981afee";
 
 const cache = new Map();
 async function loadJSON(path) {
@@ -1584,7 +1584,7 @@ function renderTopMovers(tm, displayLabel, containerId, extVolMap) {
   };
   const head = `<thead><tr><th>Código</th><th>Emissor</th>` +
     `<th class="num">Dur.</th><th class="num">Spread</th>` +
-    `<th class="num">Δ</th><th class="num">Volume Extra-Grupo</th></tr></thead>`;
+    `<th class="num">Δ</th><th class="num">Vol. Extra-Grupo</th></tr></thead>`;
   root.innerHTML =
     '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Abrindo (spread ↑)</div>' +
     `<table class="mini">${head}<tbody>${tm.abrindo.map(row).join("")}</tbody></table>` +
