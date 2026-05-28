@@ -4809,6 +4809,7 @@ function trd_renderTopNChart(rows) {
   el.style.height = dynamicH + "px";
 
   const layout = Object.assign({}, base, {
+    height: dynamicH,
     margin: { t: 10, r: 18, b: 40, l: Math.min(260, Math.max(120,
       Math.max(...labels.map(l => l.length)) * 7)) },
     xaxis: Object.assign({}, base.xaxis, {
