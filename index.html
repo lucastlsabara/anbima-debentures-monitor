@@ -1071,7 +1071,7 @@ const PLOTLY_CONFIG = { displaylogo:false, responsive:true,
 // Substituído pelo build com hash dos JSONs em data/. Em dev (template puro)
 // fica vazio e o cache do browser dita a frescor. Em produção, ?v=<hash>
 // invalida o cache do GitHub Pages quando snapshots novos chegam.
-const BUILD_VERSION = "b03bc8c85d19";
+const BUILD_VERSION = "6a3bb17b2c7c";
 
 const cache = new Map();
 async function loadJSON(path) {
@@ -4776,11 +4776,11 @@ function trd_renderTopNChart(rows) {
   const values = sorted.map(e => e[1]).reverse();
 
   const isCons = (TR2_SOURCE === "consolidated");
-  const groupLabel = (groupBy === "ticker")
-    ? (isCons ? "Código IF" : "Ticker")
-    : "Emissor";
+  const groupLabelPlural = (groupBy === "ticker")
+    ? (isCons ? "Códigos IF" : "Tickers")
+    : "Emissores";
   const titleEl = document.getElementById("trd-topn-title");
-  if (titleEl) titleEl.textContent = `Top ${topN} ${groupLabel}s Mais Negociados`;
+  if (titleEl) titleEl.textContent = `Top ${topN} ${groupLabelPlural} Mais Negociados`;
 
   const optEl = document.getElementById("trd-topn-ticker-opt");
   if (optEl) optEl.textContent = isCons ? "Código IF" : "Ticker";
