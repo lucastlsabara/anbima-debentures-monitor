@@ -1,0 +1,39 @@
+# Render Blueprint — hospedagem do dashboard como site estatico.
+#
+# Contexto: o site e 100% estatico. O index.html (single file, hash routing)
+# ja vem PRONTO no repo, gerado por build_dashboard.py e commitado pelo
+# GitHub Actions (.github/workflows/anbima_b3_probe.yml, 3x/dia). O Render
+# nao precisa rodar Python nem build algum: so serve os arquivos do repo.
+#
+# Fluxo apos a migracao (identico ao de hoje, so muda quem serve o arquivo):
+#   Actions fetch dados -> rebuild index.html -> git push main
+#     -> Render detecta o push -> re-publica automaticamente.
+#
+# Como aplicar: no Render, New > Blueprint, conecte este repositorio. O Render
+# le este arquivo e cria o site "DadosMercado" sozinho.
+#
+# Notas de config:
+#   - staticPublishPath: "." (raiz) porque o dashboard faz fetch() de ~40
+#     arquivos data/*.json em runtime; todos precisam ser servidos.
+#   - SEM rewrite catch-all para /index.html: quebraria os fetch() dos JSON.
+#     O hash routing (#) e client-side e dispensa rewrite no servidor.
+#   - buildCommand no-op: nada a compilar, o HTML ja esta commitado.
+
+services:
+  - type: web
+    name: DadosMercado
+    runtime: static
+    buildCommand: "echo 'Sem build: index.html ja vem pronto (build_dashboard.py + GitHub Actions). Render apenas serve os arquivos.'"
+    staticPublishPath: .
+    # Auto-deploy a cada push em main (default do Render). Cada commit do
+    # Actions republica o site. Sem previews de PR (repo so usa main).
+    pullRequestPreviewsEnabled: false
+    headers:
+      # Cache curto no HTML (muda 3x/dia) e nos JSON de dados; assets longos
+      # nao se aplicam aqui (tudo inline no single-file HTML).
+      - path: /index.html
+        name: Cache-Control
+        value: public, max-age=300, must-revalidate
+      - path: /data/*
+        name: Cache-Control
+        value: public, max-age=300, must-revalidate
