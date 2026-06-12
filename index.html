@@ -22,6 +22,9 @@
 <script defer src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"
         integrity="sha384-5JqMv4L/Xa0hfvtF06qboNdhvuYXUku9ZrhZh3bSk8VXF0A/RuSLHpLsSV9Zqhl6"
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<!-- ExcelJS: geração de planilhas .xlsx formatadas (export da aba Marcação). -->
+<script defer src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   :root {
     --bg:#0e1116; --surface:#161b22; --surface2:#1c2230;
@@ -222,6 +225,17 @@
   }
   .play-btn:hover { opacity:0.9; }
   .play-btn:disabled { opacity:0.5; cursor:wait; }
+  /* Botão de exportação para Excel (aba Marcação). Verde "planilha" com
+     leve gradiente e ícone de download, para destacar entre os controles. */
+  .controls button.export-btn {
+    background:linear-gradient(180deg,#22a06b,#157347);
+    color:#ffffff; border:1px solid #0f5132; font-weight:600;
+    display:inline-flex; align-items:center; gap:6px;
+    box-shadow:0 1px 2px rgba(0,0,0,0.35);
+  }
+  .controls button.export-btn:hover { filter:brightness(1.08); border-color:#0f5132; color:#fff; }
+  .controls button.export-btn:disabled { opacity:0.6; cursor:wait; filter:none; }
+  .export-btn .export-ic { font-size:14px; line-height:1; }
   .now {
     font-size:14px; font-weight:600; color:var(--accent);
     font-variant-numeric:tabular-nums;
@@ -717,6 +731,10 @@
       <label>
         <input type="checkbox" id="mov-hide-iliq" checked> Esconder ilíquidos
       </label>
+      <button type="button" id="mov-export-xlsx" class="export-btn"
+              title="Exportar a tabela atual (filtros aplicados) para Excel (.xlsx)">
+        <span class="export-ic">⤓</span> Exportar Excel
+      </button>
     </div>
     <div id="mov-table"></div>
   </div>
@@ -2487,6 +2505,9 @@ async function renderMovimentacoes() {
 
   buildMovTable();
   document.getElementById("mov-hide-iliq").addEventListener("change", applyMovFilter);
+  // onclick (idempotente) — renderMovimentacoes pode rodar de novo na troca de aba.
+  const _xlsxBtn = document.getElementById("mov-export-xlsx");
+  if (_xlsxBtn) _xlsxBtn.onclick = exportMovToExcel;
   applyMovFilter();
 }
 
@@ -2681,6 +2702,185 @@ function applyMovFilter() {
     if (hideIliq && d.iliquido) return false;
     return true;
   });
+}
+
+/* ============================================================
+ *  Marcação — Export para Excel (.xlsx) via ExcelJS
+ *  Gera uma planilha formatada: faixa de título, subtítulo com
+ *  datas/contagem, cabeçalho estilizado, zebra e "heatmap" nas
+ *  colunas % PAR e Δ Spread (espelhando as cores da tela).
+ * ============================================================ */
+
+// Interpolação linear entre duas cores RGB -> "FFRRGGBB" (ARGB para ExcelJS).
+function _xlLerpARGB(lo, hi, t) {
+  t = Math.max(0, Math.min(1, t));
+  const ch = i => Math.round(lo[i] + (hi[i] - lo[i]) * t);
+  const hx = v => v.toString(16).padStart(2, "0").toUpperCase();
+  return "FF" + hx(ch(0)) + hx(ch(1)) + hx(ch(2));
+}
+// Paleta clara otimizada para fundo branco (legível com texto escuro).
+const _XL_RED_LO = [252, 236, 234], _XL_RED_HI = [239, 83, 80];   // baixo / Δ+
+const _XL_GRN_LO = [232, 245, 233], _XL_GRN_HI = [102, 187, 106]; // alto  / Δ−
+// Δ Spread: positivo -> vermelho, negativo -> verde (igual à UI).
+function _xlDeltaFill(v, p95Abs) {
+  if (v == null || v === 0) return null;
+  const t = Math.min(Math.abs(v) / Math.max(50, p95Abs || 0), 1);
+  return v > 0 ? _xlLerpARGB(_XL_RED_LO, _XL_RED_HI, t)
+              : _xlLerpARGB(_XL_GRN_LO, _XL_GRN_HI, t);
+}
+// % PAR: abaixo de 100 -> vermelho, acima -> verde (igual à UI).
+function _xlPctParFill(v, p95Dist) {
+  if (v == null) return null;
+  const dist = Math.abs(v - 100);
+  if (dist === 0) return null;
+  const t = Math.min(dist / Math.max(20, p95Dist || 0), 1);
+  return v < 100 ? _xlLerpARGB(_XL_RED_LO, _XL_RED_HI, t)
+                : _xlLerpARGB(_XL_GRN_LO, _XL_GRN_HI, t);
+}
+
+async function exportMovToExcel() {
+  const btn = document.getElementById("mov-export-xlsx");
+  if (!MOV_TABLE) return;
+  if (typeof ExcelJS === "undefined") {
+    alert("Biblioteca de exportação ainda carregando — tente novamente em alguns instantes.");
+    return;
+  }
+  // Linhas atualmente visíveis (respeita header-filters, ilíquidos e ordenação).
+  const rows = MOV_TABLE.getRows("active").map(r => r.getData());
+  if (!rows.length) {
+    alert("Não há linhas para exportar com os filtros atuais.");
+    return;
+  }
+  const stats = MOV_STATS || _computeMovStats(rows);
+
+  const COLS = [
+    { key:"codigo",               title:"Código",          width:13, type:"text" },
+    { key:"emissor",              title:"Emissor",         width:34, type:"text" },
+    { key:"setor",                title:"Setor",           width:22, type:"text" },
+    { key:"indexador",            title:"Índice",          width:11, type:"text" },
+    { key:"vencimento",           title:"Vencimento",      width:13, type:"date" },
+    { key:"benchmark_vencimento", title:"Ref. Venc.",      width:13, type:"date" },
+    { key:"duration_anos",        title:"Duration (anos)", width:13, type:"num",  fmt:"0.00" },
+    { key:"pu",                   title:"PU (R$)",         width:14, type:"num",  fmt:"#,##0.00" },
+    { key:"taxa",                 title:"Taxa",            width:10, type:"num",  fmt:'0.00"%"' },
+    { key:"pct_pu_par",           title:"% PAR",           width:11, type:"num",  fmt:'0.00"%"', heat:"ppar" },
+    { key:"spread_ref_pp",        title:"Spread Anterior", width:15, type:"num",  fmt:'"+"0.00"%";"-"0.00"%";0.00"%"' },
+    { key:"spread_pp",            title:"Spread Atual",    width:14, type:"num",  fmt:'"+"0.00"%";"-"0.00"%";0.00"%"' },
+    { key:"delta_bps",            title:"Δ Spread (bps)",  width:14, type:"num",  fmt:'"+"0;"-"0;0', heat:"delta" },
+  ];
+  const NC = COLS.length;
+
+  const origHTML = btn ? btn.innerHTML : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Gerando…"; }
+  try {
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "ANBIMA Debêntures · Monitor";
+    wb.created = new Date();
+    const ws = wb.addWorksheet("Marcação ANBIMA", {
+      views: [{ state:"frozen", xSplit:1, ySplit:3, showGridLines:false }],
+      pageSetup: { orientation:"landscape", fitToPage:true, fitToWidth:1, fitToHeight:0,
+                   margins:{ left:0.3, right:0.3, top:0.4, bottom:0.4, header:0.2, footer:0.2 } },
+    });
+    ws.columns = COLS.map(c => ({ width: c.width }));
+    const lastCol = ws.getColumn(NC).letter;
+
+    // --- Linha 1: faixa de título ---
+    ws.mergeCells(`A1:${lastCol}1`);
+    const t1 = ws.getCell("A1");
+    t1.value = "ANBIMA Debêntures · Marcação";
+    t1.font = { name:"Calibri", size:18, bold:true, color:{ argb:"FFFFFFFF" } };
+    t1.alignment = { vertical:"middle", horizontal:"left", indent:1 };
+    t1.fill = { type:"pattern", pattern:"solid", fgColor:{ argb:"FF14532D" } };
+    ws.getRow(1).height = 34;
+
+    // --- Linha 2: subtítulo (datas / contagem / geração) ---
+    ws.mergeCells(`A2:${lastCol}2`);
+    const _br = iso => { if (!iso) return "—"; const [y,m,d] = iso.split("-"); return `${d}/${m}/${y}`; };
+    const gerado = new Date().toLocaleString("pt-BR", { dateStyle:"short", timeStyle:"short" });
+    const t2 = ws.getCell("A2");
+    t2.value = `Data Atual: ${_br(MOV_DATE_ATUAL)}     ·     Data Anterior: ${_br(MOV_DATE_ANTERIOR)}`
+             + `     ·     ${rows.length} papéis     ·     Gerado em ${gerado}`;
+    t2.font = { name:"Calibri", size:11, italic:true, color:{ argb:"FFE8F5E9" } };
+    t2.alignment = { vertical:"middle", horizontal:"left", indent:1 };
+    t2.fill = { type:"pattern", pattern:"solid", fgColor:{ argb:"FF166534" } };
+    ws.getRow(2).height = 20;
+
+    // --- Linha 3: cabeçalho ---
+    const hdr = ws.getRow(3);
+    COLS.forEach((c, i) => {
+      const cell = hdr.getCell(i + 1);
+      cell.value = c.title;
+      cell.font = { name:"Calibri", size:11, bold:true, color:{ argb:"FFFFFFFF" } };
+      cell.fill = { type:"pattern", pattern:"solid", fgColor:{ argb:"FF1F2A44" } };
+      cell.alignment = { vertical:"middle", horizontal: c.type === "text" ? "left" : "center", wrapText:true };
+      cell.border = {
+        top:    { style:"thin",   color:{ argb:"FF0B1220" } },
+        bottom: { style:"medium", color:{ argb:"FF14532D" } },
+        left:   { style:"thin",   color:{ argb:"FF2A3550" } },
+        right:  { style:"thin",   color:{ argb:"FF2A3550" } },
+      };
+    });
+    hdr.height = 26;
+
+    // --- Dados ---
+    const thin = { style:"thin", color:{ argb:"FFD6DCE4" } };
+    rows.forEach((r, ri) => {
+      const row = ws.getRow(4 + ri);
+      const zebra = (ri % 2 === 1);
+      COLS.forEach((c, ci) => {
+        const cell = row.getCell(ci + 1);
+        const v = r[c.key];
+        if (c.type === "date") {
+          if (v) {
+            const [y, m, d] = String(v).split("-");
+            cell.value = new Date(Date.UTC(+y, +m - 1, +d, 12));
+            cell.numFmt = "dd/mm/yyyy";
+          } else {
+            cell.value = null;
+          }
+          cell.alignment = { horizontal:"center" };
+        } else if (c.type === "num") {
+          cell.value = (v == null || Number.isNaN(v)) ? null : v;
+          cell.numFmt = c.fmt;
+          cell.alignment = { horizontal:"right" };
+        } else {
+          cell.value = (v == null || v === "") ? "" : String(v);
+          cell.alignment = { horizontal:"left" };
+        }
+        // Código em destaque; demais em cinza-escuro neutro.
+        cell.font = (c.key === "codigo")
+          ? { name:"Calibri", size:10.5, bold:true, color:{ argb:"FF14532D" } }
+          : { name:"Calibri", size:10.5, color:{ argb:"FF1A1F2B" } };
+        // Cor de fundo: zebra por padrão, sobreposta pelo heatmap quando aplicável.
+        let fillArgb = zebra ? "FFF4F7FB" : "FFFFFFFF";
+        if (c.heat === "delta")      { const h = _xlDeltaFill(r.delta_bps, stats && stats.deltaAbsP95);  if (h) fillArgb = h; }
+        else if (c.heat === "ppar")  { const h = _xlPctParFill(r.pct_pu_par, stats && stats.pparDistP95); if (h) fillArgb = h; }
+        cell.fill = { type:"pattern", pattern:"solid", fgColor:{ argb:fillArgb } };
+        cell.border = { top:thin, bottom:thin, left:thin, right:thin };
+      });
+      row.height = 16;
+    });
+
+    // Autofilter sobre o cabeçalho + dados.
+    ws.autoFilter = { from:{ row:3, column:1 }, to:{ row:3 + rows.length, column:NC } };
+
+    // --- Download ---
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], {
+      type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `Marcacao_ANBIMA_${MOV_DATE_ATUAL || "export"}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+  } catch (e) {
+    console.error("[export xlsx]", e);
+    alert("Falha ao gerar o Excel: " + (e && e.message ? e.message : e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = origHTML; }
+  }
 }
 
 /* ============================================================
