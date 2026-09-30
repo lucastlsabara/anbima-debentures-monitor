@@ -1414,19 +1414,68 @@ async function _loadExtragrupoVolumes(dateLo, dateHi) {
   return volByTicker;
 }
 
+// Pares fora do padrão ficam em data/overview_pairs/<atual>.json:
+// {anterior: {kpis, top_movements}}, com a chave "" = sem anterior (cobre
+// TODAS as Datas Anteriores < atual). Baixado sob demanda, uma vez por data;
+// a Promise fica em cache e sai dele se falhar (permite nova tentativa).
+const _visPairsCache = new Map();
+function _loadVisPairs(atual) {
+  let p = _visPairsCache.get(atual);
+  if (!p) {
+    p = loadJSON("data/overview_pairs/" + atual + ".json");
+    p.catch(() => { if (_visPairsCache.get(atual) === p) _visPairsCache.delete(atual); });
+    _visPairsCache.set(atual, p);
+  }
+  return p;
+}
+
+// Cada drawVisao incrementa; resposta de busca antiga (datas já mudaram) é descartada.
+let _VIS_DRAW_SEQ = 0;
+
+// KPIs e top movers enquanto o arquivo do par carrega, ou mensagem de erro.
+function _renderVisaoParStatus(html) {
+  document.getElementById("kpi-row").innerHTML =
+    `<div class="empty" style="grid-column:1/-1">${html}</div>`;
+  for (const id of ["top-movers-ipca", "top-movers-cdi"]) {
+    document.getElementById(id).innerHTML = `<div class="empty">${html}</div>`;
+  }
+}
+
 function drawVisao() {
   const pair = OVERVIEW.by_pair[VIS_DATE_ATUAL];
   if (!pair) return;
-  // Lookup direto no dicionário pré-computado: by_anterior cobre TODAS as
-  // combinações de Data Anterior estritamente menor que VIS_DATE_ATUAL,
-  // mais a chave "" (sem anterior — KPIs/top movers sem deltas).
+  const seq = ++_VIS_DRAW_SEQ;
   const key = VIS_DATE_ANTERIOR || "";
-  const slot = (pair.by_anterior && pair.by_anterior[key]) || null;
-  const kpis = slot ? slot.kpis : pair.kpis;
-  const topm = slot ? slot.top_movements : pair.top_movements;
-  renderKpis(kpis);
+  if (key === (pair.anterior_default || "")) {
+    // Par padrão: KPIs e top movers já vêm no overview.json.
+    _drawVisaoPar(pair.kpis, pair.top_movements);
+  } else {
+    _renderVisaoParStatus('<span class="trd-spinner"></span>Carregando…');
+    _loadVisPairs(VIS_DATE_ATUAL).then(byAnterior => {
+      if (seq !== _VIS_DRAW_SEQ) return;
+      const slot = byAnterior[key];
+      if (slot) _drawVisaoPar(slot.kpis, slot.top_movements);
+      else _renderVisaoParStatus("Sem dados pré-calculados para este par de datas.");
+    }, err => {
+      if (seq !== _VIS_DRAW_SEQ) return;
+      console.warn("[visao]", err);
+      _renderVisaoParStatus("Não foi possível carregar os dados deste par de datas (" +
+        escapeHtml(err && err.message ? err.message : String(err)) +
+        "). Recarregue a página para tentar de novo.");
+    });
+  }
   renderHistogram(pair.histogram["IPCA+"] || null, "IPCA+", "chart-histogram-ipca");
   renderHistogram(pair.histogram["DI+"]   || null, "CDI+",  "chart-histogram-cdi");
+  // Mesma cor dos histogramas (--accent) para consistência visual entre
+  // os 4 cards principais de cada indexador.
+  renderDailySpreadBars("IPCA+", "chart-vis-spread-ipca", cssVar("--accent"));
+  renderDailySpreadBars("DI+",   "chart-vis-spread-cdi",  cssVar("--accent"));
+  vg_renderB3Section(VIS_DATE_ANTERIOR || VIS_DATE_ATUAL, VIS_DATE_ATUAL);
+}
+
+// KPIs + top movers do par (Data Atual, Data Anterior) selecionado.
+function _drawVisaoPar(kpis, topm) {
+  renderKpis(kpis);
   const dateLo = VIS_DATE_ANTERIOR || VIS_DATE_ATUAL;
   const dateHi = VIS_DATE_ATUAL;
   const cachedVol = _extVolCache[dateLo + "|" + dateHi] || null;
@@ -1440,11 +1489,6 @@ function drawVisao() {
       renderTopMovers(topm["DI+"]   || null, "CDI+",  "top-movers-cdi", volMap);
     });
   }
-  // Mesma cor dos histogramas (--accent) para consistência visual entre
-  // os 4 cards principais de cada indexador.
-  renderDailySpreadBars("IPCA+", "chart-vis-spread-ipca", cssVar("--accent"));
-  renderDailySpreadBars("DI+",   "chart-vis-spread-cdi",  cssVar("--accent"));
-  vg_renderB3Section(VIS_DATE_ANTERIOR || VIS_DATE_ATUAL, VIS_DATE_ATUAL);
 }
 
 function renderDailySpreadBars(idx, containerId, color) {

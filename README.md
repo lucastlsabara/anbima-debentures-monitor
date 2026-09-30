@@ -118,6 +118,7 @@ Tudo é gerado por `python3 build_dashboard.py` lendo `history/`:
 |---|---|---|
 | `data/manifest.json` | datas disponíveis, setores, buckets | < 1 KB |
 | `data/overview.json` | KPIs + curvas overlay + histograma + top movers | ~2-5 KB |
+| `data/overview_pairs/<date>.json` | KPIs + top movers da Data Atual `<date>` contra cada Data Anterior possível (Visão Geral busca sob demanda; o par padrão fica no `overview.json`) | ~16 KB por Data Anterior |
 | `data/curves_history.json` | matriz `dates × vértices_du` da ETTJ | ~1 KB · escala linear |
 | `data/heatmap_history.json` | grid setor × bucket (atual + Δ7d + Δ30d) | < 1 KB |
 | `data/movements.json` | tabela completa do dia + Δ D-1/D-5/D-21 | ~220 KB |
