@@ -5,6 +5,9 @@ Saídas (todas em ``data/`` para fetch lazy do frontend):
                                 lista de setores
   - overview.json            : por-data (KPIs, top movers, histograma) + curva
                                 ETTJ por data + spread mediano por indexador
+                                (KPIs/top movers só do par padrão)
+  - overview_pairs/<date>.json : KPIs + top movers de cada Data Anterior
+                                possível para a Data Atual <date>
   - curves_history.json      : matriz dates x vértices_du da ETTJ NTN-B
                                 + matriz da ETTJ Pré (quando disponível)
   - heatmap_history.json     : por-data, grid setor × bucket-duration
@@ -30,6 +33,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import sys
 from collections import defaultdict
@@ -49,6 +53,11 @@ B3_TRADES_DIR = DATA_DIR / "b3_trades"
 ANBIMA_INDICES_DIR = DATA_DIR / "anbima_indices"
 BENCHMARKS_DIR = DATA_DIR / "benchmarks"
 B3_INSTRUMENTS_PATH = DATA_DIR / "b3_instruments.json"
+OVERVIEW_PAIRS_DIR = DATA_DIR / "overview_pairs"
+
+# Aviso preventivo (não bloqueia): o GitHub recusa push de arquivo acima de
+# 100 MB, então avisamos antes, a partir de 80 MB.
+BIG_FILE_WARN_BYTES = 80 * 1024 * 1024
 
 # Tickers ausentes do cadastro B3 cobrem ~0,6% das negociações; o frontend
 # renderiza esta string no lugar da categoria.
@@ -288,11 +297,16 @@ def _spread_map(papers: list[dict]) -> dict[str, float]:
             if p.get("spread_pp") is not None}
 
 
-def build_overview(snaps: list[dict]) -> dict:
+def build_overview(snaps: list[dict]) -> tuple[dict, dict[str, dict]]:
     """Por data: KPIs/top movers/histograma para Data Atual vs Data Anterior.
 
     O frontend escolhe o par (Data Atual, Data Anterior) e busca cada lado
     em ``by_date``. Δ é computado no servidor (mais rápido pra UI).
+
+    Retorna ``(overview, by_anterior_por_data)``. O ``overview`` traz só o
+    par padrão de cada Data Atual; ``by_anterior_por_data[atual]`` traz
+    todas as Datas Anteriores e vai para ``overview_pairs/<atual>.json``
+    (dentro do overview.json passaria de 100 MB, limite do GitHub).
     """
     by_date: dict[str, dict] = {}
     spread_maps_by_date: dict[str, dict[str, float]] = {}
@@ -315,8 +329,11 @@ def build_overview(snaps: list[dict]) -> dict:
     # Histograma depende só de `atual`, então fica fora do dicionário de
     # pares para evitar duplicação. Custo: O(N²) pares mas cada par é leve
     # (4 KPIs + 20 top movers); evita o frontend baixar movements.json
-    # (~4 MB) só para recalcular um par diferente do default.
+    # (~4 MB) só para recalcular um par diferente do default. Somados, os
+    # pares passam de 100 MB (limite do GitHub por arquivo), por isso vão
+    # para overview_pairs/<atual>.json, um arquivo por Data Atual.
     pairs: dict[str, dict] = {}
+    by_anterior_por_data: dict[str, dict] = {}
     for i, atual in enumerate(dates):
         enr = enriched_by_date[atual]
         # Histograma e by_grp só dependem de `atual`.
@@ -348,20 +365,20 @@ def build_overview(snaps: list[dict]) -> dict:
             key = anterior if anterior is not None else ""
             by_anterior[key] = {"kpis": kpis_by_idx, "top_movements": top_by_idx}
         anterior_default = dates[i - 1] if i > 0 else None
+        by_anterior_por_data[atual] = by_anterior
         pairs[atual] = {
             "anterior": anterior_default,
             "anterior_default": anterior_default,
             "histogram": hist_by_idx,
-            "by_anterior": by_anterior,
-            # Back-compat: o frontend velho lê pair.kpis / pair.top_movements
-            # do par default. Mantido até trocarmos a leitura no JS.
+            # Par padrão: o frontend lê pair.kpis / pair.top_movements direto
+            # (e usa pair.kpis de outras datas no nível e nas barras diárias).
             "kpis": by_anterior[anterior_default if anterior_default else ""]["kpis"],
             "top_movements":
                 by_anterior[anterior_default if anterior_default else ""]["top_movements"],
         }
 
     today = dates[-1] if dates else None
-    return {
+    overview = {
         "dates": dates,
         "latest": today,
         "by_date": by_date,
@@ -369,6 +386,53 @@ def build_overview(snaps: list[dict]) -> dict:
         "diagnostico_metodo": snaps[-1].get("diagnostico_metodo") if snaps else None,
         "vg_b3_consolidated": build_vg_b3_consolidated(),
     }
+    return overview, by_anterior_por_data
+
+
+def write_overview_pairs(by_anterior_por_data: dict[str, dict],
+                         out_dir: Path) -> list[tuple[str, int]]:
+    """Grava ``out_dir/<atual>.json`` = ``{anterior: {kpis, top_movements}}``
+    (chave ``""`` = sem anterior) e apaga arquivos de datas que saíram do
+    history. Retorna ``[(nome, bytes)]`` dos arquivos gravados."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sizes = [
+        (f"{atual}.json", _write_json(out_dir / f"{atual}.json", by_anterior))
+        for atual, by_anterior in by_anterior_por_data.items()
+    ]
+    for p in sorted(out_dir.glob("*.json")):
+        if (re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.stem)
+                and p.stem not in by_anterior_por_data):
+            p.unlink()
+            print(f"[build] overview_pairs/{p.name} removido (data fora do history)",
+                  file=sys.stderr)
+    return sizes
+
+
+def warn_big_files(roots: list[Path], limit: int = BIG_FILE_WARN_BYTES) -> list[tuple[str, int]]:
+    """Aviso preventivo, sem bloquear: lista arquivos acima de ``limit``.
+
+    Escreve ``::warning::`` (anotação do GitHub Actions) e, se houver
+    ``$GITHUB_STEP_SUMMARY``, uma linha por arquivo no resumo do passo."""
+    big = sorted(
+        (p.relative_to(ROOT).as_posix(), p.stat().st_size)
+        for root in roots if root.exists()
+        for p in root.rglob("*") if p.is_file() and p.stat().st_size > limit
+    )
+    if not big:
+        return big
+    lim_mb = limit / 1024 / 1024
+    linhas = []
+    for name, n in big:
+        mb = n / 1024 / 1024
+        print(f"::warning::{name} tem {mb:.2f} MB (aviso acima de {lim_mb:.0f} MB; "
+              f"o GitHub recusa push de arquivo acima de 100 MB)")
+        linhas.append(f"- ⚠️ `{name}`: {mb:.2f} MB (aviso acima de {lim_mb:.0f} MB; "
+                      f"o GitHub recusa push de arquivo acima de 100 MB)\n")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.writelines(linhas)
+    return big
 
 
 # ----------------------------------------------------------------------------
@@ -1188,8 +1252,12 @@ def main() -> int:
 
     sizes.append(("manifest.json",
         _write_json(DATA_DIR / "manifest.json", build_manifest(snaps))))
+    overview, by_anterior_por_data = build_overview(snaps)
     sizes.append(("overview.json",
-        _write_json(DATA_DIR / "overview.json", build_overview(snaps))))
+        _write_json(DATA_DIR / "overview.json", overview)))
+    del overview  # libera memória antes dos próximos builds
+    pairs_sizes = write_overview_pairs(by_anterior_por_data, OVERVIEW_PAIRS_DIR)
+    del by_anterior_por_data
     sizes.append(("curves_history.json",
         _write_json(DATA_DIR / "curves_history.json", build_curves_history(snaps))))
     sizes.append(("heatmap_history.json",
@@ -1227,8 +1295,19 @@ def main() -> int:
         print(f"  {name:40} {kb:>10.1f} KB{flag}", file=sys.stderr)
         max_bytes = max(max_bytes, n)
 
+    if pairs_sizes:
+        maior_nome, maior_n = max(pairs_sizes, key=lambda t: t[1])
+        total_pairs = sum(n for _, n in pairs_sizes)
+        flag = " ⚠️ >10MB" if maior_n > size_warn_threshold else ""
+        print(f"  {'overview_pairs/ (' + str(len(pairs_sizes)) + ' arquivos)':40} "
+              f"{total_pairs / 1024:>10.1f} KB no total; maior {maior_nome} "
+              f"{maior_n / 1024:.1f} KB{flag}", file=sys.stderr)
+        max_bytes = max(max_bytes, maior_n)
+
     if max_bytes > size_warn_threshold:
         print(f"[warn] algum arquivo excedeu 10MB", file=sys.stderr)
+
+    warn_big_files([DATA_DIR, HIST_DIR])
 
     print(f"\n[build] OK — {len(snaps)} snapshot(s), maior arquivo {max_bytes/1024:.1f} KB",
           file=sys.stderr)
